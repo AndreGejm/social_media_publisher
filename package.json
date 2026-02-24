@@ -1,0 +1,20 @@
+{
+  "name": "release-publisher",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspace apps/desktop",
+    "typecheck": "npm run typecheck --workspace apps/desktop",
+    "test": "npm run test --workspace apps/desktop",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "lint": "npm run lint --workspace apps/desktop"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}

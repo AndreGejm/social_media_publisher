@@ -1,0 +1,266 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f0e7;
+  --panel: #fffaf2;
+  --line: #d4c8b8;
+  --text: #1f1c18;
+  --muted: #5f564b;
+  --accent: #116466;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(17, 100, 102, 0.08), transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(198, 115, 45, 0.08), transparent 45%),
+    var(--bg);
+}
+
+.app-shell {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.hero {
+  background: linear-gradient(135deg, #fff7e8, #f7f2eb);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.25rem;
+}
+
+.hero h1 {
+  margin: 0.25rem 0 0.25rem;
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+}
+
+.lede {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem 1.25rem;
+}
+
+.panel ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.screen-list {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.tab-button {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tab-button.active {
+  border-color: #0f585a;
+  background: rgba(17, 100, 102, 0.1);
+  color: #0f585a;
+}
+
+.form-row {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.form-row.single {
+  grid-template-columns: 1fr;
+}
+
+.form-row input,
+.form-row select {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.form-row button {
+  border: 1px solid #0f585a;
+  background: var(--accent);
+  color: white;
+  border-radius: 10px;
+  padding: 0.65rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.form-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+.action-row button {
+  border: 1px solid #0f585a;
+  background: var(--accent);
+  color: white;
+  border-radius: 10px;
+  padding: 0.65rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.action-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.platform-fieldset {
+  margin: 0.85rem 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem 0.6rem;
+}
+
+.platform-fieldset legend {
+  padding: 0 0.35rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.compact-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+}
+
+.mini-card {
+  margin-top: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.6rem 0.7rem;
+}
+
+.code-block {
+  margin-top: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.75rem;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9rem;
+  display: grid;
+  gap: 0.35rem;
+  word-break: break-word;
+}
+
+.history-grid {
+  align-items: start;
+}
+
+.history-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.4rem 0 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 0.45rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.55rem 0.6rem;
+}
+
+.history-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row-state {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.history-row-id {
+  color: var(--muted);
+}
+
+.helper-text {
+  color: var(--muted);
+  margin: 0.6rem 0 0;
+}
+
+.error-text {
+  color: #9d2d10;
+  margin: 0.6rem 0 0;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 700px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr auto;
+    align-items: start;
+  }
+
+  .form-row.single {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,11 @@
+title: "  Test Track  "
+artist: " Example Artist "
+description: "  Sample description for plan/preview.  "
+tags:
+  - "Synthwave"
+  - " release "
+  - "synthwave"
+mock:
+  enabled: true
+  note: "Use mock publisher only"
+

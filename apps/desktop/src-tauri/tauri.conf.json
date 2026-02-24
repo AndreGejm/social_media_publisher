@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Release Publisher",
+  "version": "0.1.0",
+  "identifier": "com.example.releasepublisher",
+  "build": {
+    "beforeDevCommand": "npm run dev --workspace apps/desktop",
+    "beforeBuildCommand": "npm run build --workspace apps/desktop",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Release Publisher",
+        "width": 1200,
+        "height": 820,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}
+

@@ -1,0 +1,14 @@
+{
+  "title": "Test Track",
+  "artist": "Example Artist",
+  "description": "Sample description for plan/preview.",
+  "tags": [
+    "release",
+    "synthwave"
+  ],
+  "mock": {
+    "enabled": true,
+    "note": "Use mock publisher only"
+  }
+}
+
