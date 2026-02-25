@@ -96,7 +96,9 @@ test("browser preview can run workflow with injected Tauri mock and no external 
             }
             case "execute_release": {
               const releaseId =
-                ((args as { release_id?: string } | undefined)?.release_id as string | undefined) ??
+                (((args as { releaseId?: string; release_id?: string } | undefined)?.releaseId ??
+                  (args as { releaseId?: string; release_id?: string } | undefined)
+                    ?.release_id) as string | undefined) ??
                 state.releaseId ??
                 "unknown";
               state.history = [

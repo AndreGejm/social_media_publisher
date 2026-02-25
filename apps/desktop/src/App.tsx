@@ -1,5 +1,7 @@
 ﻿import { FormEvent, useMemo, useState } from "react";
 
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
 type Screen = "New Release" | "Plan / Preview" | "Execute" | "Report / History";
 type AppEnv = "TEST" | "STAGING" | "PRODUCTION";
 
@@ -49,15 +51,33 @@ declare global {
 }
 
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  const invoke = window.__TAURI__?.core?.invoke;
-  if (!invoke) {
+  const globalInvoke = window.__TAURI__?.core?.invoke;
+  if (globalInvoke) {
+    return globalInvoke<T>(command, args);
+  }
+
+  try {
+    if (typeof tauriInvoke !== "function") {
+      throw new Error("invoke unavailable");
+    }
+    return await tauriInvoke<T>(command, args);
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      "message" in error &&
+      typeof (error as { code?: unknown }).code === "string" &&
+      typeof (error as { message?: unknown }).message === "string"
+    ) {
+      throw error;
+    }
     throw {
       code: "TAURI_UNAVAILABLE",
       message: "Tauri runtime is not available in the browser preview.",
       details: { command }
     } satisfies UiAppError;
   }
-  return invoke<T>(command, args);
 }
 
 function redactErrorDetails(value: unknown): unknown {
@@ -173,7 +193,7 @@ export default function App() {
     }
     setLoadingReport(true);
     try {
-      const result = await invokeCommand<ReleaseReport | null>("get_report", { release_id: releaseId });
+      const result = await invokeCommand<ReleaseReport | null>("get_report", { releaseId });
       setReport(result);
       return result;
     } finally {
@@ -238,7 +258,7 @@ export default function App() {
     setExecuting(true);
     setStatusMessage(`Executing release ${releaseId.slice(0, 8)}...`);
     try {
-      const response = await invokeCommand<ExecuteReleaseResponse>("execute_release", { release_id: releaseId });
+      const response = await invokeCommand<ExecuteReleaseResponse>("execute_release", { releaseId });
       setExecuteResult(response);
       setSelectedHistoryReleaseId(response.release_id);
       setActiveScreen("Execute");
@@ -379,7 +399,7 @@ export default function App() {
               <button type="submit" data-testid="validate-plan-button" disabled={planning || executing}>
                 {planning ? "Planning..." : "Plan / Preview"}
               </button>
-              <button type="button" data-testid="execute-button" onClick={onExecute} disabled={executing || !planResult?.release_id}>
+              <button type="button" data-testid="execute-button" onClick={() => void onExecute()} disabled={executing || !planResult?.release_id}>
                 {executing ? "Executing..." : "Execute"}
               </button>
             </div>

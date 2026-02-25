@@ -2,19 +2,29 @@
   "name": "release-publisher",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
   "workspaces": [
     "apps/desktop"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace apps/desktop",
-    "build": "npm run build --workspace apps/desktop",
-    "typecheck": "npm run typecheck --workspace apps/desktop",
-    "test": "npm run test --workspace apps/desktop",
+    "dev": "pnpm --filter @release-publisher/desktop dev",
+    "build": "pnpm --filter @release-publisher/desktop build",
+    "typecheck": "pnpm --filter @release-publisher/desktop typecheck",
+    "test": "pnpm --filter @release-publisher/desktop test",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "lint": "npm run lint --workspace apps/desktop"
+    "test:e2e:runtime": "playwright test -c playwright.runtime.config.ts",
+    "lint": "pnpm --filter @release-publisher/desktop lint",
+    "tauri:dev": "pnpm --filter @release-publisher/desktop tauri dev",
+    "tauri:build": "pnpm --filter @release-publisher/desktop tauri build",
+    "bootstrap:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-windows.ps1",
+    "snapshot:baseline": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/snapshot-baseline.ps1",
+    "validate:release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-release-windows.ps1",
+    "build:package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-package-windows.ps1",
+    "e2e:runtime:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/runtime-e2e/run-tauri-runtime-e2e.ps1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.52.0"
+    "@playwright/test": "1.52.0",
+    "@tauri-apps/cli": "2.5.0"
   }
 }

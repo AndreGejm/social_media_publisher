@@ -1,0 +1,297 @@
+﻿=== Rust functions ===
+crates\testkit\tests\transport_faults.rs:18:    fn delays(&self) -> Vec<u64> {
+crates\testkit\tests\transport_faults.rs:25:    async fn sleep_ms(&self, duration_ms: u64) {
+crates\testkit\tests\transport_faults.rs:30:fn request() -> TransportRequest {
+crates\testkit\tests\transport_faults.rs:37:async fn retries_on_timeout_then_succeeds() {
+crates\testkit\tests\transport_faults.rs:66:async fn retries_on_500_burst_then_succeeds_with_exponential_backoff() {
+crates\testkit\tests\transport_faults.rs:93:async fn honors_retry_after_for_429() {
+crates\testkit\tests\transport_faults.rs:119:async fn malformed_json_fault_returns_typed_decode_error() {
+crates\testkit\tests\transport_faults.rs:130:async fn partial_body_fault_returns_typed_decode_error() {
+crates\testkit\tests\transport_faults.rs:141:async fn token_expired_401_is_not_retried_by_default_policy() {
+crates\testkit\tests\transport_faults.rs:161:async fn partial_failure_script_preserves_order_and_request_recording() {
+crates\testkit\tests\transport_faults.rs:182:async fn never_exceeds_max_attempts_on_repeated_timeouts() {
+crates\testkit\tests\transport_faults.rs:207:async fn never_retries_permanent_400_by_default() {
+crates\testkit\tests\transport_faults.rs:233:async fn scripted_step_expectations_match_method_url_and_call_index() {
+apps\desktop\src-tauri\build.rs:1:fn main() {
+crates\testkit\src\lib.rs:18:    pub fn text(status: u16, body: impl Into<String>, label: impl Into<String>) -> Self {
+crates\testkit\src\lib.rs:27:    pub fn try_json(
+crates\testkit\src\lib.rs:40:    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+crates\testkit\src\lib.rs:64:    pub fn timeout(message: impl Into<String>) -> Self {
+crates\testkit\src\lib.rs:72:    pub fn network(message: impl Into<String>, retryable: bool) -> Self {
+crates\testkit\src\lib.rs:82:    fn from(value: ScriptedTransportError) -> Self {
+crates\testkit\src\lib.rs:106:    pub fn response(response: ScriptedResponse) -> Self {
+crates\testkit\src\lib.rs:110:    pub fn error(error: ScriptedTransportError) -> Self {
+crates\testkit\src\lib.rs:130:    pub fn new(step: ScriptedStep) -> Self {
+crates\testkit\src\lib.rs:137:    pub fn expect(mut self, expectation: RequestExpectation) -> Self {
+crates\testkit\src\lib.rs:155:pub fn fault_script(scenario: FaultScenario) -> Vec<ScriptedStep> {
+crates\testkit\src\lib.rs:231:    pub fn with_steps(steps: Vec<ScriptedStep>) -> Self {
+crates\testkit\src\lib.rs:236:    pub fn with_step_specs(step_specs: Vec<ScriptedStepSpec>) -> Self {
+crates\testkit\src\lib.rs:245:    pub fn with_fault(scenario: FaultScenario) -> Self {
+crates\testkit\src\lib.rs:249:    pub fn push_step(&self, step: ScriptedStep) -> Result<(), TransportError> {
+crates\testkit\src\lib.rs:253:    pub fn push_step_spec(&self, step_spec: ScriptedStepSpec) -> Result<(), TransportError> {
+crates\testkit\src\lib.rs:259:    pub fn recorded_requests(&self) -> Result<Vec<RecordedRequest>, TransportError> {
+crates\testkit\src\lib.rs:264:    pub fn remaining_steps(&self) -> Result<usize, TransportError> {
+crates\testkit\src\lib.rs:269:    fn lock_inner(&self) -> Result<MutexGuard<'_, Inner>, TransportError> {
+crates\testkit\src\lib.rs:282:    async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+crates\testkit\src\lib.rs:308:fn validate_request_expectation(
+apps\desktop\src-tauri\src\lib.rs:5:pub fn run() {
+apps\desktop\src-tauri\src\main.rs:1:fn main() {
+apps\desktop\src-tauri\src\commands.rs:87:    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+apps\desktop\src-tauri\src\commands.rs:95:    fn with_details(mut self, details: Value) -> Self {
+apps\desktop\src-tauri\src\commands.rs:100:    fn invalid_argument(message: impl Into<String>) -> Self {
+apps\desktop\src-tauri\src\commands.rs:104:    fn file_read_failed(message: impl Into<String>) -> Self {
+apps\desktop\src-tauri\src\commands.rs:108:    fn invalid_encoding(message: impl Into<String>) -> Self {
+apps\desktop\src-tauri\src\commands.rs:114:    fn from(value: DbError) -> Self {
+apps\desktop\src-tauri\src\commands.rs:126:    fn from(value: OrchestratorError) -> Self {
+apps\desktop\src-tauri\src\commands.rs:171:    async fn from_default_location() -> Result<Self, AppError> {
+apps\desktop\src-tauri\src\commands.rs:176:    async fn for_base_dir(base_dir: PathBuf) -> Result<Self, AppError> {
+apps\desktop\src-tauri\src\commands.rs:212:    async fn handle_load_spec(&self, path: String) -> Result<LoadSpecResponse, AppError> {
+apps\desktop\src-tauri\src\commands.rs:237:    async fn handle_plan_release(
+apps\desktop\src-tauri\src\commands.rs:289:    async fn handle_execute_release(
+apps\desktop\src-tauri\src\commands.rs:317:    async fn handle_list_history(&self) -> Result<Vec<HistoryRow>, AppError> {
+apps\desktop\src-tauri\src\commands.rs:330:    async fn handle_get_report(
+apps\desktop\src-tauri\src\commands.rs:386:fn resolve_runtime_base_dir() -> Result<PathBuf, AppError> {
+apps\desktop\src-tauri\src\commands.rs:404:fn sqlite_url_for_path(path: &Path) -> String {
+apps\desktop\src-tauri\src\commands.rs:415:fn db_error_code_name(error: &DbError) -> &'static str {
+apps\desktop\src-tauri\src\commands.rs:432:async fn shared_service() -> Result<Arc<CommandService>, AppError> {
+apps\desktop\src-tauri\src\commands.rs:440:fn path_to_string(path: &Path) -> String {
+apps\desktop\src-tauri\src\commands.rs:444:fn reject_odd_prefixes(raw: &str) -> Result<(), AppError> {
+apps\desktop\src-tauri\src\commands.rs:468:async fn canonicalize_file_path(input: &str, label: &str) -> Result<PathBuf, AppError> {
+apps\desktop\src-tauri\src\commands.rs:485:fn flatten_planned_actions(planned: &PlannedRelease) -> Vec<PlannedAction> {
+apps\desktop\src-tauri\src\commands.rs:499:    fn from(value: AppEnv) -> Self {
+apps\desktop\src-tauri\src\commands.rs:509:pub async fn load_spec(path: String) -> Result<LoadSpecResponse, AppError> {
+apps\desktop\src-tauri\src\commands.rs:514:pub async fn plan_release(input: PlanReleaseInput) -> Result<PlanReleaseResponse, AppError> {
+apps\desktop\src-tauri\src\commands.rs:519:pub async fn execute_release(release_id: String) -> Result<ExecuteReleaseResponse, AppError> {
+apps\desktop\src-tauri\src\commands.rs:527:pub async fn list_history() -> Result<Vec<HistoryRow>, AppError> {
+apps\desktop\src-tauri\src\commands.rs:532:pub async fn get_report(release_id: String) -> Result<Option<ReleaseReport>, AppError> {
+apps\desktop\src-tauri\src\commands.rs:541:    async fn new_service() -> (CommandService, tempfile::TempDir) {
+apps\desktop\src-tauri\src\commands.rs:549:    async fn write_fixture_files(dir: &Path) -> (String, String) {
+apps\desktop\src-tauri\src\commands.rs:571:    async fn command_service_plan_execute_history_report_happy_path() {
+apps\desktop\src-tauri\src\commands.rs:611:    async fn rejects_odd_prefix_paths() {
+crates\db\src\lib.rs:38:    pub fn new(code: DbErrorCode, message: impl Into<String>) -> Self {
+crates\db\src\lib.rs:45:    fn invalid_state_transition(message: impl Into<String>) -> Self {
+crates\db\src\lib.rs:49:    fn serialize_json(error: serde_json::Error) -> Self {
+crates\db\src\lib.rs:56:    fn deserialize_json(error: serde_json::Error) -> Self {
+crates\db\src\lib.rs:63:    fn map_sqlx(error: sqlx::Error, op: &str) -> Self {
+crates\db\src\lib.rs:95:fn classify_sqlite_database_error(sqlite_code: Option<&str>, message: &str) -> DbErrorCode {
+crates\db\src\lib.rs:126:    pub fn as_str(self) -> &'static str {
+crates\db\src\lib.rs:137:    pub fn can_transition_to(self, next: Self) -> bool {
+crates\db\src\lib.rs:158:    fn from_str(value: &str) -> Result<Self, Self::Err> {
+crates\db\src\lib.rs:185:    pub fn as_str(self) -> &'static str {
+crates\db\src\lib.rs:195:    pub fn is_completed(self) -> bool {
+crates\db\src\lib.rs:203:    fn from_str(value: &str) -> Result<Self, Self::Err> {
+crates\db\src\lib.rs:300:    pub fn sqlite(database_url: impl Into<String>) -> Self {
+crates\db\src\lib.rs:318:    pub async fn connect(config: &DbConfig) -> DbResult<Self> {
+crates\db\src\lib.rs:345:    pub fn pool(&self) -> &SqlitePool {
+crates\db\src\lib.rs:349:    pub async fn begin_tx(&self) -> DbResult<DbTx<'_>> {
+crates\db\src\lib.rs:358:    pub async fn upsert_release(&self, input: &NewReleaseRecord) -> DbResult<ReleaseRecord> {
+crates\db\src\lib.rs:384:    pub async fn get_release(&self, release_id: &str) -> DbResult<Option<ReleaseRecord>> {
+crates\db\src\lib.rs:401:    pub async fn transition_release_state(
+crates\db\src\lib.rs:432:    pub async fn set_release_failed(
+crates\db\src\lib.rs:463:    pub async fn acquire_run_lock(&self, release_id: &str, owner: &str) -> DbResult<bool> {
+crates\db\src\lib.rs:479:    pub async fn release_run_lock(&self, release_id: &str, owner: &str) -> DbResult<bool> {
+crates\db\src\lib.rs:495:    pub async fn upsert_platform_action(
+crates\db\src\lib.rs:542:    pub async fn get_platform_action(
+crates\db\src\lib.rs:564:    pub async fn list_platform_actions(
+crates\db\src\lib.rs:585:    pub async fn pending_platforms(
+crates\db\src\lib.rs:604:    pub async fn append_audit_log(&self, entry: &NewAuditLogEntry) -> DbResult<AuditLogEntry> {
+crates\db\src\lib.rs:635:    pub async fn list_history(&self) -> DbResult<Vec<HistoryItem>> {
+crates\db\src\lib.rs:669:    pub async fn commit(self) -> DbResult<()> {
+crates\db\src\lib.rs:676:    pub async fn rollback(self) -> DbResult<()> {
+crates\db\src\lib.rs:683:    pub async fn upsert_release(&mut self, input: &NewReleaseRecord) -> DbResult<ReleaseRecord> {
+crates\db\src\lib.rs:709:    pub async fn get_release(&mut self, release_id: &str) -> DbResult<Option<ReleaseRecord>> {
+crates\db\src\lib.rs:726:    pub async fn transition_release_state(
+crates\db\src\lib.rs:755:    pub async fn set_release_failed(
+crates\db\src\lib.rs:785:    pub async fn upsert_platform_action(
+crates\db\src\lib.rs:830:    pub async fn get_platform_action(
+crates\db\src\lib.rs:851:    pub async fn append_audit_log(&mut self, entry: &NewAuditLogEntry) -> DbResult<AuditLogEntry> {
+crates\db\src\lib.rs:881:fn serialize_json_opt(value: &Option<Value>) -> DbResult<Option<String>> {
+crates\db\src\lib.rs:889:fn parse_json_opt(value: Option<String>) -> DbResult<Option<Value>> {
+crates\db\src\lib.rs:896:fn map_release_row(row: SqliteRow) -> DbResult<ReleaseRecord> {
+crates\db\src\lib.rs:929:fn map_platform_action_row(row: SqliteRow) -> DbResult<PlatformActionRecord> {
+crates\db\src\lib.rs:967:fn map_audit_log_row(row: SqliteRow) -> DbResult<AuditLogEntry> {
+crates\core\tests\idempotency.rs:6:fn sample_spec(title: &str) -> release_publisher_core::spec::ReleaseSpec {
+crates\core\tests\idempotency.rs:19:fn release_id_is_deterministic_for_same_spec_and_media() {
+crates\core\tests\idempotency.rs:31:fn release_id_changes_when_spec_changes() {
+crates\core\tests\idempotency.rs:43:fn release_id_changes_when_media_changes() {
+crates\core\tests\idempotency.rs:55:fn idempotency_keys_include_consistent_hashes() {
+crates\db\tests\state_machine.rs:8:fn sqlite_file_url(db_path: &std::path::Path) -> String {
+crates\db\tests\state_machine.rs:19:async fn new_test_db() -> Db {
+crates\db\tests\state_machine.rs:25:async fn new_file_backed_pair() -> (Db, Db) {
+crates\db\tests\state_machine.rs:48:fn sample_release(release_id: &str) -> NewReleaseRecord {
+crates\db\tests\state_machine.rs:60:async fn state_machine_happy_path_transitions() {
+crates\db\tests\state_machine.rs:86:async fn invalid_transition_is_rejected() {
+crates\db\tests\state_machine.rs:99:async fn run_lock_prevents_duplicate_run() {
+crates\db\tests\state_machine.rs:110:async fn run_lock_prevents_parallel_acquire_across_connections() {
+crates\db\tests\state_machine.rs:128:async fn resume_semantics_skip_completed_platforms() {
+crates\db\tests\state_machine.rs:177:async fn audit_logs_and_history_are_persisted() {
+crates\db\tests\state_machine.rs:196:async fn schema_constraints_reject_invalid_hash_lengths() {
+crates\db\tests\state_machine.rs:218:async fn transaction_rolls_back_when_second_write_fails() {
+crates\core\tests\idempotency_properties.rs:5:fn yaml_escape(input: &str) -> String {
+crates\core\tests\idempotency_properties.rs:11:    fn release_id_is_stable_for_semantically_equivalent_specs(
+crates\connectors\mock\src\lib.rs:11:    fn platform_name(&self) -> &'static str {
+crates\connectors\mock\src\lib.rs:15:    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+crates\connectors\mock\src\lib.rs:23:    async fn execute(
+crates\connectors\mock\src\lib.rs:39:    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+crates\core\tests\mock_pipeline.rs:13:fn sqlite_file_url(db_path: &std::path::Path) -> String {
+crates\core\tests\mock_pipeline.rs:24:async fn file_backed_db(db_path: &std::path::Path) -> Db {
+crates\core\tests\mock_pipeline.rs:41:fn sample_spec() -> release_publisher_core::spec::ReleaseSpec {
+crates\core\tests\mock_pipeline.rs:55:async fn mock_pipeline_runs_end_to_end_and_is_idempotent_on_rerun() {
+crates\core\tests\mock_pipeline.rs:155:    fn inc(counter: &Mutex<u32>) {
+crates\core\tests\mock_pipeline.rs:159:    fn executes(&self) -> u32 {
+crates\core\tests\mock_pipeline.rs:173:    fn platform_name(&self) -> &'static str {
+crates\core\tests\mock_pipeline.rs:177:    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+crates\core\tests\mock_pipeline.rs:186:    async fn execute(
+crates\core\tests\mock_pipeline.rs:206:    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+crates\core\tests\mock_pipeline.rs:217:async fn partial_failure_resume_skips_completed_platform_and_retries_only_failed_one() {
+crates\core\tests\mock_pipeline.rs:318:async fn per_run_cap_is_enforced_in_core_plan_phase() {
+crates\core\tests\mock_pipeline.rs:324:        fn platform_name(&self) -> &'static str {
+crates\core\tests\mock_pipeline.rs:328:        async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+crates\core\tests\mock_pipeline.rs:343:        async fn execute(
+crates\core\tests\mock_pipeline.rs:351:        async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+crates\core\tests\mock_pipeline.rs:378:async fn test_env_rejects_non_simulated_actions_in_core() {
+crates\core\tests\mock_pipeline.rs:384:        fn platform_name(&self) -> &'static str {
+crates\core\tests\mock_pipeline.rs:388:        async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+crates\core\tests\mock_pipeline.rs:396:        async fn execute(
+crates\core\tests\mock_pipeline.rs:404:        async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+crates\core\src\circuit_breaker.rs:11:    fn default() -> Self {
+crates\core\src\circuit_breaker.rs:35:    pub fn new(config: CircuitBreakerConfig) -> Self {
+crates\core\src\circuit_breaker.rs:43:    pub fn state(&self, now_ms: u64) -> CircuitState {
+crates\core\src\circuit_breaker.rs:50:    pub fn before_request(&mut self, now_ms: u64) -> Result<(), TransportError> {
+crates\core\src\circuit_breaker.rs:64:    pub fn record_success(&mut self) {
+crates\core\src\circuit_breaker.rs:69:    pub fn record_failure(&mut self, now_ms: u64) {
+crates\core\src\circuit_breaker.rs:102:    fn opens_after_threshold_failures_and_recovers_to_half_open() {
+crates\core\src\circuit_breaker.rs:125:    fn half_open_failure_reopens_circuit() {
+crates\core\tests\release_spec.rs:4:fn parses_and_normalizes_valid_yaml() {
+crates\core\tests\release_spec.rs:31:fn rejects_missing_required_fields_with_structured_errors() {
+crates\core\tests\release_spec.rs:43:fn rejects_unknown_fields_as_yaml_parse_error() {
+crates\core\tests\release_spec.rs:56:fn fuzz_like_malformed_yaml_inputs_do_not_panic() {
+crates\core\tests\spec_properties.rs:4:fn yaml_escape(input: &str) -> String {
+crates\core\tests\spec_properties.rs:10:    fn normalization_is_deterministic_for_equivalent_whitespace(
+crates\core\src\idempotency.rs:14:pub fn sha256_hex(bytes: &[u8]) -> String {
+crates\core\src\idempotency.rs:19:pub fn try_spec_hash(spec: &ReleaseSpec) -> Result<String, serde_json::Error> {
+crates\core\src\idempotency.rs:25:pub fn media_fingerprint_from_bytes(bytes: &[u8]) -> String {
+crates\core\src\idempotency.rs:29:pub async fn media_fingerprint_from_file(path: impl AsRef<Path>) -> anyhow::Result<String> {
+crates\core\src\idempotency.rs:34:pub fn try_compute_release_id(
+crates\core\src\idempotency.rs:50:pub fn try_build_idempotency_keys(
+crates\core\src\orchestrator.rs:56:    pub fn new(
+crates\core\src\orchestrator.rs:126:    pub fn new(db: Db) -> Self {
+crates\core\src\orchestrator.rs:133:    pub fn with_publishers<I>(db: Db, publishers: I) -> Result<Self, OrchestratorError>
+crates\core\src\orchestrator.rs:144:    pub fn register_publisher(
+crates\core\src\orchestrator.rs:156:    pub fn db(&self) -> &Db {
+crates\core\src\orchestrator.rs:160:    pub async fn run_release(
+crates\core\src\orchestrator.rs:174:    pub async fn plan_release(
+crates\core\src\orchestrator.rs:305:    pub async fn execute_planned_release(
+crates\core\src\orchestrator.rs:342:    async fn execute_locked(
+crates\core\src\orchestrator.rs:610:    async fn finalize_report(
+crates\core\src\orchestrator.rs:679:    async fn transition_to_planned_if_needed(
+crates\core\src\orchestrator.rs:725:    fn publisher(&self, platform: &str) -> Result<Arc<dyn Publisher>, OrchestratorError> {
+crates\core\src\orchestrator.rs:734:    async fn mark_platform_failed(
+crates\core\src\orchestrator.rs:773:fn validate_run_input(input: &RunReleaseInput) -> Result<(), OrchestratorError> {
+crates\core\src\orchestrator.rs:787:fn normalize_platforms(platforms: Vec<String>) -> Result<Vec<String>, OrchestratorError> {
+crates\core\src\orchestrator.rs:807:fn enforce_cap(platform: &str, count: usize, cap: u32) -> Result<(), OrchestratorError> {
+crates\core\src\orchestrator.rs:818:fn require_verified(
+crates\core\src\orchestrator.rs:830:fn sanitize_filename(input: &str) -> String {
+crates\core\src\orchestrator.rs:848:fn relative_or_full(path: &Path, root: &Path) -> String {
+crates\core\src\orchestrator.rs:854:fn infer_simulated_and_verified(
+crates\core\src\orchestrator.rs:889:async fn write_json_pretty<T: ?Sized + Serialize>(
+crates\core\src\pipeline.rs:50:    fn platform_name(&self) -> &'static str;
+crates\core\src\pipeline.rs:51:    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>>;
+crates\core\src\pipeline.rs:52:    async fn execute(
+crates\core\src\pipeline.rs:57:    async fn verify(&self, ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>>;
+crates\core\src\retry.rs:16:    fn default() -> Self {
+crates\core\src\retry.rs:29:    pub fn validate(&self) -> Result<(), TransportError> {
+crates\core\src\retry.rs:76:    pub fn new() -> Self {
+crates\core\src\retry.rs:85:    async fn sleep_ms(&self, duration_ms: u64);
+crates\core\src\retry.rs:93:    async fn sleep_ms(&self, duration_ms: u64) {
+crates\core\src\retry.rs:98:pub async fn send_with_retry<T, S>(
+crates\core\src\retry.rs:158:pub fn retry_delay_for_response(
+crates\core\src\retry.rs:187:pub fn retry_delay_for_error(
+crates\core\src\retry.rs:204:pub fn exponential_backoff_ms(policy: &RetryPolicy, attempt: u32) -> u64 {
+crates\core\src\retry.rs:211:pub fn apply_deterministic_jitter_ms(
+crates\core\src\retry.rs:239:pub fn parse_retry_after_seconds(response: &TransportResponse) -> Option<u64> {
+crates\core\src\retry.rs:245:fn transport_error_code_salt(code: &crate::transport::TransportErrorCode) -> u64 {
+crates\core\src\retry.rs:265:    fn backoff_is_capped() {
+crates\core\src\retry.rs:282:    fn retry_after_header_overrides_default_backoff_for_429() {
+crates\core\src\retry.rs:297:    fn non_retryable_error_returns_no_delay() {
+crates\core\src\retry.rs:304:    fn deterministic_jitter_is_bounded_and_repeatable() {
+crates\core\src\transport.rs:19:    fn from(value: &HttpMethod) -> Self {
+crates\core\src\transport.rs:42:    pub fn new(method: HttpMethod, url: impl Into<String>) -> Self {
+crates\core\src\transport.rs:53:    pub fn with_json_body(mut self, json: &serde_json::Value) -> Result<Self, TransportError> {
+crates\core\src\transport.rs:75:    pub fn is_success(&self) -> bool {
+crates\core\src\transport.rs:79:    pub fn header(&self, name: &str) -> Option<&str> {
+crates\core\src\transport.rs:85:    pub fn body_text(&self) -> Result<String, TransportError> {
+crates\core\src\transport.rs:95:    pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, TransportError> {
+crates\core\src\transport.rs:128:    pub fn new(code: TransportErrorCode, message: impl Into<String>, retryable: bool) -> Self {
+crates\core\src\transport.rs:136:    pub fn timeout(message: impl Into<String>) -> Self {
+crates\core\src\transport.rs:140:    pub fn network(message: impl Into<String>, retryable: bool) -> Self {
+crates\core\src\transport.rs:144:    pub fn invalid_request(message: impl Into<String>) -> Self {
+crates\core\src\transport.rs:148:    pub fn circuit_open(message: impl Into<String>) -> Self {
+crates\core\src\transport.rs:152:    pub fn script_exhausted(message: impl Into<String>) -> Self {
+crates\core\src\transport.rs:159:    async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError>;
+crates\core\src\transport.rs:168:    pub fn new(client: reqwest::Client) -> Self {
+crates\core\src\transport.rs:172:    pub fn try_default() -> Result<Self, TransportError> {
+crates\core\src\transport.rs:182:    async fn send(&self, request: TransportRequest) -> Result<TransportResponse, TransportError> {
+crates\core\src\transport.rs:225:pub fn redact_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+crates\core\src\transport.rs:238:pub fn is_sensitive_header(name: &str) -> bool {
+crates\core\src\transport.rs:252:fn build_header_map(headers: &BTreeMap<String, String>) -> Result<HeaderMap, TransportError> {
+crates\core\src\transport.rs:266:fn normalize_header_map(headers: &HeaderMap) -> BTreeMap<String, String> {
+crates\core\src\transport.rs:277:fn map_reqwest_error(error: reqwest::Error) -> TransportError {
+crates\core\src\transport.rs:302:    fn redacts_sensitive_headers() {
+crates\core\src\transport.rs:334:    fn response_json_decode_returns_typed_error() {
+crates\core\src\spec.rs:55:    pub fn try_normalized_json(&self) -> Result<String, serde_json::Error> {
+crates\core\src\spec.rs:59:    pub fn normalized_json(&self) -> Result<String, serde_json::Error> {
+crates\core\src\spec.rs:63:    pub fn normalized_json_compact(&self) -> Result<String, serde_json::Error> {
+crates\core\src\spec.rs:68:pub fn parse_release_spec_yaml(raw: &str) -> Result<ReleaseSpec, Vec<SpecError>> {
+crates\core\src\spec.rs:83:fn normalize_and_validate(raw: RawReleaseSpec) -> Result<ReleaseSpec, Vec<SpecError>> {
+crates\core\src\spec.rs:117:fn normalize_required_text(
+crates\core\src\spec.rs:147:fn normalize_tags(tags: Vec<String>, errors: &mut Vec<SpecError>) -> Vec<String> {
+crates\core\src\spec.rs:177:fn normalize_text(value: String) -> String {
+crates\core\src\spec.rs:186:    fn normalize_text_collapses_internal_whitespace() {
+
+=== TS/TSX named functions and handler consts ===
+playwright\tests\smoke.spec.ts:79:              const env = ((args?.input as { env?: string } | undefined)?.env ?? "TEST") as string;
+playwright\runtime\desktop-runtime.spec.ts:17:async function connectTauriPage() {
+playwright\runtime\desktop-runtime.spec.ts:52:      const invoke = (window as Window & {
+playwright\runtime\desktop-runtime.spec.ts:64:        const rows = (await invoke("list_history", {}, undefined)) as unknown[];
+apps\desktop\src\App.tsx:53:async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+apps\desktop\src\App.tsx:83:function redactErrorDetails(value: unknown): unknown {
+apps\desktop\src\App.tsx:106:function normalizeAppError(error: unknown): UiAppError {
+apps\desktop\src\App.tsx:116:function formatSpecErrors(errors: SpecError[]): string {
+apps\desktop\src\App.tsx:148:  const setStructuredError = (error: unknown, fallbackStatus: string) => {
+apps\desktop\src\App.tsx:157:  const validatePathsAndPlatforms = (event?: FormEvent) => {
+apps\desktop\src\App.tsx:175:  const refreshHistory = async () => {
+apps\desktop\src\App.tsx:189:  const loadReportFor = async (releaseId: string) => {
+apps\desktop\src\App.tsx:204:  const onLoadSpec = async () => {
+apps\desktop\src\App.tsx:225:  const onPlanPreview = async (event: FormEvent) => {
+apps\desktop\src\App.tsx:251:  const onExecute = async (explicitReleaseId?: string) => {
+apps\desktop\src\App.tsx:276:  const onRefreshHistory = async () => {
+apps\desktop\src\App.tsx:288:  const onOpenReport = async () => {
+apps\desktop\src\App.tsx:305:  const onResume = async () => {
+apps\desktop\src\App.test.tsx:15:function installTauriMock() {
+apps\desktop\src\App.test.tsx:22:  const invokeMock = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+apps\desktop\src\App.test.tsx:37:        const env = (args?.input as { env?: string } | undefined)?.env ?? "TEST";
+apps\desktop\src\App.test.tsx:164:    const invokeMock = async (command: string): Promise<unknown> => {
+apps\desktop\src\tauri-api-core.d.ts:2:  export function invoke<T = unknown>(
+
+=== PowerShell functions ===
+scripts\validate-release-windows.ps1:9:function Invoke-Checked {
+scripts\snapshot-baseline.ps1:8:function Invoke-Checked {
+scripts\runtime-e2e\run-tauri-runtime-e2e.ps1:13:function Invoke-Checked {
+scripts\build-package-windows.ps1:10:function Invoke-Checked {
+scripts\bootstrap-windows.ps1:10:function Invoke-Checked {
+scripts\bootstrap-windows.ps1:24:function Test-CommandExists([string]$Name) {
+scripts\bootstrap-windows.ps1:28:function Install-WingetPackageIfMissing {
+
+=== TS/TSX top-level test callbacks ===
+playwright\tests\smoke.spec.ts:3:test("homepage renders release publisher shell", async ({ page }) => {
+playwright\tests\smoke.spec.ts:12:test("prototype validation shows failure path for empty spec path", async ({ page }) => {
+playwright\tests\smoke.spec.ts:20:test("browser preview shows structured backend error when Tauri runtime is unavailable", async ({ page }) => {
+playwright\tests\smoke.spec.ts:32:test("browser preview can run workflow with injected Tauri mock and no external network", async ({
+playwright\runtime\desktop-runtime.spec.ts:41:test("failure path rejects unsafe spec path, blocks unknown command, and creates no release side effects", async () => {
+playwright\runtime\desktop-runtime.spec.ts:96:test("happy path loads spec, plans, executes in TEST mode, and writes report/DB artifacts", async () => {
+apps\desktop\src\App.test.tsx:110:  it("renders the phase 1 shell", () => {
+apps\desktop\src\App.test.tsx:117:  it("shows a validation error when submitting empty spec path", () => {
+apps\desktop\src\App.test.tsx:125:  it("shows a structured backend error when Tauri runtime is unavailable", async () => {
+apps\desktop\src\App.test.tsx:137:  it("runs the mocked plan -> execute -> history/report workflow", async () => {
+apps\desktop\src\App.test.tsx:162:  it("redacts secret fields before logging backend error details", async () => {

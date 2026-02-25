@@ -389,6 +389,11 @@ fn resolve_runtime_base_dir() -> Result<PathBuf, AppError> {
         return Ok(PathBuf::from(value));
     }
     let default = DEFAULT_BASE_DIR.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            return PathBuf::from(local_app_data).join("ReleasePublisher");
+        }
+
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(".release-publisher-data")

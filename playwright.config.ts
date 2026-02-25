@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const pnpmBin = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+
 export default defineConfig({
   testDir: "./playwright/tests",
   fullyParallel: true,
@@ -10,10 +12,9 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: "npm run dev --workspace apps/desktop -- --host 127.0.0.1 --port 4173",
+    command: `${pnpmBin} --filter @release-publisher/desktop build && ${pnpmBin} --filter @release-publisher/desktop preview --host 127.0.0.1`,
     port: 4173,
     reuseExistingServer: true,
     timeout: 120_000
   }
 });
-

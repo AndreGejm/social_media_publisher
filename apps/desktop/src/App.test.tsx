@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
 type MockTauriState = {
@@ -18,75 +19,79 @@ function installTauriMock() {
     report: null
   };
 
+  const invokeMock = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+    switch (command) {
+      case "load_spec":
+        return {
+          ok: true,
+          spec: {
+            title: "Test Track",
+            artist: "Example Artist",
+            description: "Desc",
+            tags: ["mock", "release"]
+          },
+          errors: [],
+          canonical_path: "C:/fixtures/spec.yaml"
+        };
+      case "plan_release": {
+        const env = (args?.input as { env?: string } | undefined)?.env ?? "TEST";
+        state.plannedReleaseId = "a".repeat(64);
+        state.history = [
+          {
+            release_id: state.plannedReleaseId,
+            state: "PLANNED",
+            title: "Test Track",
+            updated_at: "2026-02-24T00:00:00Z"
+          }
+        ];
+        return {
+          release_id: state.plannedReleaseId,
+          run_id: "run-1",
+          env,
+          planned_actions: [{ platform: "mock", action: "mock.plan", simulated: true }],
+          planned_request_files: { mock: "artifacts/planned_requests/mock.json" }
+        };
+      }
+      case "execute_release": {
+        const releaseId =
+          (args as { releaseId?: string; release_id?: string } | undefined)?.releaseId ??
+          (args as { releaseId?: string; release_id?: string } | undefined)?.release_id ??
+          state.plannedReleaseId;
+        state.history = [
+          {
+            release_id: releaseId ?? "unknown",
+            state: "COMMITTED",
+            title: "Test Track",
+            updated_at: "2026-02-24T00:00:01Z"
+          }
+        ];
+        state.report = {
+          release_id: releaseId ?? "unknown",
+          summary: "Test Track [COMMITTED] 1 platform(s)",
+          actions: [{ platform: "mock", action: "VERIFIED (simulated)", simulated: true }]
+        };
+        return {
+          release_id: releaseId ?? "unknown",
+          status: "COMMITTED",
+          message: "Execution completed (TEST mode remains simulation-only).",
+          report_path: "artifacts/release_report.json"
+        };
+      }
+      case "list_history":
+        return state.history;
+      case "get_report":
+        return state.report;
+      default:
+        throw {
+          code: "UNKNOWN_COMMAND",
+          message: `unhandled command ${command}`
+        };
+    }
+  };
+
   window.__TAURI__ = {
     core: {
-      invoke: async (command, args) => {
-        switch (command) {
-          case "load_spec":
-            return {
-              ok: true,
-              spec: {
-                title: "Test Track",
-                artist: "Example Artist",
-                description: "Desc",
-                tags: ["mock", "release"]
-              },
-              errors: [],
-              canonical_path: "C:/fixtures/spec.yaml"
-            };
-          case "plan_release": {
-            const env = (args?.input as { env?: string } | undefined)?.env ?? "TEST";
-            state.plannedReleaseId = "a".repeat(64);
-            state.history = [
-              {
-                release_id: state.plannedReleaseId,
-                state: "PLANNED",
-                title: "Test Track",
-                updated_at: "2026-02-24T00:00:00Z"
-              }
-            ];
-            return {
-              release_id: state.plannedReleaseId,
-              run_id: "run-1",
-              env,
-              planned_actions: [{ platform: "mock", action: "mock.plan", simulated: true }],
-              planned_request_files: { mock: "artifacts/planned_requests/mock.json" }
-            };
-          }
-          case "execute_release": {
-            const releaseId =
-              (args as { release_id?: string } | undefined)?.release_id ?? state.plannedReleaseId;
-            state.history = [
-              {
-                release_id: releaseId ?? "unknown",
-                state: "COMMITTED",
-                title: "Test Track",
-                updated_at: "2026-02-24T00:00:01Z"
-              }
-            ];
-            state.report = {
-              release_id: releaseId ?? "unknown",
-              summary: "Test Track [COMMITTED] 1 platform(s)",
-              actions: [{ platform: "mock", action: "VERIFIED (simulated)", simulated: true }]
-            };
-            return {
-              release_id: releaseId ?? "unknown",
-              status: "COMMITTED",
-              message: "Execution completed (TEST mode remains simulation-only).",
-              report_path: "artifacts/release_report.json"
-            };
-          }
-          case "list_history":
-            return state.history;
-          case "get_report":
-            return state.report;
-          default:
-            throw {
-              code: "UNKNOWN_COMMAND",
-              message: `unhandled command ${command}`
-            };
-        }
-      }
+      invoke: invokeMock as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
     }
   };
 
@@ -94,6 +99,10 @@ function installTauriMock() {
 }
 
 describe("App", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     delete window.__TAURI__;
   });
@@ -148,5 +157,48 @@ describe("App", () => {
     expect(screen.getByTestId("history-list")).toHaveTextContent("COMMITTED");
     expect(screen.getByTestId("report-summary")).toHaveTextContent("COMMITTED");
     expect(screen.getByTestId("report-actions-list")).toHaveTextContent("VERIFIED (simulated)");
+  });
+
+  it("redacts secret fields before logging backend error details", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const invokeMock = async (command: string): Promise<unknown> => {
+      if (command === "plan_release") {
+        throw {
+          code: "SPEC_VALIDATION_FAILED",
+          message: "release spec is invalid",
+          details: {
+            authorization: "Bearer super-secret",
+            nested: {
+              client_secret: "dont-log-me",
+              refresh_token: "refresh-secret"
+            },
+            safe: "keep"
+          }
+        };
+      }
+      throw { code: "UNEXPECTED", message: "not implemented" };
+    };
+    window.__TAURI__ = {
+      core: {
+        invoke: invokeMock as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<App />);
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    expect(await screen.findByTestId("backend-error")).toHaveTextContent("SPEC_VALIDATION_FAILED");
+    expect(errorSpy).toHaveBeenCalledWith("release-publisher.error.details", {
+      authorization: "<redacted>",
+      nested: {
+        client_secret: "<redacted>",
+        refresh_token: "<redacted>"
+      },
+      safe: "keep"
+    });
+
+    errorSpy.mockRestore();
   });
 });

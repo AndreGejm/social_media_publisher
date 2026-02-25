@@ -4,30 +4,36 @@ on:
   push:
     branches: ["main", "master"]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          cache: "pnpm"
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Frontend typecheck
-        run: npm run typecheck --workspace apps/desktop
+        run: pnpm typecheck
       - name: Frontend lint
-        run: npm run lint --workspace apps/desktop
+        run: pnpm lint
       - name: Frontend unit tests
-        run: npm run test --workspace apps/desktop -- --run
+        run: pnpm --filter @release-publisher/desktop test -- --run
       - name: Build web UI
-        run: npm run build --workspace apps/desktop
+        run: pnpm build
       - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps chromium
       - name: Playwright smoke
-        run: npm run test:e2e
+        run: pnpm test:e2e
 
   rust:
     runs-on: ubuntu-latest
@@ -45,3 +51,28 @@ jobs:
         run: cargo test -p release-publisher-core
       - name: Run workspace tests
         run: cargo test --workspace
+
+  runtime-e2e-windows:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || vars.RUN_TAURI_E2E == '1' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+      - name: Build + runtime E2E (real Tauri runtime)
+        shell: pwsh
+        env:
+          RUN_TAURI_E2E: "1"
+        run: ./scripts/runtime-e2e/run-tauri-runtime-e2e.ps1 -NoBundleBuild
