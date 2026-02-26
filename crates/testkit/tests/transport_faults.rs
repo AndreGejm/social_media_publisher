@@ -28,7 +28,8 @@ impl Sleeper for RecordingSleeper {
 }
 
 fn request() -> TransportRequest {
-    let mut req = TransportRequest::new(HttpMethod::Post, "https://example.test/upload");
+    let mut req = TransportRequest::new(HttpMethod::Post, "https://example.test/upload")
+        .with_log_correlation("release-test-123", "run-test-456");
     req.operation = Some("mock-upload".to_string());
     req
 }
@@ -59,7 +60,17 @@ async fn retries_on_timeout_then_succeeds() {
     assert_eq!(response.status, 200);
     assert_eq!(report.attempts.len(), 2);
     assert_eq!(sleeper.delays(), vec![10]);
-    assert_eq!(transport.recorded_requests().unwrap().len(), 2);
+    let recorded = transport.recorded_requests().unwrap();
+    assert_eq!(recorded.len(), 2);
+    for entry in recorded {
+        let correlation = entry
+            .request
+            .log_correlation
+            .as_ref()
+            .expect("correlation context should be preserved across retries");
+        assert_eq!(correlation.release_id, "release-test-123");
+        assert_eq!(correlation.run_id, "run-test-456");
+    }
 }
 
 #[tokio::test]

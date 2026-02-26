@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+const TAG_FIELD_NAME: &str = "tags";
+const MAX_TAG_LEN_CHARS: usize = 32;
+const MAX_TAG_COUNT: usize = 10;
+const INTERNAL_INVARIANT_MESSAGE: &str = "internal validation invariant violated";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SpecErrorCode {
@@ -98,20 +103,26 @@ fn normalize_and_validate(raw: RawReleaseSpec) -> Result<ReleaseSpec, Vec<SpecEr
         return Err(errors);
     }
 
-    match (title, artist) {
-        (Some(title), Some(artist)) => Ok(ReleaseSpec {
-            title,
-            artist,
-            description,
-            tags,
-            mock,
-        }),
-        _ => Err(vec![SpecError {
+    debug_assert!(
+        title.is_some() && artist.is_some(),
+        "normalize_required_text invariant violated: required fields missing without validation errors"
+    );
+
+    let (Some(title), Some(artist)) = (title, artist) else {
+        return Err(vec![SpecError {
             code: SpecErrorCode::InternalInvariant,
             field: None,
-            message: "internal validation invariant violated".to_string(),
-        }]),
-    }
+            message: INTERNAL_INVARIANT_MESSAGE.to_string(),
+        }]);
+    };
+
+    Ok(ReleaseSpec {
+        title,
+        artist,
+        description,
+        tags,
+        mock,
+    })
 }
 
 fn normalize_required_text(
@@ -152,26 +163,26 @@ fn normalize_tags(tags: Vec<String>, errors: &mut Vec<SpecError>) -> Vec<String>
         if normalized.is_empty() {
             continue;
         }
-        if normalized.len() > 32 {
+        if normalized.len() > MAX_TAG_LEN_CHARS {
             errors.push(SpecError {
                 code: SpecErrorCode::TagTooLong,
-                field: Some("tags".to_string()),
-                message: format!("tag exceeds 32 chars: {normalized}"),
+                field: Some(TAG_FIELD_NAME.to_string()),
+                message: format!("tag exceeds {MAX_TAG_LEN_CHARS} chars: {normalized}"),
             });
             continue;
         }
         set.insert(normalized);
     }
 
-    if set.len() > 10 {
+    if set.len() > MAX_TAG_COUNT {
         errors.push(SpecError {
             code: SpecErrorCode::TooManyTags,
-            field: Some("tags".to_string()),
-            message: "no more than 10 tags are allowed".to_string(),
+            field: Some(TAG_FIELD_NAME.to_string()),
+            message: format!("no more than {MAX_TAG_COUNT} tags are allowed"),
         });
     }
 
-    set.into_iter().take(10).collect()
+    set.into_iter().take(MAX_TAG_COUNT).collect()
 }
 
 fn normalize_text(value: String) -> String {

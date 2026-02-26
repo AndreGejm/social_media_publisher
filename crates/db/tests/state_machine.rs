@@ -1,6 +1,6 @@
 use release_publisher_db::{
     Db, DbConfig, DbErrorCode, NewAuditLogEntry, NewReleaseRecord, PlatformActionStatus,
-    ReleaseState, UpsertPlatformAction,
+    ReleaseState, RunLockLeaseRecord, UpsertPlatformAction,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -125,6 +125,100 @@ async fn run_lock_prevents_parallel_acquire_across_connections() {
 }
 
 #[tokio::test]
+async fn lease_run_lock_blocks_takeover_before_expiry() {
+    let db = new_test_db().await;
+    db.upsert_release(&sample_release("r3c")).await.unwrap();
+
+    assert!(db
+        .acquire_run_lock_lease("r3c", "worker-a", 1, 1_000, 500)
+        .await
+        .unwrap());
+    assert!(!db
+        .acquire_run_lock_lease("r3c", "worker-b", 1, 1_200, 500)
+        .await
+        .unwrap());
+
+    let lock = db
+        .get_run_lock_lease("r3c")
+        .await
+        .unwrap()
+        .expect("lock row should exist");
+    assert_eq!(
+        lock,
+        RunLockLeaseRecord {
+            release_id: "r3c".to_string(),
+            owner: "worker-a".to_string(),
+            owner_epoch: 1,
+            lease_expires_at_unix_ms: 1_500,
+            created_at: lock.created_at.clone(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn lease_run_lock_allows_takeover_after_expiry() {
+    let db = new_test_db().await;
+    db.upsert_release(&sample_release("r3d")).await.unwrap();
+
+    assert!(db
+        .acquire_run_lock_lease("r3d", "worker-a", 1, 10_000, 100)
+        .await
+        .unwrap());
+    assert!(db
+        .acquire_run_lock_lease("r3d", "worker-b", 7, 10_101, 250)
+        .await
+        .unwrap());
+
+    let lock = db
+        .get_run_lock_lease("r3d")
+        .await
+        .unwrap()
+        .expect("lock row should exist after takeover");
+    assert_eq!(lock.owner, "worker-b");
+    assert_eq!(lock.owner_epoch, 7);
+    assert_eq!(lock.lease_expires_at_unix_ms, 10_351);
+}
+
+#[tokio::test]
+async fn lease_run_lock_renew_and_release_require_matching_owner_epoch() {
+    let db = new_test_db().await;
+    db.upsert_release(&sample_release("r3e")).await.unwrap();
+
+    assert!(db
+        .acquire_run_lock_lease("r3e", "worker-a", 11, 20_000, 100)
+        .await
+        .unwrap());
+
+    assert!(!db
+        .renew_run_lock_lease("r3e", "worker-a", 12, 20_050, 300)
+        .await
+        .unwrap());
+    assert!(db
+        .renew_run_lock_lease("r3e", "worker-a", 11, 20_050, 300)
+        .await
+        .unwrap());
+
+    let lock = db
+        .get_run_lock_lease("r3e")
+        .await
+        .unwrap()
+        .expect("lock row should exist after renew");
+    assert_eq!(lock.owner, "worker-a");
+    assert_eq!(lock.owner_epoch, 11);
+    assert_eq!(lock.lease_expires_at_unix_ms, 20_350);
+
+    assert!(!db
+        .release_run_lock_lease("r3e", "worker-a", 12)
+        .await
+        .unwrap());
+    assert!(db
+        .release_run_lock_lease("r3e", "worker-a", 11)
+        .await
+        .unwrap());
+    assert!(db.get_run_lock_lease("r3e").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn resume_semantics_skip_completed_platforms() {
     let db = new_test_db().await;
     db.upsert_release(&sample_release("r4")).await.unwrap();
@@ -212,6 +306,74 @@ async fn schema_constraints_reject_invalid_hash_lengths() {
         DbErrorCode::ConstraintViolation,
         "unexpected sqlite error: {err}"
     );
+}
+
+#[tokio::test]
+async fn upsert_release_rejects_invariant_mismatch_on_release_id_collision() {
+    let db = new_test_db().await;
+    let original = sample_release("r6b");
+    db.upsert_release(&original).await.unwrap();
+
+    let mut renamed_same_invariants = original.clone();
+    renamed_same_invariants.title = "Renamed Track".to_string();
+    let updated = db.upsert_release(&renamed_same_invariants).await.unwrap();
+    assert_eq!(updated.title, "Renamed Track");
+    assert_eq!(updated.spec_hash, original.spec_hash);
+    assert_eq!(updated.media_fingerprint, original.media_fingerprint);
+    assert_eq!(updated.normalized_spec_json, original.normalized_spec_json);
+
+    let mut conflicting = original.clone();
+    conflicting.title = "Should Not Persist".to_string();
+    conflicting.spec_hash = "c".repeat(64);
+
+    let err = db
+        .upsert_release(&conflicting)
+        .await
+        .expect_err("release_id collision with mismatched invariants should fail");
+    assert_eq!(err.code, DbErrorCode::ConstraintViolation);
+    assert!(
+        err.message.contains("invariant mismatch"),
+        "unexpected error: {err}"
+    );
+    assert!(err.message.contains("spec_hash"), "unexpected error: {err}");
+
+    let stored = db.get_release("r6b").await.unwrap().unwrap();
+    assert_eq!(stored.title, "Renamed Track");
+    assert_eq!(stored.spec_hash, original.spec_hash);
+    assert_eq!(stored.media_fingerprint, original.media_fingerprint);
+    assert_eq!(stored.normalized_spec_json, original.normalized_spec_json);
+}
+
+#[tokio::test]
+async fn tx_upsert_release_rejects_invariant_mismatch_on_release_id_collision() {
+    let db = new_test_db().await;
+    let original = sample_release("r6c");
+    db.upsert_release(&original).await.unwrap();
+
+    let mut conflicting = original.clone();
+    conflicting.media_fingerprint = "d".repeat(64);
+    conflicting.normalized_spec_json = "{\"title\":\"Changed\"}".to_string();
+
+    let mut tx = db.begin_tx().await.expect("begin tx");
+    let err = tx
+        .upsert_release(&conflicting)
+        .await
+        .expect_err("tx upsert should reject invariant mismatch");
+    assert_eq!(err.code, DbErrorCode::ConstraintViolation);
+    assert!(
+        err.message.contains("invariant mismatch"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.message.contains("media_fingerprint"),
+        "unexpected error: {err}"
+    );
+    tx.rollback().await.expect("rollback tx");
+
+    let stored = db.get_release("r6c").await.unwrap().unwrap();
+    assert_eq!(stored.spec_hash, original.spec_hash);
+    assert_eq!(stored.media_fingerprint, original.media_fingerprint);
+    assert_eq!(stored.normalized_spec_json, original.normalized_spec_json);
 }
 
 #[tokio::test]

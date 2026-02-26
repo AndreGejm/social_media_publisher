@@ -1,0 +1,229 @@
+# Complete Cross-Discipline Code Review (Principal Eng + Security + QA + UX + PM)
+
+Date: 2026-02-25  
+Scope: Tauri v2 desktop app (`apps/desktop`) + Rust core/runtime (`crates/core`) + DB (`crates/db`) + mock connector/testkit.
+
+## 1) Executive summary
+
+1. The core architecture is strong for deterministic TEST-mode orchestration: spec normalization + hash-based `release_id` + run lock + explicit state machine gives a solid foundation for idempotent behavior.
+2. The orchestrator enforces critical safety guardrails in core (not UI): TEST-only simulation and per-run action cap are both validated at plan and execute time.
+3. Error handling quality is mixed: DB/transport have typed error codes, but publisher and orchestrator boundaries still rely on stringified `anyhow` in several paths, which will become brittle with real connectors.
+4. Domain modeling is currently too stringly in key areas (`ExecutionResult.status`, report summary status/action text), and this will create connector-specific parsing drift unless upgraded to enums now.
+5. Resume/idempotency semantics are generally correct for completed actions, but there is no persisted plan-to-execute intent token; execution currently depends on in-memory `planned_releases` in the Tauri process, which limits restart/resume reliability.
+6. SQLite consistency is good for individual writes, but orchestration phase transitions are split into multiple transactions; future connector complexity will require stronger transaction envelopes and compensation strategy.
+7. Concurrency controls are pragmatic (run lock row + state transitions), but lock ownership lifecycle is process-local and stale-lock recovery policy is not yet implemented.
+8. Logging is better than average: structured tracing is used and header redaction exists in transport, but correlation IDs are not propagated uniformly across every log event and path-based logs may expose sensitive local naming.
+9. Tauri security posture has one hard blocker: `csp: null` in config. This must be tightened before enabling real connector auth/session flows.
+10. IPC surface is relatively constrained to five commands, but argument policies are still permissive around file inputs and report access patterns; a formal command threat model should be added.
+11. Secret management is currently not implemented for real connector credentials (expected at this stage), but product-default architecture should move directly to OS keychain-backed secrets.
+12. Test coverage is impressive for core reliability (property tests, fault injection, DB state machine, pipeline integration), but there are gaps in cancellation, stale lock recovery, and multi-connector fanout behavior.
+13. UX is functional and safe-biased for TEST mode, but high-friction manual path entry and ambiguous execution-state copy will slow adoption and increase operator error risk under production-scale workflows.
+14. Product roadmap should prioritize connector-safe abstractions (typed result model, plugin connector contracts, credentials UX, dry-run diff/checklist) before adding many platform-specific features.
+
+## 2) Stop-the-line issues (before real connectors)
+
+1. **Tauri CSP disabled (`csp: null`)** — must set strict CSP and validate no remote script injection paths before any token-bearing flow.
+2. **Stringly domain statuses across pipeline/report/UI** — replace with typed enums + explicit serialization contracts; connector growth will otherwise break determinism and observability.
+3. **Execution resume depends on in-memory plan cache** — add persisted plan token / resumable execution descriptor to survive app restarts and support operator handoff.
+4. **No stale lock recovery strategy for `run_locks`** — add lock TTL/heartbeat or owner epoch to prevent permanent deadlock after crash.
+5. **No explicit secrets subsystem yet** — define keychain-backed credential abstraction + redaction contract before real HTTP connectors are introduced.
+
+## 3) Engineering review (readability / maintainability / stability)
+
+### Module: `crates/core/src/spec.rs`
+- **Strengths**
+  - `serde(deny_unknown_fields)` + structured `SpecErrorCode` keeps parsing deterministic.
+  - Normalization logic is concise and test-backed.
+- **Issues / refactors**
+  - `normalize_and_validate` returns `InternalInvariant` fallback for impossible states, but that is effectively dead-path and can mask programmer bugs; prefer `debug_assert!` + deterministic construction path only.
+  - Tag policy limits are hardcoded (32 chars / 10 tags) and repeated in messages; move to constants and include in shared UI metadata contract to avoid drift.
+
+### Module: `crates/core/src/idempotency.rs`
+- **Strengths**
+  - Domain-separated hash material for `release_id` is excellent and explicit.
+- **Issues / refactors**
+  - `media_fingerprint_from_file` returns `anyhow::Result<String>` while adjacent APIs are typed; use crate-specific error enum for stable UI/API boundary handling.
+
+### Module: `crates/core/src/pipeline.rs`
+- **Strengths**
+  - Minimal publisher trait keeps mock connector straightforward.
+- **Issues / refactors**
+  - `ExecutionResult.status: String` and `PlannedAction.action: String` are under-modeled. Introduce typed action/result enums with connector-specific payload map to prevent status parsing debt.
+  - Trait methods return `anyhow::Result`, which weakens typed error propagation and classification.
+
+### Module: `crates/core/src/orchestrator.rs`
+- **Strengths**
+  - Clear control-flow: plan -> execute -> verify -> commit with release state gates.
+  - Guardrails enforced in core (`TEST` simulated checks, cap checks).
+- **Stability and boundary risks**
+  - Multiple phase writes occur in separate transactions; partial progress is handled but will grow complex with multi-step real connector orchestration. Add a per-platform execution transaction envelope and explicit compensation metadata.
+  - `mark_platform_failed` assumes release state is `EXECUTING`; if future parallelism or external operator actions alter state, this can fail and hide root cause.
+  - `infer_simulated_and_verified` re-parses `result_json` via ad-hoc JSON keys; this duplicates schema logic and will break silently on shape drift.
+  - Lock owner uses process ID only; PID reuse on host reboot can collide semantically.
+
+### Module: `crates/db/src/lib.rs` + migration
+- **Strengths**
+  - Typed DB error codes and transition guards are solid.
+  - Schema constraints (hash length, status checks, PKs, FKs) are strong.
+- **Risks / maintainability gaps**
+  - `Db` and `DbTx` duplicate substantial query logic; extract shared internals to reduce divergence risk.
+  - `acquire_run_lock` has no expiration and no `updated_at`; crash can orphan lock forever.
+  - `upsert_release` conflict update only refreshes `title`; spec/media changes for same `release_id` are impossible by design but should still be asserted for safety.
+
+### Module: `apps/desktop/src-tauri/src/commands.rs`
+- **Strengths**
+  - Good command boundary with structured `AppError` and canonicalization checks.
+  - `reject_odd_prefixes` blocks several risky path prefixes.
+- **Maintainability / reliability issues**
+  - `planned_releases: Mutex<HashMap<...>>` is in-memory-only session state; not resilient.
+  - `handle_get_report` deserializes JSON twice (typed + raw), unnecessary for large report payloads.
+  - App error code space is partly stable, but still hand-built strings; define central code constants and mapping tests.
+
+### Module: `apps/desktop/src/App.tsx`
+- **Strengths**
+  - Single-screen workflow is comprehensible and test-covered.
+  - UI-side redaction helper avoids accidental token leakage in error details.
+- **Readability / maintainability issues**
+  - Component has high responsibility concentration (state machine, command layer, rendering, copy); split into feature hooks and screen components before feature growth.
+  - Path input UX is manual text entry only; this increases path errors and support burden.
+  - Console logging of `appError.details` should be environment-gated and correlation-tagged.
+
+### Module: testkit + fault injection
+- **Strengths**
+  - Scripted transport and expectation checks are excellent for deterministic connector contract testing.
+- **Future risk**
+  - `std::sync::Mutex` in async-facing `TestTransport` is okay for current use but could become contention-prone with high-concurrency tests; consider `tokio::sync::Mutex` once async fanout tests are added.
+
+## 4) Security review (findings, mitigations, severity)
+
+### High
+1. **CSP disabled in Tauri app config**
+   - Finding: `"csp": null` disables content policy hardening.
+   - Risk: increases XSS/script-injection blast radius in desktop webview.
+   - Mitigation: enforce strict CSP (`default-src 'self'`; no remote script; lock `connect-src`; disallow `unsafe-eval` unless strictly required), then run E2E.
+
+### Medium
+2. **No production secret storage subsystem yet**
+   - Finding: no keychain abstraction in runtime for connector tokens.
+   - Risk: teams may default to env files/plaintext artifacts when connectors arrive.
+   - Mitigation: implement `SecretStore` trait now (OS keychain backend + in-memory test backend), block connector enablement without it.
+
+3. **Lock orphaning risk in `run_locks`**
+   - Finding: lock table has no TTL/heartbeat; release after crash may never happen.
+   - Risk: denial-of-service on release execution.
+   - Mitigation: add `lease_expires_at`/heartbeat + takeover protocol and telemetry.
+
+4. **Path data can reveal local sensitive context in logs/artifacts**
+   - Finding: canonical paths are surfaced to UI/report metadata.
+   - Risk: sensitive user/project naming leakage via logs/support bundles.
+   - Mitigation: add path redaction policy + “safe diagnostics mode” for exports.
+
+### Low
+5. **Dependency versions mostly pinned to major/minor, not full patch in Rust workspace**
+   - Finding: workspace deps use broad versions (e.g., `"1"`, `"0.12"`).
+   - Risk: less deterministic supply-chain rollouts outside lockfile discipline.
+   - Mitigation: continue lockfile commit policy; add CI check for lock drift and `cargo audit`/`pnpm audit` cadence.
+
+## 5) QA review (gaps, tests to add, flake controls)
+
+### Existing strengths
+- Strong core suite: idempotency, property tests, orchestrator integration, DB state machine, transport fault injection, UI unit, and runtime Playwright paths.
+
+### Gaps to close
+1. **Cancellation/interruption semantics**
+   - Add tests for task cancellation during execute/verify and ensure lock release + state consistency.
+2. **Stale lock recovery**
+   - Add DB/integration tests simulating crash before lock release and verify takeover behavior.
+3. **Multi-connector fanout stress**
+   - Add deterministic tests for >1 connector with mixed outcomes to verify retry/resume boundaries.
+4. **Error code contract tests at IPC boundary**
+   - Snapshot command error codes/details schema to prevent accidental breaking changes.
+5. **Large payload/report performance tests**
+   - Validate `get_report` behavior with large JSON artifacts to avoid UI blocking.
+
+### Minimal regression suite for maintenance
+- Rust: core + db + testkit suites (already close), plus new cancellation/lock-expiry tests.
+- Desktop UI: vitest workflow + error-code snapshot tests.
+- Runtime E2E: one happy path and one hard-failure path per release train.
+
+### Flake controls
+- Keep all connector tests offline with testkit scripts.
+- Use deterministic seeds for retry jitter/property tests.
+- Mark runtime E2E serial and isolate data dirs per run.
+
+## 6) UX review (workflow + safety copy)
+
+### Top UX issues
+1. Manual path entry without file pickers causes frequent validation churn.
+2. “Execute” is available from same section as planning with limited irreversible-action framing for future PROD mode.
+3. Status language is generic (“Execution completed…”) and does not clearly separate simulated vs live effects per platform.
+4. History list lacks filters/search/environment badges; operator triage will degrade as records grow.
+
+### Improvements
+- Add native file picker buttons + recent-path memory.
+- Introduce explicit environment danger banner and two-step confirmation for STAGING/PROD.
+- Show per-platform progress timeline (PLAN / EXECUTE / VERIFY / COMMIT) with deterministic badges.
+- Add report export (JSON + human-readable summary) with redaction toggle.
+- Add “why blocked” tooltips for disabled actions (e.g., no plan loaded).
+
+### Safety copy updates
+- Replace “Execute” button label (in non-TEST) with “Publish to <ENV>”.
+- Add static warning copy: “TEST never performs external publish. STAGING/PRODUCTION may create irreversible external artifacts.”
+- On failures, show action guidance: “Safe to retry”, “Requires credential refresh”, or “Requires manual connector review”.
+
+## 7) Product roadmap (P0/P1/P2)
+
+### P0 (pre-connector hardening)
+1. **Typed connector contract v1**
+   - Value: prevents status drift and parsing bugs.
+   - Cost/risk: Medium.
+   - Dependencies: pipeline model refactor.
+   - MVP: enum statuses + structured error/result payload.
+2. **Secrets subsystem (keychain)**
+   - Value: mandatory for secure connector rollout.
+   - Cost/risk: Medium-High.
+   - Dependencies: per-platform credential schema.
+   - MVP: get/set/delete credential APIs + audit-safe logging.
+3. **Resumable execution token persisted in DB**
+   - Value: restart-safe operations.
+   - Cost/risk: Medium.
+   - Dependencies: orchestration state schema updates.
+   - MVP: execute by `release_id` + persisted plan snapshot hash.
+4. **CSP + IPC threat model hardening**
+   - Value: reduces desktop attack surface.
+   - Cost/risk: Medium.
+   - Dependencies: UI asset policy.
+
+### P1 (operator efficiency + mistake reduction)
+1. **Release templates/presets + checklist** (MVP: saved defaults for tags/platform/env + mandatory checklist confirmation).
+2. **Metadata editor with validation hints** (MVP: inline linting before plan).
+3. **Dry-run diff between runs** (MVP: compare planned actions/spec hash against previous run).
+4. **History filters/search/export** (MVP: by env/state/date/platform).
+
+### P2 (scale + platform strategy)
+1. **Plugin connector system** (MVP: internal connector registry + signed manifest).
+2. **Per-platform override UI** (MVP: optional per-platform metadata fields).
+3. **Scheduling calendar view** (MVP: queued execution windows with env guardrails).
+4. **Sandbox onboarding wizard** (MVP: guided TEST setup + sample fixtures).
+
+## 8) Next 2 sprints plan (tasks + acceptance criteria)
+
+### Sprint 1 — Hardening and contract stabilization
+1. **Introduce typed pipeline result model**
+   - AC: no `status: String` in core pipeline data model; serde-compatible enums added; tests updated.
+2. **Persist resumable plan descriptor**
+   - AC: app restart can execute previously planned release if descriptor hash matches.
+3. **Run-lock lease/expiry implementation**
+   - AC: simulated crash lock can be safely recovered after lease timeout; integration test passes.
+4. **Tauri CSP baseline policy**
+   - AC: `csp` is non-null and runtime/UI tests pass under strict policy.
+
+### Sprint 2 — Security + UX safety UX
+1. **Keychain-backed secret store abstraction**
+   - AC: mock + OS backend behind trait, no secret values in logs, unit tests for redaction.
+2. **File picker + path policy UX improvements**
+   - AC: users can select spec/media via native dialog; validation errors reduced; tests cover path flows.
+3. **Execution confirmation flow for STAGING/PROD**
+   - AC: double-confirmation + explicit env banner required before execute in non-TEST.
+4. **History/report usability uplift**
+   - AC: add filters + environment badges + export action; vitest coverage for selection/filter flows.

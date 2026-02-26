@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use release_publisher_core::pipeline::{
-    ExecuteContext, ExecutionResult, PlanContext, PlannedAction, Publisher, VerificationResult,
+    ExecuteContext, ExecutionResult, ExecutionStatus, PlanContext, PlannedAction,
+    PlannedActionType, Publisher, VerificationResult,
 };
 
 #[derive(Debug, Default)]
@@ -16,6 +17,7 @@ impl Publisher for MockPublisher {
         Ok(vec![PlannedAction {
             platform: self.platform_name().to_string(),
             action: format!("Simulate publish for {}", ctx.release_id),
+            action_type: PlannedActionType::Publish,
             simulated: true,
         }])
     }
@@ -30,7 +32,7 @@ impl Publisher for MockPublisher {
             .map(|action| ExecutionResult {
                 platform: action.platform.clone(),
                 external_id: None,
-                status: "SIMULATED".to_string(),
+                status: ExecutionStatus::Simulated,
                 simulated: true,
             })
             .collect())

@@ -282,6 +282,15 @@ pub struct AuditLogEntry {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunLockLeaseRecord {
+    pub release_id: String,
+    pub owner: String,
+    pub owner_epoch: i64,
+    pub lease_expires_at_unix_ms: i64,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NewAuditLogEntry {
     pub release_id: String,
@@ -356,7 +365,7 @@ impl Db {
     }
 
     pub async fn upsert_release(&self, input: &NewReleaseRecord) -> DbResult<ReleaseRecord> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO releases (
                 release_id, title, state, spec_hash, media_fingerprint, normalized_spec_json
@@ -364,6 +373,9 @@ impl Db {
             ON CONFLICT(release_id) DO UPDATE SET
                 title = excluded.title,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE releases.spec_hash = excluded.spec_hash
+              AND releases.media_fingerprint = excluded.media_fingerprint
+              AND releases.normalized_spec_json = excluded.normalized_spec_json
             "#,
         )
         .bind(&input.release_id)
@@ -376,9 +388,16 @@ impl Db {
         .await
         .map_err(|e| DbError::map_sqlx(e, "upsert release"))?;
 
-        self.get_release(&input.release_id)
+        let stored = self
+            .get_release(&input.release_id)
             .await?
-            .ok_or_else(|| DbError::new(DbErrorCode::NotFound, "release missing after upsert"))
+            .ok_or_else(|| DbError::new(DbErrorCode::NotFound, "release missing after upsert"))?;
+
+        if result.rows_affected() == 0 {
+            ensure_release_upsert_invariants_match(&stored, input)?;
+        }
+
+        Ok(stored)
     }
 
     pub async fn get_release(&self, release_id: &str) -> DbResult<Option<ReleaseRecord>> {
@@ -456,6 +475,125 @@ impl Db {
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::map_sqlx(e, "set release failed"))?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn get_run_lock_lease(
+        &self,
+        release_id: &str,
+    ) -> DbResult<Option<RunLockLeaseRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT release_id, owner, owner_epoch, lease_expires_at_unix_ms, created_at
+            FROM run_locks
+            WHERE release_id = ?
+            "#,
+        )
+        .bind(release_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DbError::map_sqlx(e, "fetch run lock lease"))?;
+
+        row.map(map_run_lock_lease_row).transpose()
+    }
+
+    pub async fn acquire_run_lock_lease(
+        &self,
+        release_id: &str,
+        owner: &str,
+        owner_epoch: i64,
+        now_unix_ms: i64,
+        lease_ttl_ms: i64,
+    ) -> DbResult<bool> {
+        let lease_expires_at_unix_ms =
+            validate_run_lock_lease_params(owner, owner_epoch, now_unix_ms, lease_ttl_ms)?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO run_locks (release_id, owner, owner_epoch, lease_expires_at_unix_ms)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(release_id) DO UPDATE SET
+                owner = excluded.owner,
+                owner_epoch = excluded.owner_epoch,
+                lease_expires_at_unix_ms = excluded.lease_expires_at_unix_ms
+            WHERE run_locks.lease_expires_at_unix_ms <= ?
+            "#,
+        )
+        .bind(release_id)
+        .bind(owner)
+        .bind(owner_epoch)
+        .bind(lease_expires_at_unix_ms)
+        .bind(now_unix_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::map_sqlx(e, "acquire run lock lease"))?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn renew_run_lock_lease(
+        &self,
+        release_id: &str,
+        owner: &str,
+        owner_epoch: i64,
+        now_unix_ms: i64,
+        lease_ttl_ms: i64,
+    ) -> DbResult<bool> {
+        let lease_expires_at_unix_ms =
+            validate_run_lock_lease_params(owner, owner_epoch, now_unix_ms, lease_ttl_ms)?;
+        let result = sqlx::query(
+            r#"
+            UPDATE run_locks
+            SET lease_expires_at_unix_ms = ?
+            WHERE release_id = ?
+              AND owner = ?
+              AND owner_epoch = ?
+              AND lease_expires_at_unix_ms > ?
+            "#,
+        )
+        .bind(lease_expires_at_unix_ms)
+        .bind(release_id)
+        .bind(owner)
+        .bind(owner_epoch)
+        .bind(now_unix_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::map_sqlx(e, "renew run lock lease"))?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn release_run_lock_lease(
+        &self,
+        release_id: &str,
+        owner: &str,
+        owner_epoch: i64,
+    ) -> DbResult<bool> {
+        if owner.trim().is_empty() {
+            return Err(DbError::new(
+                DbErrorCode::Query,
+                "release run lock lease owner cannot be empty",
+            ));
+        }
+        if owner_epoch < 0 {
+            return Err(DbError::new(
+                DbErrorCode::Query,
+                "release run lock lease owner_epoch must be non-negative",
+            ));
+        }
+
+        let result = sqlx::query(
+            r#"
+            DELETE FROM run_locks
+            WHERE release_id = ? AND owner = ? AND owner_epoch = ?
+            "#,
+        )
+        .bind(release_id)
+        .bind(owner)
+        .bind(owner_epoch)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::map_sqlx(e, "release run lock lease"))?;
 
         Ok(result.rows_affected() == 1)
     }
@@ -681,7 +819,7 @@ impl<'a> DbTx<'a> {
     }
 
     pub async fn upsert_release(&mut self, input: &NewReleaseRecord) -> DbResult<ReleaseRecord> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO releases (
                 release_id, title, state, spec_hash, media_fingerprint, normalized_spec_json
@@ -689,6 +827,9 @@ impl<'a> DbTx<'a> {
             ON CONFLICT(release_id) DO UPDATE SET
                 title = excluded.title,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE releases.spec_hash = excluded.spec_hash
+              AND releases.media_fingerprint = excluded.media_fingerprint
+              AND releases.normalized_spec_json = excluded.normalized_spec_json
             "#,
         )
         .bind(&input.release_id)
@@ -701,9 +842,16 @@ impl<'a> DbTx<'a> {
         .await
         .map_err(|e| DbError::map_sqlx(e, "upsert release"))?;
 
-        self.get_release(&input.release_id)
+        let stored = self
+            .get_release(&input.release_id)
             .await?
-            .ok_or_else(|| DbError::new(DbErrorCode::NotFound, "release missing after upsert"))
+            .ok_or_else(|| DbError::new(DbErrorCode::NotFound, "release missing after upsert"))?;
+
+        if result.rows_affected() == 0 {
+            ensure_release_upsert_invariants_match(&stored, input)?;
+        }
+
+        Ok(stored)
     }
 
     pub async fn get_release(&mut self, release_id: &str) -> DbResult<Option<ReleaseRecord>> {
@@ -893,6 +1041,41 @@ fn parse_json_opt(value: Option<String>) -> DbResult<Option<Value>> {
         .map_err(DbError::deserialize_json)
 }
 
+fn validate_run_lock_lease_params(
+    owner: &str,
+    owner_epoch: i64,
+    now_unix_ms: i64,
+    lease_ttl_ms: i64,
+) -> DbResult<i64> {
+    if owner.trim().is_empty() {
+        return Err(DbError::new(
+            DbErrorCode::Query,
+            "run lock lease owner cannot be empty",
+        ));
+    }
+    if owner_epoch < 0 {
+        return Err(DbError::new(
+            DbErrorCode::Query,
+            "run lock lease owner_epoch must be non-negative",
+        ));
+    }
+    if now_unix_ms < 0 {
+        return Err(DbError::new(
+            DbErrorCode::Query,
+            "run lock lease now_unix_ms must be non-negative",
+        ));
+    }
+    if lease_ttl_ms <= 0 {
+        return Err(DbError::new(
+            DbErrorCode::Query,
+            "run lock lease ttl must be positive",
+        ));
+    }
+    now_unix_ms
+        .checked_add(lease_ttl_ms)
+        .ok_or_else(|| DbError::new(DbErrorCode::Query, "run lock lease expiry overflow"))
+}
+
 fn map_release_row(row: SqliteRow) -> DbResult<ReleaseRecord> {
     Ok(ReleaseRecord {
         release_id: row
@@ -924,6 +1107,55 @@ fn map_release_row(row: SqliteRow) -> DbResult<ReleaseRecord> {
             .try_get("updated_at")
             .map_err(|e| DbError::map_sqlx(e, "decode release.updated_at"))?,
     })
+}
+
+fn map_run_lock_lease_row(row: SqliteRow) -> DbResult<RunLockLeaseRecord> {
+    Ok(RunLockLeaseRecord {
+        release_id: row
+            .try_get("release_id")
+            .map_err(|e| DbError::map_sqlx(e, "decode run_lock.release_id"))?,
+        owner: row
+            .try_get("owner")
+            .map_err(|e| DbError::map_sqlx(e, "decode run_lock.owner"))?,
+        owner_epoch: row
+            .try_get("owner_epoch")
+            .map_err(|e| DbError::map_sqlx(e, "decode run_lock.owner_epoch"))?,
+        lease_expires_at_unix_ms: row
+            .try_get("lease_expires_at_unix_ms")
+            .map_err(|e| DbError::map_sqlx(e, "decode run_lock.lease_expires_at_unix_ms"))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|e| DbError::map_sqlx(e, "decode run_lock.created_at"))?,
+    })
+}
+
+fn ensure_release_upsert_invariants_match(
+    stored: &ReleaseRecord,
+    input: &NewReleaseRecord,
+) -> DbResult<()> {
+    let mut mismatches = Vec::new();
+    if stored.spec_hash != input.spec_hash {
+        mismatches.push("spec_hash");
+    }
+    if stored.media_fingerprint != input.media_fingerprint {
+        mismatches.push("media_fingerprint");
+    }
+    if stored.normalized_spec_json != input.normalized_spec_json {
+        mismatches.push("normalized_spec_json");
+    }
+
+    if mismatches.is_empty() {
+        return Ok(());
+    }
+
+    Err(DbError::new(
+        DbErrorCode::ConstraintViolation,
+        format!(
+            "upsert release: release_id `{}` invariant mismatch on conflict ({})",
+            input.release_id,
+            mismatches.join(", ")
+        ),
+    ))
 }
 
 fn map_platform_action_row(row: SqliteRow) -> DbResult<PlatformActionRecord> {

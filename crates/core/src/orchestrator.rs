@@ -12,9 +12,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub const DEFAULT_MAX_ACTIONS_PER_PLATFORM_PER_RUN: u32 = 1;
+const RUN_LOCK_LEASE_TTL_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OrchestratorError {
@@ -306,7 +308,8 @@ impl Orchestrator {
         &self,
         planned: PlannedRelease,
     ) -> Result<RunReleaseOutput, OrchestratorError> {
-        let lock_owner = format!("orchestrator-{}", std::process::id());
+        let lock_owner_epoch = unix_time_ms_now();
+        let lock_owner = format!("orchestrator-{}-{}", std::process::id(), Uuid::new_v4());
         tracing::info!(
             target: "orchestrator",
             release_id = %planned.release_id,
@@ -315,7 +318,13 @@ impl Orchestrator {
         );
         let acquired = self
             .db
-            .acquire_run_lock(&planned.release_id, &lock_owner)
+            .acquire_run_lock_lease(
+                &planned.release_id,
+                &lock_owner,
+                lock_owner_epoch,
+                lock_owner_epoch,
+                RUN_LOCK_LEASE_TTL_MS,
+            )
             .await?;
         if !acquired {
             return Err(OrchestratorError::InvalidReleaseState(format!(
@@ -327,7 +336,7 @@ impl Orchestrator {
         let result = self.execute_locked(&planned).await;
         let release_lock_result = self
             .db
-            .release_run_lock(&planned.release_id, &lock_owner)
+            .release_run_lock_lease(&planned.release_id, &lock_owner, lock_owner_epoch)
             .await
             .map_err(OrchestratorError::from);
 
@@ -353,6 +362,8 @@ impl Orchestrator {
             .db
             .pending_platforms(&planned.release_id, &planned.platforms)
             .await?;
+        let pending_platforms_for_run: HashSet<String> =
+            pending_platforms.iter().cloned().collect();
         tracing::info!(
             target: "orchestrator",
             release_id = %planned.release_id,
@@ -416,11 +427,15 @@ impl Orchestrator {
                         planned.release_id
                     )));
                 }
-                return self.finalize_report(planned).await;
+                return self
+                    .finalize_report(planned, &pending_platforms_for_run)
+                    .await;
             }
             ReleaseState::Committed => {
                 if pending_platforms.is_empty() {
-                    return self.finalize_report(planned).await;
+                    return self
+                        .finalize_report(planned, &pending_platforms_for_run)
+                        .await;
                 }
                 let transitioned = self
                     .db
@@ -604,12 +619,14 @@ impl Orchestrator {
             tx.commit().await?;
         }
 
-        self.finalize_report(planned).await
+        self.finalize_report(planned, &pending_platforms_for_run)
+            .await
     }
 
     async fn finalize_report(
         &self,
         planned: &PlannedRelease,
+        pending_platforms_for_run: &HashSet<String>,
     ) -> Result<RunReleaseOutput, OrchestratorError> {
         let release = self
             .db
@@ -630,7 +647,8 @@ impl Orchestrator {
                 ))
             })?;
             let (simulated, verified) = infer_simulated_and_verified(row.result_json.as_ref())?;
-            let reused_completed_result = false;
+            let reused_completed_result =
+                row.status.is_completed() && !pending_platforms_for_run.contains(platform);
 
             platforms.push(PlatformExecutionSummary {
                 platform: platform.clone(),
@@ -770,6 +788,13 @@ impl Orchestrator {
     }
 }
 
+fn unix_time_ms_now() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
+
 fn validate_run_input(input: &RunReleaseInput) -> Result<(), OrchestratorError> {
     if input.media_bytes.is_empty() {
         return Err(OrchestratorError::InvalidInput(
@@ -858,30 +883,35 @@ fn infer_simulated_and_verified(
         return Ok((false, false));
     };
 
-    let execution_results = result_json
-        .get("execution_results")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let verification_results = result_json
-        .get("verification_results")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    #[derive(Deserialize)]
+    struct StoredResultFlags {
+        execution_results: Vec<StoredExecutionFlags>,
+        verification_results: Vec<StoredVerificationFlags>,
+    }
 
-    let simulated = execution_results.iter().all(|entry| {
-        entry
-            .get("simulated")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    });
-    let verified = !verification_results.is_empty()
-        && verification_results.iter().all(|entry| {
-            entry
-                .get("verified")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        });
+    #[derive(Deserialize)]
+    struct StoredExecutionFlags {
+        simulated: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct StoredVerificationFlags {
+        verified: bool,
+    }
+
+    let stored =
+        serde_json::from_value::<StoredResultFlags>(result_json.clone()).map_err(|error| {
+            OrchestratorError::InvalidReleaseState(format!(
+                "invalid stored platform result_json schema: {error}"
+            ))
+        })?;
+
+    let simulated = stored.execution_results.iter().all(|entry| entry.simulated);
+    let verified = !stored.verification_results.is_empty()
+        && stored
+            .verification_results
+            .iter()
+            .all(|entry| entry.verified);
 
     Ok((simulated, verified))
 }
@@ -893,4 +923,56 @@ async fn write_json_pretty<T: ?Sized + Serialize>(
     let bytes = serde_json::to_vec_pretty(value)?;
     tokio::fs::write(path, bytes).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{infer_simulated_and_verified, OrchestratorError};
+    use serde_json::json;
+
+    #[test]
+    fn infer_simulated_and_verified_returns_false_false_when_result_json_missing() {
+        let flags =
+            infer_simulated_and_verified(None).expect("missing result_json should be allowed");
+        assert_eq!(flags, (false, false));
+    }
+
+    #[test]
+    fn infer_simulated_and_verified_parses_valid_result_json_flags() {
+        let value = json!({
+            "execution_results": [
+                { "simulated": true, "external_id": "x" }
+            ],
+            "verification_results": [
+                { "verified": true, "note": "ok" }
+            ],
+        });
+
+        let flags = infer_simulated_and_verified(Some(&value)).expect("valid stored result_json");
+        assert_eq!(flags, (true, true));
+    }
+
+    #[test]
+    fn infer_simulated_and_verified_rejects_invalid_result_json_schema() {
+        let value = json!({
+            "execution_results": [{ "external_id": "missing simulated" }],
+            "verification_results": [{ "verified": true }],
+        });
+
+        let error =
+            infer_simulated_and_verified(Some(&value)).expect_err("invalid schema should fail");
+        match error {
+            OrchestratorError::InvalidReleaseState(message) => {
+                assert!(
+                    message.contains("result_json schema"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("simulated"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
 }

@@ -1,4 +1,4 @@
-﻿import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
@@ -47,6 +47,8 @@ const screens: Screen[] = ["New Release", "Plan / Preview", "Execute", "Report /
 declare global {
   interface Window {
     __TAURI__?: { core?: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> } };
+    __RELEASE_PUBLISHER_DEBUG_ERROR_DETAILS__?: boolean;
+    __RELEASE_PUBLISHER_DEBUG_FULL_PATHS__?: boolean;
   }
 }
 
@@ -113,6 +115,39 @@ function normalizeAppError(error: unknown): UiAppError {
   return { code: "UNEXPECTED_UI_ERROR", message: error instanceof Error ? error.message : "Unknown UI error" };
 }
 
+function shouldLogBackendErrorDetails(): boolean {
+  return window.__RELEASE_PUBLISHER_DEBUG_ERROR_DETAILS__ === true;
+}
+
+function normalizeDisplayPath(path: string): string {
+  return path.split("\\").join("/");
+}
+
+function isLikelyAbsolutePath(path: string): boolean {
+  return /^[a-zA-Z]:\//.test(path) || path.startsWith("//") || path.startsWith("/");
+}
+
+function redactAbsolutePathForDisplay(path: string): string {
+  const normalized = normalizeDisplayPath(path);
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0) return "[local]/...";
+  const tail = segments.slice(-2).join("/");
+  return `[local]/.../${tail}`;
+}
+
+function shouldRevealFullDiagnosticPaths(env: AppEnv): boolean {
+  return env === "TEST" && window.__RELEASE_PUBLISHER_DEBUG_FULL_PATHS__ === true;
+}
+
+function formatDiagnosticPath(path: string | null | undefined, revealFullPaths: boolean): string {
+  if (!path) return "n/a";
+  const normalized = normalizeDisplayPath(path);
+  if (revealFullPaths || !isLikelyAbsolutePath(normalized)) {
+    return normalized;
+  }
+  return redactAbsolutePathForDisplay(normalized);
+}
+
 function formatSpecErrors(errors: SpecError[]): string {
   return errors
     .map((e) => `${e.code}${e.field ? ` (${e.field})` : ""}: ${e.message}`)
@@ -142,14 +177,17 @@ export default function App() {
   const [executing, setExecuting] = useState(false);
   const [refreshingHistory, setRefreshingHistory] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
+  const historyRequestSeqRef = useRef(0);
+  const reportRequestSeqRef = useRef(0);
 
   const selectedPlatforms = useMemo(() => (mockSelected ? ["mock"] : []), [mockSelected]);
+  const revealFullDiagnosticPaths = shouldRevealFullDiagnosticPaths(env);
 
   const setStructuredError = (error: unknown, fallbackStatus: string) => {
     const appError = normalizeAppError(error);
     setBackendError(appError);
     setStatusMessage(fallbackStatus);
-    if (appError.details !== undefined) {
+    if (appError.details !== undefined && shouldLogBackendErrorDetails()) {
       console.error("release-publisher.error.details", appError.details);
     }
   };
@@ -173,20 +211,29 @@ export default function App() {
   };
 
   const refreshHistory = async () => {
+    const requestSeq = historyRequestSeqRef.current + 1;
+    historyRequestSeqRef.current = requestSeq;
     setRefreshingHistory(true);
     try {
       const rows = await invokeCommand<HistoryRow[]>("list_history");
+      if (requestSeq !== historyRequestSeqRef.current) {
+        return rows;
+      }
       setHistoryRows(rows);
       if (!selectedHistoryReleaseId && rows[0]) {
         setSelectedHistoryReleaseId(rows[0].release_id);
       }
       return rows;
     } finally {
-      setRefreshingHistory(false);
+      if (requestSeq === historyRequestSeqRef.current) {
+        setRefreshingHistory(false);
+      }
     }
   };
 
   const loadReportFor = async (releaseId: string) => {
+    const requestSeq = reportRequestSeqRef.current + 1;
+    reportRequestSeqRef.current = requestSeq;
     if (!releaseId.trim()) {
       setReport(null);
       return null;
@@ -194,10 +241,15 @@ export default function App() {
     setLoadingReport(true);
     try {
       const result = await invokeCommand<ReleaseReport | null>("get_report", { releaseId });
+      if (requestSeq !== reportRequestSeqRef.current) {
+        return result;
+      }
       setReport(result);
       return result;
     } finally {
-      setLoadingReport(false);
+      if (requestSeq === reportRequestSeqRef.current) {
+        setLoadingReport(false);
+      }
     }
   };
 
@@ -447,7 +499,7 @@ export default function App() {
                   <div>artist: {loadedSpec.spec.artist}</div>
                   <div>description: {loadedSpec.spec.description || "(empty)"}</div>
                   <div>tags: {loadedSpec.spec.tags.join(", ") || "(none)"}</div>
-                  <div>spec_path: {loadedSpec.canonical_path ?? "n/a"}</div>
+                  <div>spec_path: {formatDiagnosticPath(loadedSpec.canonical_path, revealFullDiagnosticPaths)}</div>
                 </>
               ) : loadedSpec && !loadedSpec.ok ? (
                 <div>invalid spec: {formatSpecErrors(loadedSpec.errors)}</div>
@@ -472,7 +524,9 @@ export default function App() {
             </ul>
             <div className="helper-text" data-testid="planned-request-files">
               {planResult
-                ? Object.entries(planResult.planned_request_files).map(([platform, path]) => `${platform}: ${path}`).join(" | ")
+                ? Object.entries(planResult.planned_request_files)
+                    .map(([platform, path]) => `${platform}: ${formatDiagnosticPath(path, revealFullDiagnosticPaths)}`)
+                    .join(" | ")
                 : "planned_requests/*.json will appear here after planning"}
             </div>
           </div>
@@ -486,7 +540,12 @@ export default function App() {
             <div><strong>Release:</strong> {executeResult?.release_id ?? planResult?.release_id ?? "none"}</div>
             <div><strong>Status:</strong> {executeResult?.status ?? "not executed"}</div>
             <div><strong>Message:</strong> {executeResult?.message ?? "Execution has not run yet."}</div>
-            <div><strong>Report Path:</strong> {executeResult?.report_path ?? "not generated"}</div>
+            <div>
+              <strong>Report Path:</strong>{" "}
+              {executeResult?.report_path
+                ? formatDiagnosticPath(executeResult.report_path, revealFullDiagnosticPaths)
+                : "not generated"}
+            </div>
           </div>
           <div>
             <h3>Execution Notes</h3>
@@ -564,3 +623,4 @@ export default function App() {
     </main>
   );
 }
+

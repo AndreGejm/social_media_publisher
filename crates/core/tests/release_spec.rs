@@ -80,3 +80,63 @@ fn fuzz_like_malformed_yaml_inputs_do_not_panic() {
         }
     }
 }
+
+#[test]
+fn enforces_tag_policy_with_stable_structured_errors() {
+    let raw = r#"
+title: "Tag Policy Track"
+artist: "Example Artist"
+tags:
+  - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - "tag1"
+  - "tag2"
+  - "tag3"
+  - "tag4"
+  - "tag5"
+  - "tag6"
+  - "tag7"
+  - "tag8"
+  - "tag9"
+  - "tag10"
+  - "tag11"
+"#;
+
+    let errors = parse_release_spec_yaml(raw).expect_err("tag policy violations should fail");
+
+    assert!(errors.iter().any(|e| {
+        e.code == SpecErrorCode::TagTooLong
+            && e.field.as_deref() == Some("tags")
+            && e.message == "tag exceeds 32 chars: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }));
+    assert!(errors.iter().any(|e| {
+        e.code == SpecErrorCode::TooManyTags
+            && e.field.as_deref() == Some("tags")
+            && e.message == "no more than 10 tags are allowed"
+    }));
+}
+
+#[test]
+fn accepts_tag_policy_boundaries() {
+    let raw = r#"
+title: "Boundary Tags"
+artist: "Example Artist"
+tags:
+  - "tag1"
+  - "tag2"
+  - "tag3"
+  - "tag4"
+  - "tag5"
+  - "tag6"
+  - "tag7"
+  - "tag8"
+  - "tag9"
+  - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+
+    let spec = parse_release_spec_yaml(raw).expect("boundary tag policy should pass");
+    assert_eq!(spec.tags.len(), 10);
+    assert!(spec
+        .tags
+        .iter()
+        .any(|tag| tag == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+}

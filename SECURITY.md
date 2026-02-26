@@ -22,6 +22,20 @@ This project is currently in pre-connector mode (mock execution only). These rul
 ### Current Redaction
 
 - `crates/core/src/transport.rs` redacts sensitive request headers before logging.
+- `apps/desktop/src-tauri/src/commands.rs` redacts sensitive keys in serialized Tauri command error `details`.
+- `apps/desktop/src/App.tsx` keeps UI-side error detail redaction as defense-in-depth (and console detail logging is debug-opt-in only).
+
+### Current SecretStore Contract (Pre-Connector Phase)
+
+- `crates/core/src/secrets.rs` provides an additive `SecretStore` trait and `InMemorySecretStore` backend for tests/local wiring only.
+- `SecretValue` uses redacted `Debug` output (`SecretValue(<redacted>)`) and must not be logged via `expose()`.
+- No production credentials are accepted/stored in this phase.
+- No OS keychain / secure store integration is enabled yet.
+- Secrets must not cross the Tauri IPC error boundary in plaintext.
+- Contract proof tests:
+  - `apps/desktop/src-tauri/src/commands.rs` (`command_error_boundary_never_serializes_secret_store_values`)
+  - `apps/desktop/src-tauri/src/commands.rs` (`command_error_boundary_serialization_keeps_details_redacted`)
+  - `crates/core/src/secrets.rs` (`secret_value_debug_is_redacted`)
 
 ### Future Requirement (Before Real Connectors)
 
@@ -73,4 +87,3 @@ Current state:
 - Use stable error codes for DB/core/transport/Tauri boundaries.
 - Include retry attempt counts, but never token contents.
 - For `401`/token-expired flows, log provider error class only (e.g., `TOKEN_EXPIRED`).
-

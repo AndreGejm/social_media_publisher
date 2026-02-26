@@ -29,6 +29,12 @@ impl From<&HttpMethod> for reqwest::Method {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportLogCorrelation {
+    pub release_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransportRequest {
     pub method: HttpMethod,
     pub url: String,
@@ -36,6 +42,7 @@ pub struct TransportRequest {
     pub body: Vec<u8>,
     pub timeout_ms: Option<u64>,
     pub operation: Option<String>,
+    pub log_correlation: Option<TransportLogCorrelation>,
 }
 
 impl TransportRequest {
@@ -47,7 +54,20 @@ impl TransportRequest {
             body: Vec::new(),
             timeout_ms: None,
             operation: None,
+            log_correlation: None,
         }
+    }
+
+    pub fn with_log_correlation(
+        mut self,
+        release_id: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> Self {
+        self.log_correlation = Some(TransportLogCorrelation {
+            release_id: release_id.into(),
+            run_id: run_id.into(),
+        });
+        self
     }
 
     pub fn with_json_body(mut self, json: &serde_json::Value) -> Result<Self, TransportError> {
@@ -194,9 +214,17 @@ impl Transport for RealTransport {
             req = req.body(request.body.clone());
         }
 
+        let correlation = request.log_correlation.as_ref();
+
         tracing::debug!(
             target: "transport",
             operation = request.operation.as_deref().unwrap_or("unknown"),
+            release_id = correlation
+                .map(|value| value.release_id.as_str())
+                .unwrap_or("n/a"),
+            run_id = correlation
+                .map(|value| value.run_id.as_str())
+                .unwrap_or("n/a"),
             method = ?request.method,
             url = %request.url,
             headers = ?redact_headers(&request.headers),
@@ -342,5 +370,28 @@ mod tests {
             .json::<serde_json::Value>()
             .expect_err("decode should fail");
         assert_eq!(err.code, TransportErrorCode::ResponseDecodeFailed);
+    }
+
+    #[test]
+    fn transport_request_correlation_context_round_trips_and_clones() {
+        let request = TransportRequest::new(HttpMethod::Post, "https://example.test/upload")
+            .with_log_correlation("release-123", "run-456");
+        let cloned = request.clone();
+
+        let wire = serde_json::to_value(&request).expect("serialize TransportRequest");
+        assert_eq!(wire["log_correlation"]["release_id"], "release-123");
+        assert_eq!(wire["log_correlation"]["run_id"], "run-456");
+
+        let decoded: TransportRequest =
+            serde_json::from_value(wire).expect("deserialize TransportRequest");
+        let correlation = decoded
+            .log_correlation
+            .expect("correlation should deserialize");
+        assert_eq!(correlation.release_id, "release-123");
+        assert_eq!(correlation.run_id, "run-456");
+
+        let cloned_correlation = cloned.log_correlation.expect("cloned correlation");
+        assert_eq!(cloned_correlation.release_id, "release-123");
+        assert_eq!(cloned_correlation.run_id, "run-456");
     }
 }
