@@ -9,15 +9,18 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 reqwest.workspace = true
 release-publisher-db = { path = "../db" }
 uuid.workspace = true
+ebur128 = "0.1"
+symphonia = { version = "0.5", default-features = false, features = ["all"] }
+blake3 = "1"
 
 [dev-dependencies]
 proptest = "1.6"
 release-publisher-mock-connector = { path = "../connectors/mock" }
 tempfile = "3"
+sqlx.workspace = true

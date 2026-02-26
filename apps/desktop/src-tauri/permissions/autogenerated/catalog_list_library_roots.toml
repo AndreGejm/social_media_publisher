@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-catalog-list-library-roots"
+description = "Enables the catalog_list_library_roots command without any pre-configured scope."
+commands.allow = ["catalog_list_library_roots"]
+
+[[permission]]
+identifier = "deny-catalog-list-library-roots"
+description = "Denies the catalog_list_library_roots command without any pre-configured scope."
+commands.deny = ["catalog_list_library_roots"]

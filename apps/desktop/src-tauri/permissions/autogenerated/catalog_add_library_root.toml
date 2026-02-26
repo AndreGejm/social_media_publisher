@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-catalog-add-library-root"
+description = "Enables the catalog_add_library_root command without any pre-configured scope."
+commands.allow = ["catalog_add_library_root"]
+
+[[permission]]
+identifier = "deny-catalog-add-library-root"
+description = "Denies the catalog_add_library_root command without any pre-configured scope."
+commands.deny = ["catalog_add_library_root"]

@@ -4,7 +4,7 @@
   "description": "Default desktop capabilities for local development.",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "default",
+    "dialog:default"
   ]
 }
-

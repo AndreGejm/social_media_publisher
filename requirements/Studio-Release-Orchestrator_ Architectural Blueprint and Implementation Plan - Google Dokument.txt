@@ -1,0 +1,250 @@
+​ tudio-Release-Orchestrator:​
+S
+​Architectural Blueprint and​
+ ​Implementation Plan​
+T
+​ he modernization of the Studio-Release-Orchestrator involves transitioning from an isolated,​
+​mock-driven prototype into a robust, secure, and offline-first desktop Music Asset​
+ ​Management (MAM) system. The application operates as a standalone Tauri (Rust/React)​
+  ​desktop executable.​
+
+W
+​ hile the system does not require industrial SIL-2 certification, it heavily prioritizes security,​
+​strong error handling, state determinism, and execution correctness. This document provides a​
+ ​Gap Analysis against the Rauversion feature set, a Requirement Specification (SRS), and a​
+  ​phased Implementation Plan.​
+
+
+1​ . GAP Analysis: The Current "Runner" Versus The​
+ ​Target State​
+​ comparison between the existing Rust "Runner" and the feature set of the Rauversion​
+A
+​ecosystem reveals several missing architectural components that must be developed to​
+ ​transition to the Studio Dashboard target state.​
+ ​●​ A   ​ udio Processing & "Circuitry":​​Rauversion explicitly​​supports audio formatting and​
+         ​waveform analysis via background dependencies. The current Runner lacks any loudness​
+          ​(LUFS) or peak-generation logic. For an offline desktop application, forcing users to install​
+           ​external CLI tools (like FFmpeg or audiowaveform) creates friction. We must bridge this​
+            ​gap by utilizing native Rust audio decoding and analysis circuitry to compute waveform​
+             ​peaks and EBU R128 loudness metrics directly within the application's memory space.​​1​
+  ​●​ ​Metadata Handling:​​Rauversion allows uploads of tracks/albums​​with full metadata (titles,​
+              ​artists, album art, tags). The current Runner utilizes a basic release_id hash and limited​
+               ​metadata. Missing fields (e.g., track-level info, loudness values, peak arrays) must be​
+                ​introduced into the core state, enforcing strict invariants (e.g., non-empty titles).​
+   ​●​ ​Player/Quality Control (QC):​​Rauversion includes an​​embeddable audio player with visual​
+                 ​previews. The Runner has no playback component. To facilitate manual QC, the Studio​
+                  ​Dashboard needs a React-based UI player (e.g., via Wavesurfer.js or the Web Audio API)​
+                   ​that consumes pre-calculated peak arrays for visual seeking and listen-back capabilities​
+                    ​before authorization.​
+    ​●​ ​Storage/Transport:​​Rauversion handles multi-upload​​providers (Local/AWS) via​
+                     ​server-side connectors. The Runner strictly uses SQLite state and a MockTransport. The​
+                      ​new system must implement entirely new Rust-based API handshaking logic (OAuth​
+                       ​2.0/2.1 flows, chunked uploads) for YouTube, SoundCloud, Bandcamp, and X (Twitter).​
+     ​ rror Handling & Idempotency:​​Neither the current Runner nor Rauversion natively​
+ ​●​ E
+     ​define a strict pipeline for API error classification or stateful idempotency. We must design​
+      ​explicit connector logic to differentiate between retryable transient failures (network​
+       ​timeouts) and terminal faults (bad credentials), using the BLAKE3 release_id as the primary​
+        ​idempotency key.​
+
+
+​2. Requirement Specification (SRS)​
+​2.1 Constraints: Environments and Gatekeeping​
+​ o ensure secure execution and prevent accidental broadcasts, the offline desktop application​
+T
+​enforces strict operational modes and manual gatekeeping.​
+ ​●​ E  ​ nvironments:​​The orchestrator operates in three isolated​​run modes, controlled via​
+        ​configuration flags or environment variables:​
+             ​○​ ​TEST:​​Local mock-only execution. All real API transport​​connections are physically​
+                    ​disabled.​
+              ​○​ ​STAGING:​​Sandbox environment connecting to real APIs​​but enforcing "dry-run" or​
+                     ​strict private-visibility flags.​
+               ​○​ ​PRODUCTION:​​Live environment capable of public API​​mutation.​
+  ​●​ ​Safety Gates:​​The pipeline must enforce a manual approval​​step in the React UI before​
+         ​transitioning a payload from the Execute phase to public availability in STAGING or​
+          ​PRODUCTION.​
+   ​●​ ​Data Integrity:​​All pipeline state (stages, remote​​platform identifiers, API responses, and​
+           ​errors) is persisted in a secure, local SQLite database. Schema validations must strictly​
+            ​enforce non-null metadata fields and correct units of measurement.​
+
+​2.2 Minimal Data Model: The Unified Release Entity​
+T
+​ he canonical data structure for the middleware is the Release entity. It encapsulates all media,​
+​derived analysis, and metadata required for multi-platform distribution.​
+
+
+​Field​                            ​Rust Type​                        ​Description & Invariants​
+
+
+
+​id​                               ​String​                           ​ eterministic BLAKE3 hash of​
+                                                                      D
+                                                                      ​(media files + metadata). Used​
+                                                                       ​as the unique idempotency key.​
+
+
+
+​title​                            ​String​                           ​Descriptive release title.​
+                                         ​Invariant: Cannot be empty.​
+
+
+
+​artist​              ​String​           ​ rimary artist. Invariant: Cannot​
+                                         P
+                                         ​be empty.​
+
+
+
+​album​               ​String​           ​ ssociated album name​
+                                         A
+                                         ​(Optional).​
+
+
+
+​tracks​              ​Vec<Track>​       ​ ist of tracks associated with​
+                                         L
+                                         ​the release.​
+
+
+
+​tags​                ​Vec<String>​      ​Array of genres or release tags.​
+
+
+
+​cover_art​           ​Option<String>​   ​ ocal path or URL to the​
+                                         L
+                                         ​artwork asset.​
+
+
+
+​The Track Entity:​
+
+
+​Field​               ​Rust Type​        ​Description & Invariants​
+
+
+
+​file_path​           ​String​           ​ ocal filesystem path to the​
+                                         L
+                                         ​uncompressed audio file.​
+
+
+
+​duration_ms​         ​u32​              ​ laytime in milliseconds.​
+                                         P
+                                         ​Invariant: Must be > 0.​
+
+
+
+​peak_data​           ​Vec<f32>​         ​Downsampled waveform peaks​
+                                                                                  i​n dBFS. Invariant: 0 dBFS = full​
+                                                                                   ​scale; all values <= 0. Vector​
+                                                                                    ​length must match the audio​
+                                                                                     ​length/step ratio.​
+
+
+
+​loudness_lufs​                           ​f32​                                   I​ntegrated loudness in LUFS​
+                                                                                   ​(ITU-R BS.1770). Invariant: Must​
+                                                                                    ​be <= 0.​
+
+
+
+
+​2.3 API Surface: The Publisher Trait​
+​ ll external integrations are abstracted behind a unified Publisher trait. This ensures the​
+A
+​execution loop can process targets agnostically while handling errors systematically.​
+
+
+
+      ​Rust​
+
+
+
+​pub​​trait​​Publisher​​{​
+      ​/// Publish the given Release, returning a unique​​ID or URL on success.​
+      ​fn​​publish​​(&​​self​​, release: &Release) ->​​Result​​<PublishResult,​​PublishError>;​
+​}​
+
+​pub​​struct​​PublishResult​​{​
+      ​pub​​platform_id:​​String​​,​
+      ​pub​​url:​​String​​,​
+​}​
+
+​pub​​enum​​PublishError​​{​
+      ​/// Retryable faults: network timeouts, HTTP 429​​Rate Limits, HTTP 5xx.​
+      ​Transient(​​String​​),​
+      ​/// Fatal faults: invalid OAuth tokens, bad request​​payloads (HTTP 400), hash collisions.​
+      ​Terminal(​​String​​),​
+​}​
+
+
+​3. Implementation Plan​
+​Phase 1: Audio Analysis & Data Model​
+​●​ N  ​ ative Processing:​​Instead of relying on external​​binaries, integrate native Rust libraries​
+       ​(e.g., symphonia for audio decoding) to extract raw PCM samples.​
+ ​●​ ​Signal Analysis:​​Pass the decoded samples into the​​ebur128 crate to calculate ITU-R​
+        ​BS.1770 compliant Integrated LUFS.​​1​ ​Simultaneously,​​decimate the samples to extract the​
+         ​maximum amplitude per window to generate the peak_data array (dBFS).​
+  ​●​ ​Data Integrity:​​Update the existing Rust Release entity​​to encompass the new Track​
+          ​struct and metadata fields. Write unit tests asserting that changes to ID3 tags or audio​
+           ​bytes mathematically alter the BLAKE3 release_id hash.​
+
+​Phase 2: Player and QC Integration​
+​​ U
+●     ​ I Implementation:​​Develop an audio player component​​within the Tauri React frontend.​
+​●​ ​Waveform Rendering:​​Utilize an embeddable waveform​​library (e.g., Wavesurfer.js) that​
+      ​directly consumes the precomputed peak_data array via Tauri IPC, enabling fluid visual​
+       ​seeking without freezing the UI thread.​
+ ​●​ ​Gatekeeping:​​Implement the Quality Control (QC) block​​in the pipeline state machine.​
+        ​The user must manually listen to the track and explicitly click "Approve" before the SQLite​
+         ​database transitions the state to authorize external API publication.​
+
+​Phase 3: API Connector Development​
+​●​ M ​ ock Transport:​​Begin by implementing the Publisher​​trait using a MockTransport​
+      ​connector to simulate responses and latencies for integration testing.​
+ ​●​ ​Real Connectors:​​Develop the specific handlers for​​the target platforms:​
+       ​○​ ​YouTube:​​Implement the YouTube Data API v3 connector.​​Because video files are​
+              ​large, this connector must use the resumable upload protocol (chunked PUT requests)​
+               ​to handle network drops.​
+        ​○​ ​SoundCloud:​​Implement the OAuth 2.1 PKCE authorization​​flow mandated by​
+                ​SoundCloud for desktop applications. Ensure the connector natively handles​
+                 ​string-based Uniform Resource Names (URNs), as legacy numeric IDs are​
+                  ​deprecated.​​2​
+         ​○​ ​X (Twitter):​​Implement the X API v2 media upload endpoints​​(POST /2/media/upload),​
+                   ​ensuring proper multipart/form-data encoding and OAuth 2.0 scoping.​​3​
+             ​ andcamp:​​Because Bandcamp restricts public upload​​APIs​​4​,​ this connector will​
+         ​○​ B
+             ​utilize headless automation or HTTP Archive (HAR) session parsing techniques to​
+              ​simulate an authenticated browser session.​
+​●​ ​Idempotency & Database State:​​Utilize the release_id​​as the absolute idempotency key.​
+     ​Before uploading, query the target platform. If the platform successfully returns a valid​
+      ​remote ID, record the (release_id, platform) -> platform_id mapping in SQLite. If a​
+       ​PublishError::Transient occurs, the system references this table upon retry to guarantee no​
+        ​duplicate files are published.​
+​Phase 4: Testing & Deployment​
+​●​ S  ​ imulated Fault Injection:​​Extend the MockTransport​​to purposefully throw​
+       ​PublishError::Transient (e.g., dropping the connection mid-upload) and​
+        ​PublishError::Terminal (e.g., simulating revoked OAuth tokens) to verify that the Rust​
+         ​execution loop properly applies exponential backoff or halts.​
+ ​●​ ​End-to-End Scaffolding:​​Use Playwright to drive the​​Tauri React interface. Automate a full​
+          ​Plan -> Execute -> Verify pipeline using dummy audio, ensuring the QC approval gate​
+           ​successfully pauses the workflow.​
+  ​●​ ​Idempotency Verification:​​Programmatically force the​​pipeline to rerun against an​
+            ​already processed release_id. Assert via database constraints that the system detects the​
+             ​existing platform_id and safely skips the external publish() invocation.​
+
+​Citerade verk​
+
+  ​ .​ ​ebur128 - Rust - Docs.rs, hämtad februari 26, 2026,​​https://docs.rs/ebur128​
+  1
+  ​2.​ ​Action required: Upcoming Update to SoundCloud API id fields, hämtad februari​
+     ​26, 2026,​​https://developers.soundcloud.com/blog/urn-num-to-string/​
+  ​3.​ ​Upload media - twitterapi.io - Twitter data, 96% cheaper. No auth, no limits, just​
+        ​ PI., hämtad februari 26, 2026,​
+        A
+        ​https://docs.twitterapi.io/api-reference/endpoint/upload_media_v2​
+  ​4.​ ​No-Code Bandcamp API Data Scraper | Legally Download to CSV, hämtad​
+         ​februari 26, 2026,​​https://stevesie.com/apps/bandcamp-api​
+

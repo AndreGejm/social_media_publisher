@@ -1,8 +1,12 @@
+#![cfg_attr(
+    not(test),
+    deny(clippy::expect_used, clippy::panic, clippy::unwrap_used)
+)]
+
 use crate::spec::ReleaseSpec;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
-const RELEASE_ID_HASH_DOMAIN_V1: &str = "release-publisher.release-id.v1";
+const RELEASE_ID_HASH_DOMAIN_V2: &str = "release-publisher.release-id.v2.blake3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdempotencyKeys {
@@ -11,19 +15,18 @@ pub struct IdempotencyKeys {
     pub release_id: String,
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
+pub fn blake3_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
 }
 
 pub fn try_spec_hash(spec: &ReleaseSpec) -> Result<String, serde_json::Error> {
     // Use compact JSON (not pretty-printed output) to reduce serializer-format churn in hashes.
     let normalized = spec.normalized_json_compact()?;
-    Ok(sha256_hex(normalized.as_bytes()))
+    Ok(blake3_hex(normalized.as_bytes()))
 }
 
 pub fn media_fingerprint_from_bytes(bytes: &[u8]) -> String {
-    sha256_hex(bytes)
+    blake3_hex(bytes)
 }
 
 pub async fn media_fingerprint_from_file(path: impl AsRef<Path>) -> anyhow::Result<String> {
@@ -36,15 +39,7 @@ pub fn try_compute_release_id(
     media_fingerprint: &str,
 ) -> Result<String, serde_json::Error> {
     let spec_hash = try_spec_hash(spec)?;
-    let mut material = String::with_capacity(
-        RELEASE_ID_HASH_DOMAIN_V1.len() + spec_hash.len() + media_fingerprint.len() + 2,
-    );
-    material.push_str(RELEASE_ID_HASH_DOMAIN_V1);
-    material.push('\n');
-    material.push_str(&spec_hash);
-    material.push(':');
-    material.push_str(media_fingerprint);
-    Ok(sha256_hex(material.as_bytes()))
+    Ok(compute_release_id_from_parts(&spec_hash, media_fingerprint))
 }
 
 pub fn try_build_idempotency_keys(
@@ -53,10 +48,22 @@ pub fn try_build_idempotency_keys(
 ) -> Result<IdempotencyKeys, serde_json::Error> {
     let media_fingerprint = media_fingerprint_from_bytes(media_bytes);
     let spec_hash = try_spec_hash(spec)?;
-    let release_id = try_compute_release_id(spec, &media_fingerprint)?;
+    let release_id = compute_release_id_from_parts(&spec_hash, &media_fingerprint);
     Ok(IdempotencyKeys {
         spec_hash,
         media_fingerprint,
         release_id,
     })
+}
+
+fn compute_release_id_from_parts(spec_hash: &str, media_fingerprint: &str) -> String {
+    let mut material = String::with_capacity(
+        RELEASE_ID_HASH_DOMAIN_V2.len() + spec_hash.len() + media_fingerprint.len() + 2,
+    );
+    material.push_str(RELEASE_ID_HASH_DOMAIN_V2);
+    material.push('\n');
+    material.push_str(spec_hash);
+    material.push(':');
+    material.push_str(media_fingerprint);
+    blake3_hex(material.as_bytes())
 }

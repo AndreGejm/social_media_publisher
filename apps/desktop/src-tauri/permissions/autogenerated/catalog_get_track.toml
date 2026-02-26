@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-catalog-get-track"
+description = "Enables the catalog_get_track command without any pre-configured scope."
+commands.allow = ["catalog_get_track"]
+
+[[permission]]
+identifier = "deny-catalog-get-track"
+description = "Denies the catalog_get_track command without any pre-configured scope."
+commands.deny = ["catalog_get_track"]

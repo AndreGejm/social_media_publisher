@@ -1,9 +1,18 @@
 use release_publisher_db::{
-    Db, DbConfig, DbErrorCode, NewAuditLogEntry, NewReleaseRecord, PlatformActionStatus,
-    ReleaseState, RunLockLeaseRecord, UpsertPlatformAction,
+    retry_busy_locked_with_sleep, CatalogListTracksQuery, CatalogTrackTagAssignment, Db,
+    DbBusyRetryPolicy, DbConfig, DbErrorCode, IngestJobStatus, NewAuditLogEntry, NewIngestEvent,
+    NewIngestJob, NewReleaseRecord, PlatformActionStatus, ReleaseState, ReleaseTrackAnalysisRecord,
+    RunLockLeaseRecord, UpdateCatalogTrackMetadata, UpdateIngestJob, UpsertCatalogTrackImport,
+    UpsertLibraryRoot, UpsertPlatformAction, UpsertReleaseTrackAnalysis,
 };
 use serde_json::json;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+use std::time::Duration;
 use tempfile::tempdir;
+use tokio::sync::oneshot;
 
 fn sqlite_file_url(db_path: &std::path::Path) -> String {
     let mut normalized = db_path.to_string_lossy().replace('\\', "/");
@@ -45,6 +54,14 @@ async fn new_file_backed_pair() -> (Db, Db) {
     (a, b)
 }
 
+async fn set_sqlite_busy_timeout_ms(db: &Db, timeout_ms: i64) {
+    assert!(timeout_ms >= 0, "busy_timeout must be non-negative");
+    sqlx::query(&format!("PRAGMA busy_timeout = {timeout_ms};"))
+        .execute(db.pool())
+        .await
+        .expect("set sqlite busy_timeout");
+}
+
 fn sample_release(release_id: &str) -> NewReleaseRecord {
     NewReleaseRecord {
         release_id: release_id.to_string(),
@@ -53,6 +70,32 @@ fn sample_release(release_id: &str) -> NewReleaseRecord {
         spec_hash: "a".repeat(64),
         media_fingerprint: "b".repeat(64),
         normalized_spec_json: "{\"title\":\"Test Track\"}".to_string(),
+    }
+}
+
+fn sample_catalog_track_import(track_id_suffix: &str, file_path: &str) -> UpsertCatalogTrackImport {
+    UpsertCatalogTrackImport {
+        track_id: format!("{track_id_suffix:0<64}")
+            .chars()
+            .map(|c| if c.is_ascii_hexdigit() { c } else { 'a' })
+            .collect(),
+        media_asset_id: "b".repeat(64),
+        artist_id: "a".repeat(64),
+        album_id: Some("c".repeat(64)),
+        file_path: file_path.to_string(),
+        media_fingerprint: "d".repeat(64),
+        title: "Imported Track".to_string(),
+        artist_name: "Example Artist".to_string(),
+        album_title: Some("Singles".to_string()),
+        duration_ms: 2_500,
+        peak_data: vec![-12.0, -9.0, -6.0, -3.0],
+        loudness_lufs: -14.4,
+        true_peak_dbfs: Some(-1.2),
+        sample_rate_hz: 44_100,
+        channels: 2,
+        visibility_policy: "LOCAL".to_string(),
+        license_policy: "ALL_RIGHTS_RESERVED".to_string(),
+        downloadable: false,
     }
 }
 
@@ -402,4 +445,580 @@ async fn transaction_rolls_back_when_second_write_fails() {
 
     let release = db.get_release("r7").await.expect("query after rollback");
     assert!(release.is_none(), "first write must be rolled back");
+}
+
+#[tokio::test]
+async fn release_track_analysis_round_trips_and_updates() {
+    let db = new_test_db().await;
+    db.upsert_release(&sample_release("r8")).await.unwrap();
+
+    let inserted = db
+        .upsert_release_track_analysis(&UpsertReleaseTrackAnalysis {
+            release_id: "r8".to_string(),
+            file_path: "C:/audio/test.wav".to_string(),
+            media_fingerprint: "f".repeat(64),
+            duration_ms: 1_250,
+            peak_data: vec![-12.0, -6.0, 0.0],
+            loudness_lufs: -14.1,
+            sample_rate_hz: 48_000,
+            channels: 2,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(inserted.release_id, "r8");
+    assert_eq!(inserted.duration_ms, 1_250);
+    assert_eq!(inserted.peak_data, vec![-12.0, -6.0, 0.0]);
+    assert_eq!(inserted.sample_rate_hz, 48_000);
+    assert_eq!(inserted.channels, 2);
+
+    let updated = db
+        .upsert_release_track_analysis(&UpsertReleaseTrackAnalysis {
+            release_id: "r8".to_string(),
+            file_path: "C:/audio/test-renamed.wav".to_string(),
+            media_fingerprint: "e".repeat(64),
+            duration_ms: 1_300,
+            peak_data: vec![-9.0, -3.0, 0.0],
+            loudness_lufs: -13.5,
+            sample_rate_hz: 44_100,
+            channels: 1,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        updated,
+        ReleaseTrackAnalysisRecord {
+            release_id: "r8".to_string(),
+            file_path: "C:/audio/test-renamed.wav".to_string(),
+            media_fingerprint: "e".repeat(64),
+            duration_ms: 1_300,
+            peak_data: vec![-9.0, -3.0, 0.0],
+            loudness_lufs: -13.5,
+            sample_rate_hz: 44_100,
+            channels: 1,
+            created_at: updated.created_at.clone(),
+            updated_at: updated.updated_at.clone(),
+        }
+    );
+
+    let fetched = db.get_release_track_analysis("r8").await.unwrap();
+    assert_eq!(fetched, Some(updated));
+}
+
+#[tokio::test]
+async fn release_track_analysis_requires_existing_release_foreign_key() {
+    let db = new_test_db().await;
+
+    let err = db
+        .upsert_release_track_analysis(&UpsertReleaseTrackAnalysis {
+            release_id: "missing".to_string(),
+            file_path: "C:/audio/test.wav".to_string(),
+            media_fingerprint: "f".repeat(64),
+            duration_ms: 1_000,
+            peak_data: vec![-12.0],
+            loudness_lufs: -14.0,
+            sample_rate_hz: 48_000,
+            channels: 1,
+        })
+        .await
+        .expect_err("foreign key should reject orphan analysis");
+
+    assert_eq!(err.code, DbErrorCode::ConstraintViolation);
+}
+
+#[tokio::test]
+async fn file_backed_db_uses_wal_journal_mode() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("wal-check.sqlite");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&db_path)
+        .expect("create wal check db");
+    let url = sqlite_file_url(&db_path);
+
+    let mut cfg = DbConfig::sqlite(url);
+    cfg.max_connections = 1;
+    let db = Db::connect(&cfg).await.expect("db connect");
+
+    let mode: String = sqlx::query_scalar("PRAGMA journal_mode;")
+        .fetch_one(db.pool())
+        .await
+        .expect("read journal_mode");
+    assert_eq!(mode.to_ascii_lowercase(), "wal");
+}
+
+#[tokio::test]
+async fn dropping_commit_future_before_poll_rolls_back_cleanly_on_wal_db() {
+    let (writer, reader) = new_file_backed_pair().await;
+
+    let mut tx = writer.begin_tx().await.expect("begin tx");
+    tx.upsert_release(&sample_release("r9-phase2-drop-future"))
+        .await
+        .expect("write inside tx");
+
+    // Simulate an application crash right before commit by constructing the commit future
+    // and dropping it without polling.
+    let commit_future = tx.commit();
+    drop(commit_future);
+    tokio::task::yield_now().await;
+
+    let observed = reader
+        .get_release("r9-phase2-drop-future")
+        .await
+        .expect("query after dropped commit future");
+    assert!(
+        observed.is_none(),
+        "uncommitted transaction must not be persisted after dropped commit future"
+    );
+
+    let inserted = writer
+        .upsert_release(&sample_release("r9-phase2-drop-future"))
+        .await
+        .expect("db should remain writable after implicit rollback");
+    assert_eq!(inserted.release_id, "r9-phase2-drop-future");
+}
+
+#[tokio::test]
+async fn busy_locked_retry_backoff_recovers_after_lock_release() {
+    let (db_lock_holder, db_writer) = new_file_backed_pair().await;
+    set_sqlite_busy_timeout_ms(&db_lock_holder, 1).await;
+    set_sqlite_busy_timeout_ms(&db_writer, 1).await;
+
+    db_lock_holder
+        .upsert_release(&sample_release("r10-phase2-busy"))
+        .await
+        .expect("seed release");
+
+    let (lock_held_tx, lock_held_rx) = oneshot::channel::<()>();
+    let (release_lock_tx, release_lock_rx) = oneshot::channel::<()>();
+    let holder_db = db_lock_holder.clone();
+
+    let holder_task = tokio::spawn(async move {
+        let mut tx = holder_db.begin_tx().await.expect("holder begin tx");
+        let transitioned = tx
+            .transition_release_state(
+                "r10-phase2-busy",
+                ReleaseState::Validated,
+                ReleaseState::Planned,
+            )
+            .await
+            .expect("holder state transition");
+        assert!(transitioned, "holder should transition to PLANNED");
+
+        let _ = lock_held_tx.send(());
+        let _ = release_lock_rx.await;
+
+        tx.commit().await.expect("holder commit");
+    });
+
+    lock_held_rx.await.expect("wait for held write lock");
+
+    let releaser_task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let _ = release_lock_tx.send(());
+    });
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let sleep_calls = Arc::new(AtomicUsize::new(0));
+    let retry_policy = DbBusyRetryPolicy {
+        max_attempts: 6,
+        base_delay_ms: 5,
+        max_delay_ms: 20,
+        jitter_ratio_pct: 0,
+        jitter_seed: 0,
+    };
+
+    let analysis_input = UpsertReleaseTrackAnalysis {
+        release_id: "r10-phase2-busy".to_string(),
+        file_path: "C:/audio/phase2-lock.wav".to_string(),
+        media_fingerprint: "a".repeat(64),
+        duration_ms: 1_000,
+        peak_data: vec![-12.0, -6.0, 0.0],
+        loudness_lufs: -14.0,
+        sample_rate_hz: 48_000,
+        channels: 2,
+    };
+
+    let attempts_for_op = Arc::clone(&attempts);
+    let sleep_calls_for_hook = Arc::clone(&sleep_calls);
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        retry_busy_locked_with_sleep(
+            &retry_policy,
+            || {
+                attempts_for_op.fetch_add(1, Ordering::SeqCst);
+                db_writer.upsert_release_track_analysis(&analysis_input)
+            },
+            |delay_ms| {
+                sleep_calls_for_hook.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            },
+        ),
+    )
+    .await
+    .expect("retry loop timeout")
+    .expect("busy retry should eventually succeed");
+
+    assert_eq!(result.release_id, "r10-phase2-busy");
+    assert!(
+        attempts.load(Ordering::SeqCst) >= 2,
+        "expected at least one BusyLocked retry attempt"
+    );
+    assert!(
+        sleep_calls.load(Ordering::SeqCst) >= 1,
+        "expected retry backoff hook to be invoked"
+    );
+
+    releaser_task.await.expect("releaser join");
+    holder_task.await.expect("holder join");
+
+    let stored_release = db_writer
+        .get_release("r10-phase2-busy")
+        .await
+        .expect("fetch release after contention")
+        .expect("release row should exist");
+    assert_eq!(stored_release.state, ReleaseState::Planned);
+
+    let stored_analysis = db_writer
+        .get_release_track_analysis("r10-phase2-busy")
+        .await
+        .expect("fetch track analysis after contention")
+        .expect("track analysis should exist");
+    assert_eq!(stored_analysis.file_path, "C:/audio/phase2-lock.wav");
+}
+
+#[tokio::test]
+async fn catalog_track_import_round_trips_and_dedupes_by_track_id() {
+    let db = new_test_db().await;
+
+    let mut first = sample_catalog_track_import("ab", "C:/music/example-a.wav");
+    first.track_id = "a".repeat(64);
+    first.media_asset_id = "b".repeat(64);
+    first.artist_id = "c".repeat(64);
+    first.album_id = Some("d".repeat(64));
+    first.media_fingerprint = "e".repeat(64);
+
+    let inserted = db
+        .upsert_catalog_track_import(&first)
+        .await
+        .expect("insert catalog track");
+    assert_eq!(inserted.track_id, first.track_id);
+    assert_eq!(inserted.file_path, first.file_path);
+    assert_eq!(inserted.artist_name, "Example Artist");
+    assert_eq!(inserted.album_title.as_deref(), Some("Singles"));
+
+    let list = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: None,
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list catalog tracks");
+    assert_eq!(list.total, 1);
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].track_id, first.track_id);
+
+    let mut updated = first.clone();
+    updated.file_path = "C:/music/example-a-renamed.wav".to_string();
+    updated.title = "Imported Track (Renamed)".to_string();
+    updated.peak_data = vec![-8.0, -4.0, -2.0];
+    updated.true_peak_dbfs = Some(-0.5);
+
+    let upserted = db
+        .upsert_catalog_track_import(&updated)
+        .await
+        .expect("upsert catalog track");
+    assert_eq!(upserted.track_id, first.track_id);
+    assert_eq!(upserted.file_path, updated.file_path);
+    assert_eq!(upserted.title, updated.title);
+    assert_eq!(upserted.peak_data, updated.peak_data);
+
+    let fetched = db
+        .get_catalog_track(&first.track_id)
+        .await
+        .expect("get catalog track")
+        .expect("catalog track should exist");
+    assert_eq!(fetched.file_path, updated.file_path);
+    assert_eq!(fetched.title, updated.title);
+    assert_eq!(fetched.media_fingerprint, first.media_fingerprint);
+}
+
+#[tokio::test]
+async fn catalog_track_listing_search_filters_by_title_or_artist() {
+    let db = new_test_db().await;
+
+    let mut alpha = sample_catalog_track_import("11", "C:/music/alpha.wav");
+    alpha.track_id = "1".repeat(64);
+    alpha.media_asset_id = "2".repeat(64);
+    alpha.artist_id = "3".repeat(64);
+    alpha.album_id = None;
+    alpha.media_fingerprint = "4".repeat(64);
+    alpha.title = "Sunset Demo".to_string();
+    alpha.artist_name = "Rau Artist".to_string();
+    alpha.album_title = None;
+
+    let mut beta = sample_catalog_track_import("22", "C:/music/beta.wav");
+    beta.track_id = "5".repeat(64);
+    beta.media_asset_id = "6".repeat(64);
+    beta.artist_id = "7".repeat(64);
+    beta.album_id = None;
+    beta.media_fingerprint = "8".repeat(64);
+    beta.title = "Midnight Sketch".to_string();
+    beta.artist_name = "Other Artist".to_string();
+    beta.album_title = None;
+
+    db.upsert_catalog_track_import(&alpha)
+        .await
+        .expect("insert alpha");
+    db.upsert_catalog_track_import(&beta)
+        .await
+        .expect("insert beta");
+
+    let by_title = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by title");
+    assert_eq!(by_title.total, 1);
+    assert_eq!(by_title.items[0].title, "Sunset Demo");
+
+    let by_artist = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("rau".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by artist");
+    assert_eq!(by_artist.total, 1);
+    assert_eq!(by_artist.items[0].artist_name, "Rau Artist");
+}
+
+#[tokio::test]
+async fn catalog_track_metadata_update_round_trips_rights_visibility_and_tags() {
+    let db = new_test_db().await;
+
+    let mut track = sample_catalog_track_import("33", "C:/music/authoring.wav");
+    track.track_id = "a".repeat(64);
+    track.media_asset_id = "b".repeat(64);
+    track.artist_id = "c".repeat(64);
+    track.album_id = None;
+    track.media_fingerprint = "d".repeat(64);
+    db.upsert_catalog_track_import(&track)
+        .await
+        .expect("insert track");
+
+    let updated = db
+        .update_catalog_track_metadata(&UpdateCatalogTrackMetadata {
+            track_id: track.track_id.clone(),
+            visibility_policy: "PRIVATE".to_string(),
+            license_policy: "CC_BY".to_string(),
+            downloadable: true,
+            tags: vec![
+                CatalogTrackTagAssignment {
+                    tag_id: "e".repeat(64),
+                    label: "Lo-Fi".to_string(),
+                },
+                CatalogTrackTagAssignment {
+                    tag_id: "f".repeat(64),
+                    label: "Night Drive".to_string(),
+                },
+            ],
+        })
+        .await
+        .expect("update track metadata");
+
+    assert_eq!(updated.track_id, track.track_id);
+    assert_eq!(updated.visibility_policy, "PRIVATE");
+    assert_eq!(updated.license_policy, "CC_BY");
+    assert!(updated.downloadable);
+
+    let tags = db
+        .list_catalog_track_tags(&track.track_id)
+        .await
+        .expect("list track tags");
+    assert_eq!(tags, vec!["Lo-Fi".to_string(), "Night Drive".to_string()]);
+
+    // Replacing tags should remove old joins and preserve unique normalized-label semantics.
+    db.update_catalog_track_metadata(&UpdateCatalogTrackMetadata {
+        track_id: track.track_id.clone(),
+        visibility_policy: "LOCAL".to_string(),
+        license_policy: "ALL_RIGHTS_RESERVED".to_string(),
+        downloadable: false,
+        tags: vec![CatalogTrackTagAssignment {
+            tag_id: "e".repeat(64),
+            label: "lo fi".to_string(),
+        }],
+    })
+    .await
+    .expect("replace tags");
+
+    let tags_after = db
+        .list_catalog_track_tags(&track.track_id)
+        .await
+        .expect("list tags after replace");
+    assert_eq!(tags_after, vec!["lo fi".to_string()]);
+}
+
+#[tokio::test]
+async fn catalog_track_metadata_update_rejects_duplicate_or_blank_tags() {
+    let db = new_test_db().await;
+
+    let mut track = sample_catalog_track_import("44", "C:/music/authoring-invalid.wav");
+    track.track_id = "1".repeat(64);
+    track.media_asset_id = "2".repeat(64);
+    track.artist_id = "3".repeat(64);
+    track.album_id = None;
+    track.media_fingerprint = "4".repeat(64);
+    db.upsert_catalog_track_import(&track)
+        .await
+        .expect("insert track");
+
+    let duplicate_err = db
+        .update_catalog_track_metadata(&UpdateCatalogTrackMetadata {
+            track_id: track.track_id.clone(),
+            visibility_policy: "LOCAL".to_string(),
+            license_policy: "ALL_RIGHTS_RESERVED".to_string(),
+            downloadable: false,
+            tags: vec![
+                CatalogTrackTagAssignment {
+                    tag_id: "5".repeat(64),
+                    label: "Synth Wave".to_string(),
+                },
+                CatalogTrackTagAssignment {
+                    tag_id: "6".repeat(64),
+                    label: "synth   wave".to_string(),
+                },
+            ],
+        })
+        .await
+        .expect_err("duplicate normalized tags should be rejected");
+    assert_eq!(duplicate_err.code, DbErrorCode::Query);
+
+    let blank_err = db
+        .update_catalog_track_metadata(&UpdateCatalogTrackMetadata {
+            track_id: track.track_id.clone(),
+            visibility_policy: "LOCAL".to_string(),
+            license_policy: "ALL_RIGHTS_RESERVED".to_string(),
+            downloadable: false,
+            tags: vec![CatalogTrackTagAssignment {
+                tag_id: "7".repeat(64),
+                label: "   ".to_string(),
+            }],
+        })
+        .await
+        .expect_err("blank tag should be rejected");
+    assert_eq!(blank_err.code, DbErrorCode::Query);
+}
+
+#[tokio::test]
+async fn library_roots_round_trip_and_delete() {
+    let db = new_test_db().await;
+    let root = db
+        .upsert_library_root(&UpsertLibraryRoot {
+            root_id: "9".repeat(64),
+            path: "C:/Music".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("upsert library root");
+    assert_eq!(root.path, "C:/Music");
+    assert!(root.enabled);
+
+    let listed = db.list_library_roots().await.expect("list library roots");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].root_id, root.root_id);
+
+    let fetched = db
+        .get_library_root(&root.root_id)
+        .await
+        .expect("get library root")
+        .expect("library root exists");
+    assert_eq!(fetched.path, "C:/Music");
+
+    let deleted = db
+        .delete_library_root(&root.root_id)
+        .await
+        .expect("delete library root");
+    assert!(deleted);
+    assert!(db
+        .get_library_root(&root.root_id)
+        .await
+        .expect("get after delete")
+        .is_none());
+}
+
+#[tokio::test]
+async fn ingest_job_progress_and_events_round_trip() {
+    let db = new_test_db().await;
+    let job_id = "a".repeat(64);
+
+    let created = db
+        .create_ingest_job(&NewIngestJob {
+            job_id: job_id.clone(),
+            status: IngestJobStatus::Pending,
+            scope: "scan-root:demo".to_string(),
+            total_items: 0,
+            processed_items: 0,
+            error_count: 0,
+        })
+        .await
+        .expect("create ingest job");
+    assert_eq!(created.status, IngestJobStatus::Pending);
+
+    let running = db
+        .update_ingest_job(&UpdateIngestJob {
+            job_id: job_id.clone(),
+            status: IngestJobStatus::Running,
+            total_items: 3,
+            processed_items: 1,
+            error_count: 0,
+        })
+        .await
+        .expect("update ingest job");
+    assert_eq!(running.status, IngestJobStatus::Running);
+    assert_eq!(running.total_items, 3);
+    assert_eq!(running.processed_items, 1);
+
+    let event = db
+        .append_ingest_event(&NewIngestEvent {
+            job_id: job_id.clone(),
+            level: "INFO".to_string(),
+            message: "imported file".to_string(),
+            payload_json: Some(json!({"path":"C:/Music/test.wav"})),
+        })
+        .await
+        .expect("append ingest event");
+    assert_eq!(event.job_id, job_id);
+    assert_eq!(event.level, "INFO");
+
+    let done = db
+        .update_ingest_job(&UpdateIngestJob {
+            job_id: job_id.clone(),
+            status: IngestJobStatus::Completed,
+            total_items: 3,
+            processed_items: 3,
+            error_count: 1,
+        })
+        .await
+        .expect("complete ingest job");
+    assert_eq!(done.status, IngestJobStatus::Completed);
+    assert_eq!(done.error_count, 1);
+
+    let fetched = db
+        .get_ingest_job(&job_id)
+        .await
+        .expect("fetch ingest job")
+        .expect("job should exist");
+    assert_eq!(fetched.status, IngestJobStatus::Completed);
+    assert_eq!(fetched.processed_items, 3);
 }

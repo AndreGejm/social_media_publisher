@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-catalog-get-ingest-job"
+description = "Enables the catalog_get_ingest_job command without any pre-configured scope."
+commands.allow = ["catalog_get_ingest_job"]
+
+[[permission]]
+identifier = "deny-catalog-get-ingest-job"
+description = "Denies the catalog_get_ingest_job command without any pre-configured scope."
+commands.deny = ["catalog_get_ingest_job"]

@@ -1,23 +1,28 @@
+//! Deterministic plan/execute/verify orchestration over publishers and SQLite state.
+
 use crate::idempotency::try_build_idempotency_keys;
 use crate::pipeline::{
     ExecuteContext, ExecutionEnvironment, PlanContext, PlannedAction, Publisher, VerificationResult,
 };
 use crate::spec::ReleaseSpec;
 use release_publisher_db::{
-    Db, DbError, NewAuditLogEntry, NewReleaseRecord, PlatformActionStatus, ReleaseState,
-    UpsertPlatformAction,
+    db_busy_retry_delay_ms, Db, DbBusyRetryPolicy, DbError, DbErrorCode, NewAuditLogEntry,
+    NewReleaseRecord, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// Default per-platform action cap used to prevent accidental mass publishes in one run.
 pub const DEFAULT_MAX_ACTIONS_PER_PLATFORM_PER_RUN: u32 = 1;
 const RUN_LOCK_LEASE_TTL_MS: i64 = 5 * 60 * 1000;
 
+/// Errors emitted by the orchestration state machine.
 #[derive(Debug, thiserror::Error)]
 pub enum OrchestratorError {
     #[error("invalid input: {0}")]
@@ -44,6 +49,7 @@ pub enum OrchestratorError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Input payload for planning/executing a release run.
 #[derive(Debug, Clone)]
 pub struct RunReleaseInput {
     pub spec: ReleaseSpec,
@@ -55,6 +61,7 @@ pub struct RunReleaseInput {
 }
 
 impl RunReleaseInput {
+    /// Creates a new run input with the default per-platform action cap.
     pub fn new(
         spec: ReleaseSpec,
         media_bytes: Vec<u8>,
@@ -73,6 +80,7 @@ impl RunReleaseInput {
     }
 }
 
+/// Per-platform execution summary stored in the release report artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlatformExecutionSummary {
     pub platform: String,
@@ -84,6 +92,7 @@ pub struct PlatformExecutionSummary {
     pub reused_completed_result: bool,
 }
 
+/// Persisted run report artifact written after execution completes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseReportArtifact {
     pub release_id: String,
@@ -97,6 +106,7 @@ pub struct ReleaseReportArtifact {
     pub platforms: Vec<PlatformExecutionSummary>,
 }
 
+/// Planned release state handed from the plan phase to execution.
 #[derive(Debug, Clone)]
 pub struct PlannedRelease {
     pub release_id: String,
@@ -112,6 +122,7 @@ pub struct PlannedRelease {
     pub media_fingerprint: String,
 }
 
+/// Successful orchestration result returned by `run_release`/`execute_planned_release`.
 #[derive(Debug, Clone)]
 pub struct RunReleaseOutput {
     pub report: ReleaseReportArtifact,
@@ -119,12 +130,14 @@ pub struct RunReleaseOutput {
     pub planned_request_files: BTreeMap<String, PathBuf>,
 }
 
+/// Coordinates publishers, filesystem artifacts and the SQLite state machine.
 pub struct Orchestrator {
     db: Db,
     publishers: HashMap<String, Arc<dyn Publisher>>,
 }
 
 impl Orchestrator {
+    /// Creates an empty orchestrator with no registered publishers.
     pub fn new(db: Db) -> Self {
         Self {
             db,
@@ -132,6 +145,7 @@ impl Orchestrator {
         }
     }
 
+    /// Creates an orchestrator and registers all provided publishers.
     pub fn with_publishers<I>(db: Db, publishers: I) -> Result<Self, OrchestratorError>
     where
         I: IntoIterator<Item = Arc<dyn Publisher>>,
@@ -143,6 +157,7 @@ impl Orchestrator {
         Ok(orchestrator)
     }
 
+    /// Registers a publisher by its platform name.
     pub fn register_publisher(
         &mut self,
         publisher: Arc<dyn Publisher>,
@@ -155,10 +170,12 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Returns the backing database handle.
     pub fn db(&self) -> &Db {
         &self.db
     }
 
+    /// Runs the full `Plan -> Execute -> Verify/Commit` pipeline for a release.
     pub async fn run_release(
         &self,
         input: RunReleaseInput,
@@ -173,6 +190,7 @@ impl Orchestrator {
         self.execute_planned_release(planned).await
     }
 
+    /// Executes only the planning phase and returns a [`PlannedRelease`] for later execution.
     pub async fn plan_release(
         &self,
         input: RunReleaseInput,
@@ -194,15 +212,20 @@ impl Orchestrator {
             "planning release"
         );
 
+        let new_release = NewReleaseRecord {
+            release_id: keys.release_id.clone(),
+            title: input.spec.title.clone(),
+            state: ReleaseState::Validated,
+            spec_hash: keys.spec_hash.clone(),
+            media_fingerprint: keys.media_fingerprint.clone(),
+            normalized_spec_json: input.spec.try_normalized_json()?,
+        };
         let release = self
-            .db
-            .upsert_release(&NewReleaseRecord {
-                release_id: keys.release_id.clone(),
-                title: input.spec.title.clone(),
-                state: ReleaseState::Validated,
-                spec_hash: keys.spec_hash.clone(),
-                media_fingerprint: keys.media_fingerprint.clone(),
-                normalized_spec_json: input.spec.try_normalized_json()?,
+            .retry_busy_locked_orchestrator(|| async {
+                self.db
+                    .upsert_release(&new_release)
+                    .await
+                    .map_err(OrchestratorError::from)
             })
             .await?;
 
@@ -247,8 +270,8 @@ impl Orchestrator {
                 .as_ref()
                 .map(|row| row.status.is_completed())
                 .unwrap_or(false);
-            {
-                let mut tx = self.db.begin_tx().await?;
+            self.retry_busy_locked_orchestrator(|| async {
+                let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
                 if !existing_is_completed {
                     tx.upsert_platform_action(&UpsertPlatformAction {
                         release_id: keys.release_id.clone(),
@@ -260,7 +283,8 @@ impl Orchestrator {
                         increment_attempt: false,
                         last_error: None,
                     })
-                    .await?;
+                    .await
+                    .map_err(OrchestratorError::from)?;
                 }
 
                 tx.append_audit_log(&NewAuditLogEntry {
@@ -272,14 +296,17 @@ impl Orchestrator {
                     ),
                     payload_json: Some(serde_json::json!({
                         "platform": platform,
-                        "planned_actions": plan_json,
+                        "planned_actions": plan_json.clone(),
                         "env": input.env.clone(),
                         "run_id": run_id.clone(),
                     })),
                 })
-                .await?;
-                tx.commit().await?;
-            }
+                .await
+                .map_err(OrchestratorError::from)?;
+                tx.commit().await.map_err(OrchestratorError::from)?;
+                Ok(())
+            })
+            .await?;
 
             let file_path =
                 planned_requests_dir.join(format!("{}.json", sanitize_filename(platform)));
@@ -304,6 +331,7 @@ impl Orchestrator {
         })
     }
 
+    /// Executes a previously planned release.
     pub async fn execute_planned_release(
         &self,
         planned: PlannedRelease,
@@ -317,14 +345,18 @@ impl Orchestrator {
             "attempting execution lock"
         );
         let acquired = self
-            .db
-            .acquire_run_lock_lease(
-                &planned.release_id,
-                &lock_owner,
-                lock_owner_epoch,
-                lock_owner_epoch,
-                RUN_LOCK_LEASE_TTL_MS,
-            )
+            .retry_busy_locked_orchestrator(|| async {
+                self.db
+                    .acquire_run_lock_lease(
+                        &planned.release_id,
+                        &lock_owner,
+                        lock_owner_epoch,
+                        lock_owner_epoch,
+                        RUN_LOCK_LEASE_TTL_MS,
+                    )
+                    .await
+                    .map_err(OrchestratorError::from)
+            })
             .await?;
         if !acquired {
             return Err(OrchestratorError::InvalidReleaseState(format!(
@@ -335,10 +367,14 @@ impl Orchestrator {
 
         let result = self.execute_locked(&planned).await;
         let release_lock_result = self
-            .db
-            .release_run_lock_lease(&planned.release_id, &lock_owner, lock_owner_epoch)
+            .retry_busy_locked_orchestrator(|| async {
+                self.db
+                    .release_run_lock_lease(&planned.release_id, &lock_owner, lock_owner_epoch)
+                    .await
+                    .map_err(OrchestratorError::from)
+            })
             .await
-            .map_err(OrchestratorError::from);
+            .map(|_| ());
 
         match (result, release_lock_result) {
             (Ok(output), Ok(_)) => Ok(output),
@@ -381,8 +417,7 @@ impl Orchestrator {
             }
             ReleaseState::Planned => {
                 let transitioned = self
-                    .db
-                    .transition_release_state(
+                    .transition_release_state_with_retry(
                         &planned.release_id,
                         ReleaseState::Planned,
                         ReleaseState::Executing,
@@ -397,8 +432,7 @@ impl Orchestrator {
             }
             ReleaseState::Failed => {
                 let transitioned = self
-                    .db
-                    .transition_release_state(
+                    .transition_release_state_with_retry(
                         &planned.release_id,
                         ReleaseState::Failed,
                         ReleaseState::Executing,
@@ -414,8 +448,7 @@ impl Orchestrator {
             ReleaseState::Executing => {}
             ReleaseState::Verified => {
                 let transitioned = self
-                    .db
-                    .transition_release_state(
+                    .transition_release_state_with_retry(
                         &planned.release_id,
                         ReleaseState::Verified,
                         ReleaseState::Committed,
@@ -438,8 +471,7 @@ impl Orchestrator {
                         .await;
                 }
                 let transitioned = self
-                    .db
-                    .transition_release_state(
+                    .transition_release_state_with_retry(
                         &planned.release_id,
                         ReleaseState::Committed,
                         ReleaseState::Executing,
@@ -467,19 +499,22 @@ impl Orchestrator {
                 plan.len(),
                 planned.max_actions_per_platform_per_run,
             )?;
-            {
-                let mut tx = self.db.begin_tx().await?;
+            self.retry_busy_locked_orchestrator(|| async {
+                let planned_actions_value =
+                    serde_json::to_value(&plan).map_err(OrchestratorError::from)?;
+                let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
                 tx.upsert_platform_action(&UpsertPlatformAction {
                     release_id: planned.release_id.clone(),
                     platform: platform.clone(),
                     status: PlatformActionStatus::Executing,
-                    plan_json: Some(serde_json::to_value(&plan)?),
+                    plan_json: Some(planned_actions_value.clone()),
                     result_json: None,
                     external_id: None,
                     increment_attempt: true,
                     last_error: None,
                 })
-                .await?;
+                .await
+                .map_err(OrchestratorError::from)?;
 
                 tx.append_audit_log(&NewAuditLogEntry {
                     release_id: planned.release_id.clone(),
@@ -487,13 +522,16 @@ impl Orchestrator {
                     message: format!("executing `{platform}`"),
                     payload_json: Some(serde_json::json!({
                         "platform": platform,
-                        "planned_actions": serde_json::to_value(&plan)?,
+                        "planned_actions": planned_actions_value,
                         "run_id": planned.run_id.clone(),
                     })),
                 })
-                .await?;
-                tx.commit().await?;
-            }
+                .await
+                .map_err(OrchestratorError::from)?;
+                tx.commit().await.map_err(OrchestratorError::from)?;
+                Ok(())
+            })
+            .await?;
 
             let exec_ctx = ExecuteContext {
                 release_id: planned.release_id.clone(),
@@ -559,19 +597,20 @@ impl Orchestrator {
                 "verification_results": verify_results,
             });
 
-            {
-                let mut tx = self.db.begin_tx().await?;
+            self.retry_busy_locked_orchestrator(|| async {
+                let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
                 tx.upsert_platform_action(&UpsertPlatformAction {
                     release_id: planned.release_id.clone(),
                     platform: platform.clone(),
                     status: PlatformActionStatus::Verified,
                     plan_json: None,
-                    result_json: Some(result_json),
-                    external_id,
+                    result_json: Some(result_json.clone()),
+                    external_id: external_id.clone(),
                     increment_attempt: false,
                     last_error: None,
                 })
-                .await?;
+                .await
+                .map_err(OrchestratorError::from)?;
 
                 tx.append_audit_log(&NewAuditLogEntry {
                     release_id: planned.release_id.clone(),
@@ -583,20 +622,24 @@ impl Orchestrator {
                         "run_id": planned.run_id.clone()
                     })),
                 })
-                .await?;
-                tx.commit().await?;
-            }
+                .await
+                .map_err(OrchestratorError::from)?;
+                tx.commit().await.map_err(OrchestratorError::from)?;
+                Ok(())
+            })
+            .await?;
         }
 
-        {
-            let mut tx = self.db.begin_tx().await?;
+        self.retry_busy_locked_orchestrator(|| async {
+            let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
             let transitioned = tx
                 .transition_release_state(
                     &planned.release_id,
                     ReleaseState::Executing,
                     ReleaseState::Verified,
                 )
-                .await?;
+                .await
+                .map_err(OrchestratorError::from)?;
             if !transitioned {
                 return Err(OrchestratorError::InvalidReleaseState(format!(
                     "failed to transition `{}` EXECUTING -> VERIFIED",
@@ -609,15 +652,18 @@ impl Orchestrator {
                     ReleaseState::Verified,
                     ReleaseState::Committed,
                 )
-                .await?;
+                .await
+                .map_err(OrchestratorError::from)?;
             if !transitioned {
                 return Err(OrchestratorError::InvalidReleaseState(format!(
                     "failed to transition `{}` VERIFIED -> COMMITTED",
                     planned.release_id
                 )));
             }
-            tx.commit().await?;
-        }
+            tx.commit().await.map_err(OrchestratorError::from)?;
+            Ok(())
+        })
+        .await?;
 
         self.finalize_report(planned, &pending_platforms_for_run)
             .await
@@ -699,43 +745,25 @@ impl Orchestrator {
         release_id: &str,
         current_state: ReleaseState,
     ) -> Result<(), OrchestratorError> {
-        match current_state {
-            ReleaseState::Validated => {
-                let mut tx = self.db.begin_tx().await?;
-                let transitioned = tx
-                    .transition_release_state(
-                        release_id,
-                        ReleaseState::Validated,
-                        ReleaseState::Planned,
-                    )
-                    .await?;
-                if !transitioned {
-                    return Err(OrchestratorError::InvalidReleaseState(format!(
-                        "failed to transition `{release_id}` VALIDATED -> PLANNED"
-                    )));
-                }
-                tx.commit().await?;
-            }
-            ReleaseState::Failed => {
-                let mut tx = self.db.begin_tx().await?;
-                let transitioned = tx
-                    .transition_release_state(
-                        release_id,
-                        ReleaseState::Failed,
-                        ReleaseState::Planned,
-                    )
-                    .await?;
-                if !transitioned {
-                    return Err(OrchestratorError::InvalidReleaseState(format!(
-                        "failed to transition `{release_id}` FAILED -> PLANNED"
-                    )));
-                }
-                tx.commit().await?;
-            }
+        let expected = match current_state {
+            ReleaseState::Validated | ReleaseState::Failed => Some(current_state),
             ReleaseState::Planned
             | ReleaseState::Executing
             | ReleaseState::Verified
-            | ReleaseState::Committed => {}
+            | ReleaseState::Committed => None,
+        };
+
+        if let Some(expected) = expected {
+            let transitioned = self
+                .transition_release_state_with_retry(release_id, expected, ReleaseState::Planned)
+                .await?;
+            if !transitioned {
+                return Err(OrchestratorError::InvalidReleaseState(format!(
+                    "failed to transition `{release_id}` {} -> {}",
+                    expected.as_str(),
+                    ReleaseState::Planned.as_str()
+                )));
+            }
         }
         Ok(())
     }
@@ -756,38 +784,104 @@ impl Orchestrator {
         platform: &str,
         message: String,
     ) -> Result<(), OrchestratorError> {
-        let mut tx = self.db.begin_tx().await?;
-        tx.upsert_platform_action(&UpsertPlatformAction {
-            release_id: release_id.to_string(),
-            platform: platform.to_string(),
-            status: PlatformActionStatus::Failed,
-            plan_json: None,
-            result_json: None,
-            external_id: None,
-            increment_attempt: false,
-            last_error: Some(message.clone()),
+        self.retry_busy_locked_orchestrator(|| async {
+            let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
+            tx.upsert_platform_action(&UpsertPlatformAction {
+                release_id: release_id.to_string(),
+                platform: platform.to_string(),
+                status: PlatformActionStatus::Failed,
+                plan_json: None,
+                result_json: None,
+                external_id: None,
+                increment_attempt: false,
+                last_error: Some(message.clone()),
+            })
+            .await
+            .map_err(OrchestratorError::from)?;
+            let transitioned = tx
+                .set_release_failed(release_id, ReleaseState::Executing, message.clone())
+                .await
+                .map_err(OrchestratorError::from)?;
+            if !transitioned {
+                return Err(OrchestratorError::InvalidReleaseState(format!(
+                    "failed to transition `{release_id}` EXECUTING -> FAILED"
+                )));
+            }
+            tx.append_audit_log(&NewAuditLogEntry {
+                release_id: release_id.to_string(),
+                stage: "ERROR".to_string(),
+                message: message.clone(),
+                payload_json: Some(serde_json::json!({ "run_id": run_id, "platform": platform })),
+            })
+            .await
+            .map_err(OrchestratorError::from)?;
+            tx.commit().await.map_err(OrchestratorError::from)?;
+            Ok(())
         })
-        .await?;
-        let transitioned = tx
-            .set_release_failed(release_id, ReleaseState::Executing, message.clone())
-            .await?;
-        if !transitioned {
-            return Err(OrchestratorError::InvalidReleaseState(format!(
-                "failed to transition `{release_id}` EXECUTING -> FAILED"
-            )));
+        .await
+    }
+
+    async fn transition_release_state_with_retry(
+        &self,
+        release_id: &str,
+        expected: ReleaseState,
+        next: ReleaseState,
+    ) -> Result<bool, OrchestratorError> {
+        self.retry_busy_locked_orchestrator(|| async {
+            self.db
+                .transition_release_state(release_id, expected, next)
+                .await
+                .map_err(OrchestratorError::from)
+        })
+        .await
+    }
+
+    /// Retries only DB busy/locked failures while returning other orchestration errors immediately.
+    ///
+    /// The loop intentionally retries only `Db(BusyLocked)` and reuses the DB
+    /// crate's backoff/jitter policy to stay consistent with lower-level retry
+    /// behavior.
+    async fn retry_busy_locked_orchestrator<T, F, Fut>(
+        &self,
+        mut op: F,
+    ) -> Result<T, OrchestratorError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, OrchestratorError>>,
+    {
+        let policy = DbBusyRetryPolicy::default();
+        policy.validate().map_err(OrchestratorError::from)?;
+
+        for attempt in 1..=policy.max_attempts {
+            match op().await {
+                Ok(value) => return Ok(value),
+                Err(error)
+                    if is_busy_locked_orchestrator_error(&error)
+                        && attempt < policy.max_attempts =>
+                {
+                    let delay_ms = db_busy_retry_delay_ms(&policy, attempt);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
-        tx.append_audit_log(&NewAuditLogEntry {
-            release_id: release_id.to_string(),
-            stage: "ERROR".to_string(),
-            message,
-            payload_json: Some(serde_json::json!({ "run_id": run_id, "platform": platform })),
-        })
-        .await?;
-        tx.commit().await?;
-        Ok(())
+
+        Err(OrchestratorError::Db(DbError::new(
+            DbErrorCode::BusyLocked,
+            "orchestrator busy-locked retry loop exhausted",
+        )))
     }
 }
 
+/// Returns `true` when the error is a DB busy/locked condition eligible for retry.
+fn is_busy_locked_orchestrator_error(error: &OrchestratorError) -> bool {
+    matches!(
+        error,
+        OrchestratorError::Db(db_error) if db_error.code == DbErrorCode::BusyLocked
+    )
+}
+
+/// Returns the current UNIX time in milliseconds, saturating on overflow and clock skew.
 fn unix_time_ms_now() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
@@ -795,6 +889,7 @@ fn unix_time_ms_now() -> i64 {
     }
 }
 
+/// Validates high-level run inputs before any filesystem or DB work begins.
 fn validate_run_input(input: &RunReleaseInput) -> Result<(), OrchestratorError> {
     if input.media_bytes.is_empty() {
         return Err(OrchestratorError::InvalidInput(
@@ -809,6 +904,7 @@ fn validate_run_input(input: &RunReleaseInput) -> Result<(), OrchestratorError> 
     Ok(())
 }
 
+/// Normalizes platform names (trim + lowercase) and rejects duplicates/blanks.
 fn normalize_platforms(platforms: Vec<String>) -> Result<Vec<String>, OrchestratorError> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-analyze-audio-file"
+description = "Enables the analyze_audio_file command without any pre-configured scope."
+commands.allow = ["analyze_audio_file"]
+
+[[permission]]
+identifier = "deny-analyze-audio-file"
+description = "Denies the analyze_audio_file command without any pre-configured scope."
+commands.deny = ["analyze_audio_file"]

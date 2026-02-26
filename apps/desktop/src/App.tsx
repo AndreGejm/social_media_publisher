@@ -1,8 +1,10 @@
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { HelpTooltip } from "./HelpTooltip";
+import { QcPlayer, type QcPlayerAnalysis } from "./QcPlayer";
 
-type Screen = "New Release" | "Plan / Preview" | "Execute" | "Report / History";
+type Screen = "New Release" | "Plan / Preview" | "Verify / QC" | "Execute" | "Report / History";
 type AppEnv = "TEST" | "STAGING" | "PRODUCTION";
 
 type UiAppError = { code: string; message: string; details?: unknown };
@@ -41,8 +43,43 @@ type ExecuteReleaseResponse = {
 
 type HistoryRow = { release_id: string; state: string; title: string; updated_at: string };
 type ReleaseReport = { release_id: string; summary: string; actions: PlannedAction[]; raw?: unknown };
+type TrackModel = { file_path: string; duration_ms: number; peak_data: number[]; loudness_lufs: number };
+type ReleaseModel = { id: string; title: string; artist: string; tracks: TrackModel[] };
+type AnalyzeAudioFileResponse = {
+  canonical_path: string;
+  media_fingerprint: string;
+  track: TrackModel;
+  sample_rate_hz: number;
+  channels: number;
+};
+type ReleaseTrackAnalysisResponse = {
+  release: ReleaseModel;
+  media_fingerprint: string;
+  sample_rate_hz: number;
+  channels: number;
+  created_at: string;
+  updated_at: string;
+};
+type QcAnalysisView = {
+  release: ReleaseModel;
+  track: TrackModel;
+  media_fingerprint: string;
+  sample_rate_hz: number;
+  channels: number;
+  created_at?: string;
+  updated_at?: string;
+};
+type QcApprovalRecord = { approved_at: string };
+const MAX_QC_PEAK_BINS_UI = 8_192;
 
-const screens: Screen[] = ["New Release", "Plan / Preview", "Execute", "Report / History"];
+const screens: Screen[] = ["New Release", "Plan / Preview", "Verify / QC", "Execute", "Report / History"];
+const screenHelpText: Record<Screen, string> = {
+  "New Release": "Enter file paths, choose environment, and prepare a release run.",
+  "Plan / Preview": "Review normalized metadata and simulated platform actions before execution.",
+  "Verify / QC": "Inspect waveform and loudness, then manually approve the planned release.",
+  Execute: "Review the most recent execute result and execution notes.",
+  "Report / History": "Browse saved releases, reports, and resume previous runs."
+};
 
 declare global {
   interface Window {
@@ -115,6 +152,20 @@ function normalizeAppError(error: unknown): UiAppError {
   return { code: "UNEXPECTED_UI_ERROR", message: error instanceof Error ? error.message : "Unknown UI error" };
 }
 
+function mergeQcAnalysisAttemptErrors(primaryError: unknown, fallbackError: unknown): UiAppError {
+  const primary = normalizeAppError(primaryError);
+  const fallback = normalizeAppError(fallbackError);
+  return {
+    code: fallback.code,
+    message: fallback.message,
+    details: {
+      strategy: "persist_then_fallback",
+      persisted_attempt: primary,
+      fallback_attempt: fallback
+    }
+  };
+}
+
 function shouldLogBackendErrorDetails(): boolean {
   return window.__RELEASE_PUBLISHER_DEBUG_ERROR_DETAILS__ === true;
 }
@@ -154,7 +205,135 @@ function formatSpecErrors(errors: SpecError[]): string {
     .join(" | ");
 }
 
-export default function App() {
+function buildQcViewFromPersisted(payload: ReleaseTrackAnalysisResponse): QcAnalysisView {
+  const track = payload.release.tracks[0];
+  const view = {
+    release: payload.release,
+    track,
+    media_fingerprint: payload.media_fingerprint,
+    sample_rate_hz: payload.sample_rate_hz,
+    channels: payload.channels,
+    created_at: payload.created_at,
+    updated_at: payload.updated_at
+  };
+  assertValidQcAnalysisView(view, "get_release_track_analysis");
+  return view;
+}
+
+function buildQcViewFromAnalyzeFile(payload: AnalyzeAudioFileResponse, spec: ReleaseSpec | null, releaseId: string): QcAnalysisView {
+  const view = {
+    release: {
+      id: releaseId,
+      title: spec?.title ?? "Unlabeled Track",
+      artist: spec?.artist ?? "Unknown Artist",
+      tracks: [payload.track]
+    },
+    track: payload.track,
+    media_fingerprint: payload.media_fingerprint,
+    sample_rate_hz: payload.sample_rate_hz,
+    channels: payload.channels
+  };
+  assertValidQcAnalysisView(view, "analyze_audio_file");
+  return view;
+}
+
+function toQcPlayerAnalysis(analysis: QcAnalysisView): QcPlayerAnalysis {
+  return {
+    releaseTitle: analysis.release.title,
+    releaseArtist: analysis.release.artist,
+    trackFilePath: analysis.track.file_path,
+    durationMs: analysis.track.duration_ms,
+    peakData: analysis.track.peak_data,
+    loudnessLufs: analysis.track.loudness_lufs,
+    sampleRateHz: analysis.sample_rate_hz,
+    channels: analysis.channels,
+    mediaFingerprint: analysis.media_fingerprint
+  };
+}
+
+function invalidQcPayloadError(message: string, source: string): UiAppError {
+  return { code: "INVALID_QC_PAYLOAD", message, details: { source } };
+}
+
+function isFiniteNonPositiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value <= 0;
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isValidQcTrackForApproval(track: TrackModel | null | undefined): track is TrackModel {
+  if (!track) return false;
+  if (!isPositiveFiniteNumber(track.duration_ms)) return false;
+  if (!Array.isArray(track.peak_data) || track.peak_data.length === 0 || track.peak_data.length > MAX_QC_PEAK_BINS_UI) {
+    return false;
+  }
+  if (!track.peak_data.every((peak) => isFiniteNonPositiveNumber(peak))) return false;
+  if (!isFiniteNonPositiveNumber(track.loudness_lufs)) return false;
+  return true;
+}
+
+function assertValidQcAnalysisView(analysis: QcAnalysisView, source: string): void {
+  const release = analysis.release;
+  if (!release || typeof release.id !== "string" || !release.id.trim()) {
+    throw invalidQcPayloadError("QC payload is missing a valid release id.", source);
+  }
+  if (typeof analysis.media_fingerprint !== "string" || analysis.media_fingerprint.length < 16) {
+    throw invalidQcPayloadError("QC payload is missing a valid media fingerprint.", source);
+  }
+  if (!isPositiveFiniteNumber(analysis.sample_rate_hz) || !isPositiveFiniteNumber(analysis.channels)) {
+    throw invalidQcPayloadError("QC payload has invalid sample rate or channel count.", source);
+  }
+  if (!isValidQcTrackForApproval(analysis.track)) {
+    throw invalidQcPayloadError("QC payload track metrics are invalid or incomplete.", source);
+  }
+}
+
+type AppProps = {
+  prefillMediaPath?: string | null;
+  prefillSpecPath?: string | null;
+  sharedTransport?: SharedTransportBridgeForPublisherOps | null;
+};
+
+export type SharedTransportSourceForPublisherOps = {
+  sourceKey: string;
+  filePath: string;
+  title: string;
+  artist: string;
+  durationMs: number;
+};
+
+export type SharedTransportBridgeForPublisherOps = {
+  state: {
+    sourceKey: string | null;
+    currentTimeSec: number;
+    isPlaying: boolean;
+  };
+  ensureSource: (
+    source: SharedTransportSourceForPublisherOps,
+    options?: { autoplay?: boolean }
+  ) => void;
+  seekToRatio: (sourceKey: string, ratio: number) => void;
+};
+
+function toPublisherOpsSharedTransportSource(
+  analysis: QcAnalysisView
+): SharedTransportSourceForPublisherOps {
+  return {
+    sourceKey: `publisher-qc:${analysis.release.id}:${analysis.media_fingerprint}`,
+    filePath: analysis.track.file_path,
+    title: analysis.release.title,
+    artist: analysis.release.artist,
+    durationMs: analysis.track.duration_ms
+  };
+}
+
+export default function App({
+  prefillMediaPath = null,
+  prefillSpecPath = null,
+  sharedTransport = null
+}: AppProps) {
   const [activeScreen, setActiveScreen] = useState<Screen>("New Release");
   const [specPath, setSpecPath] = useState("");
   const [mediaPath, setMediaPath] = useState("");
@@ -171,17 +350,67 @@ export default function App() {
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
   const [selectedHistoryReleaseId, setSelectedHistoryReleaseId] = useState("");
   const [report, setReport] = useState<ReleaseReport | null>(null);
+  const [qcAnalysis, setQcAnalysis] = useState<QcAnalysisView | null>(null);
+  const [qcApprovedByReleaseId, setQcApprovedByReleaseId] = useState<Record<string, QcApprovalRecord>>({});
+  const [qcCurrentTimeSec, setQcCurrentTimeSec] = useState(0);
+  const [qcIsPlaying, setQcIsPlaying] = useState(false);
 
   const [loadingSpec, setLoadingSpec] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [refreshingHistory, setRefreshingHistory] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
+  const [loadingQcAnalysis, setLoadingQcAnalysis] = useState(false);
+  const [loadingQcLookup, setLoadingQcLookup] = useState(false);
   const historyRequestSeqRef = useRef(0);
   const reportRequestSeqRef = useRef(0);
+  const qcRequestSeqRef = useRef(0);
+  const qcAudioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const nextMediaPath = prefillMediaPath?.trim();
+    const nextSpecPath = prefillSpecPath?.trim();
+    if (!nextMediaPath && !nextSpecPath) return;
+
+    if (nextMediaPath) {
+      setMediaPath((current) => (current === nextMediaPath ? current : nextMediaPath));
+    }
+    if (nextSpecPath) {
+      setSpecPath((current) => (current === nextSpecPath ? current : nextSpecPath));
+    }
+    setLoadedSpec(null);
+    setPlanResult(null);
+    setExecuteResult(null);
+    setReport(null);
+    setQcAnalysis(null);
+    setQcCurrentTimeSec(0);
+    setQcIsPlaying(false);
+    setActiveScreen("New Release");
+    setStatusMessage("Loaded draft from Library into Publisher Ops. Review spec and continue planning.");
+  }, [prefillMediaPath, prefillSpecPath]);
 
   const selectedPlatforms = useMemo(() => (mockSelected ? ["mock"] : []), [mockSelected]);
   const revealFullDiagnosticPaths = shouldRevealFullDiagnosticPaths(env);
+  const currentPlannedReleaseId = planResult?.release_id ?? "";
+  const qcApprovalForCurrentPlan = currentPlannedReleaseId ? qcApprovedByReleaseId[currentPlannedReleaseId] : undefined;
+  const qcApprovedForCurrentPlan = Boolean(qcApprovalForCurrentPlan);
+  const qcAnalysisMatchesCurrentPlan = Boolean(
+    currentPlannedReleaseId && qcAnalysis && qcAnalysis.release.id === currentPlannedReleaseId
+  );
+  const qcAnalysisValidForCurrentPlan = qcAnalysisMatchesCurrentPlan && isValidQcTrackForApproval(qcAnalysis?.track);
+  const qcSharedTransportSource = useMemo(
+    () => (qcAnalysis ? toPublisherOpsSharedTransportSource(qcAnalysis) : null),
+    [qcAnalysis]
+  );
+  const qcUsesSharedTransport = Boolean(sharedTransport && qcSharedTransportSource);
+  const qcSharedTransportMatches =
+    Boolean(sharedTransport && qcSharedTransportSource) &&
+    sharedTransport?.state.sourceKey === qcSharedTransportSource?.sourceKey;
+  const qcPlayerCurrentTimeSec =
+    qcSharedTransportMatches && sharedTransport ? sharedTransport.state.currentTimeSec : qcCurrentTimeSec;
+  const qcPlayerIsPlaying = qcSharedTransportMatches && sharedTransport ? sharedTransport.state.isPlaying : qcIsPlaying;
+  const qcApprovedAndReadyForExecuteCurrentPlan =
+    qcApprovedForCurrentPlan && qcAnalysisValidForCurrentPlan && !loadingQcAnalysis;
 
   const setStructuredError = (error: unknown, fallbackStatus: string) => {
     const appError = normalizeAppError(error);
@@ -210,6 +439,46 @@ export default function App() {
     return true;
   };
 
+  const resetQcPlayback = () => {
+    if (sharedTransport) {
+      setQcCurrentTimeSec(0);
+      setQcIsPlaying(false);
+      return;
+    }
+    const audio = qcAudioRef.current;
+    if (audio) {
+      if (!audio.paused) {
+        try {
+          audio.pause();
+        } catch {
+          // jsdom / unsupported media runtime
+        }
+      }
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // unsupported media runtime / unloaded media element
+      }
+    }
+    setQcCurrentTimeSec(0);
+    setQcIsPlaying(false);
+  };
+
+  useEffect(() => {
+    if (!sharedTransport || !qcSharedTransportSource) return;
+    sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: false });
+  }, [sharedTransport, qcSharedTransportSource]);
+
+  const clearQcApprovalForRelease = (releaseId: string) => {
+    if (!releaseId) return;
+    setQcApprovedByReleaseId((current) => {
+      if (!(releaseId in current)) return current;
+      const next = { ...current };
+      delete next[releaseId];
+      return next;
+    });
+  };
+
   const refreshHistory = async () => {
     const requestSeq = historyRequestSeqRef.current + 1;
     historyRequestSeqRef.current = requestSeq;
@@ -227,6 +496,37 @@ export default function App() {
     } finally {
       if (requestSeq === historyRequestSeqRef.current) {
         setRefreshingHistory(false);
+      }
+    }
+  };
+
+  const loadQcForRelease = async (releaseId: string, options?: { preserveStatus?: boolean }) => {
+    const requestSeq = qcRequestSeqRef.current + 1;
+    qcRequestSeqRef.current = requestSeq;
+    setLoadingQcLookup(true);
+    try {
+      const result = await invokeCommand<ReleaseTrackAnalysisResponse | null>("get_release_track_analysis", { releaseId });
+      if (requestSeq !== qcRequestSeqRef.current) {
+        return result;
+      }
+      if (result) {
+        setQcAnalysis(buildQcViewFromPersisted(result));
+        resetQcPlayback();
+        setActiveScreen("Verify / QC");
+        if (!options?.preserveStatus) {
+          setStatusMessage("Loaded persisted QC analysis.");
+        }
+      }
+      return result;
+    } catch (error) {
+      if (requestSeq === qcRequestSeqRef.current) {
+        setQcAnalysis((current) => (current?.release.id === releaseId ? null : current));
+        resetQcPlayback();
+      }
+      throw error;
+    } finally {
+      if (requestSeq === qcRequestSeqRef.current) {
+        setLoadingQcLookup(false);
       }
     }
   };
@@ -290,13 +590,147 @@ export default function App() {
       });
       setPlanResult(response);
       setExecuteResult(null);
-      setActiveScreen("Plan / Preview");
-      setStatusMessage(`Planned ${response.planned_actions.length} action(s) in ${response.env}.`);
-      await refreshHistory().catch(() => undefined);
+      setQcAnalysis(null);
+      resetQcPlayback();
+      setActiveScreen("Verify / QC");
+      setStatusMessage(`Planned ${response.planned_actions.length} action(s) in ${response.env}. Analyze and approve in QC before Execute.`);
+      void refreshHistory().catch(() => undefined);
+      void loadQcForRelease(response.release_id, { preserveStatus: true }).catch(() => undefined);
     } catch (error) {
       setStructuredError(error, "Plan failed.");
     } finally {
       setPlanning(false);
+    }
+  };
+
+  const onAnalyzeQc = async () => {
+    if (!planResult?.release_id) {
+      setUiError("Plan a release before QC analysis.");
+      return;
+    }
+    if (!mediaPath.trim()) {
+      setUiError("Media file path is required for QC analysis.");
+      return;
+    }
+    const releaseId = planResult.release_id;
+    setUiError(null);
+    setBackendError(null);
+    clearQcApprovalForRelease(releaseId);
+    setLoadingQcAnalysis(true);
+    setStatusMessage("Analyzing audio and persisting QC metrics...");
+    try {
+      const persisted = await invokeCommand<ReleaseTrackAnalysisResponse>("analyze_and_persist_release_track", {
+        releaseId,
+        path: mediaPath
+      });
+      setQcAnalysis(buildQcViewFromPersisted(persisted));
+      resetQcPlayback();
+      setActiveScreen("Verify / QC");
+      setStatusMessage("QC waveform and loudness metrics are ready. Listen and approve for release.");
+    } catch (error) {
+      try {
+        // Fallback for environments/mocks that only implement the non-persisting analysis command.
+        const analyzed = await invokeCommand<AnalyzeAudioFileResponse>("analyze_audio_file", { path: mediaPath });
+        setQcAnalysis(buildQcViewFromAnalyzeFile(analyzed, loadedSpec?.spec ?? null, releaseId));
+        resetQcPlayback();
+        setActiveScreen("Verify / QC");
+        setStatusMessage("QC waveform and loudness metrics are ready (session-only preview). Listen and approve for release.");
+      } catch (fallbackError) {
+        setQcAnalysis((current) => (current?.release.id === releaseId ? null : current));
+        resetQcPlayback();
+        setStructuredError(mergeQcAnalysisAttemptErrors(error, fallbackError), "QC analysis failed.");
+      }
+    } finally {
+      setLoadingQcAnalysis(false);
+    }
+  };
+
+  const onLoadQcFromSelectedHistory = async () => {
+    if (!selectedHistoryReleaseId) {
+      setUiError("Select a release in history first.");
+      return;
+    }
+    setUiError(null);
+    setBackendError(null);
+    setStatusMessage("Loading persisted QC analysis...");
+    try {
+      const result = await loadQcForRelease(selectedHistoryReleaseId);
+      if (!result) {
+        setStatusMessage("No persisted QC analysis found for the selected release.");
+      }
+    } catch (error) {
+      setStructuredError(error, "QC analysis load failed.");
+    }
+  };
+
+  const onApproveForRelease = () => {
+    if (!planResult?.release_id) {
+      setUiError("Plan a release before approving QC.");
+      return;
+    }
+    if (!qcAnalysis || qcAnalysis.release.id !== planResult.release_id) {
+      setUiError("Analyze the planned audio in QC before approving.");
+      return;
+    }
+    if (!isValidQcTrackForApproval(qcAnalysis.track)) {
+      setUiError("QC analysis is invalid or incomplete. Re-run audio analysis before approving.");
+      return;
+    }
+    setUiError(null);
+    setQcApprovedByReleaseId((current) => ({
+      ...current,
+      [planResult.release_id]: { approved_at: new Date().toISOString() }
+    }));
+    setStatusMessage("QC approved. Execute is now enabled for this planned release.");
+  };
+
+  const onClearQcApproval = () => {
+    if (!planResult?.release_id) return;
+    setQcApprovedByReleaseId((current) => {
+      const next = { ...current };
+      delete next[planResult.release_id];
+      return next;
+    });
+    setStatusMessage("QC approval cleared for the current planned release.");
+  };
+
+  const onToggleQcPlayback = () => {
+    if (sharedTransport && qcSharedTransportSource) {
+      sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: true });
+      return;
+    }
+    const audio = qcAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      const maybePromise = audio.play();
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.catch(() => undefined);
+      }
+      return;
+    }
+    try {
+      audio.pause();
+    } catch {
+      // jsdom / unsupported media runtime
+    }
+  };
+
+  const onSeekQc = (ratio: number) => {
+    const normalized = Math.max(0, Math.min(1, ratio));
+    const durationSec = qcAnalysis ? qcAnalysis.track.duration_ms / 1000 : 0;
+    const nextTime = durationSec * normalized;
+    setQcCurrentTimeSec(nextTime);
+    if (sharedTransport && qcSharedTransportSource) {
+      sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: false });
+      sharedTransport.seekToRatio(qcSharedTransportSource.sourceKey, normalized);
+      return;
+    }
+    if (qcAudioRef.current) {
+      try {
+        qcAudioRef.current.currentTime = nextTime;
+      } catch {
+        // unsupported media runtime / unloaded media element
+      }
     }
   };
 
@@ -306,6 +740,17 @@ export default function App() {
       setBackendError({ code: "NOT_PLANNED", message: "Plan a release before executing." });
       return;
     }
+    if (!explicitReleaseId && planResult?.release_id === releaseId && !qcApprovedForCurrentPlan) {
+      setUiError("QC approval is required before executing the planned release.");
+      setActiveScreen("Verify / QC");
+      return;
+    }
+    if (!explicitReleaseId && planResult?.release_id === releaseId && !qcAnalysisValidForCurrentPlan) {
+      setUiError("A valid QC analysis is required before executing the planned release.");
+      setActiveScreen("Verify / QC");
+      return;
+    }
+    setUiError(null);
     setBackendError(null);
     setExecuting(true);
     setStatusMessage(`Executing release ${releaseId.slice(0, 8)}...`);
@@ -377,83 +822,169 @@ export default function App() {
         <ul data-testid="screen-list" className="screen-list">
           {screens.map((screen) => (
             <li key={screen}>
-              <button
-                type="button"
-                className={`tab-button${activeScreen === screen ? " active" : ""}`}
-                onClick={() => setActiveScreen(screen)}
-              >
-                {screen}
-              </button>
+              <HelpTooltip content={screenHelpText[screen]} side="bottom">
+                <button
+                  type="button"
+                  className={`tab-button${activeScreen === screen ? " active" : ""}`}
+                  onClick={() => setActiveScreen(screen)}
+                >
+                  {screen}
+                </button>
+              </HelpTooltip>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="panel grid" aria-labelledby="new-release-heading">
+      <section hidden={activeScreen !== "New Release"} className="panel grid" aria-labelledby="new-release-heading">
         <div>
           <h2 id="new-release-heading">New Release</h2>
           <form onSubmit={onPlanPreview} noValidate>
-            <label htmlFor="spec-path-input">Spec File Path</label>
+            <div className="label-with-help">
+              <label htmlFor="spec-path-input">Spec File Path</label>
+              <HelpTooltip content="Local YAML file containing release metadata (title, artist, tags, and mock settings)." side="bottom" />
+            </div>
             <div className="form-row single">
-              <input
-                id="spec-path-input"
-                data-testid="spec-path-input"
-                type="text"
-                value={specPath}
-                onChange={(event) => setSpecPath(event.target.value)}
-                placeholder="C:\\path\\to\\release.yaml"
-              />
+              <HelpTooltip content="Paste or type a local path to a UTF-8 YAML release spec." side="bottom">
+                <input
+                  id="spec-path-input"
+                  data-testid="spec-path-input"
+                  type="text"
+                  value={specPath}
+                  onChange={(event) => setSpecPath(event.target.value)}
+                  placeholder="C:\\path\\to\\release.yaml"
+                />
+              </HelpTooltip>
             </div>
 
-            <label htmlFor="media-path-input">Media File Path</label>
+            <div className="label-with-help">
+              <label htmlFor="media-path-input">Media File Path</label>
+              <HelpTooltip content="Local audio file used for hashing, QC analysis, and execution planning." side="bottom" />
+            </div>
             <div className="form-row single">
-              <input
-                id="media-path-input"
-                data-testid="media-path-input"
-                type="text"
-                value={mediaPath}
-                onChange={(event) => setMediaPath(event.target.value)}
-                placeholder="C:\\path\\to\\media.bin"
-              />
+              <HelpTooltip content="Paste or type a local file path. Network and file:// paths are blocked by the backend." side="bottom">
+                <input
+                  id="media-path-input"
+                  data-testid="media-path-input"
+                  type="text"
+                  value={mediaPath}
+                  onChange={(event) => setMediaPath(event.target.value)}
+                  placeholder="C:\\path\\to\\media.bin"
+                />
+              </HelpTooltip>
             </div>
 
-            <label htmlFor="env-select">Environment</label>
+            <div className="label-with-help">
+              <label htmlFor="env-select">Environment</label>
+              <HelpTooltip
+                variant="popover"
+                iconLabel="How environment selection works"
+                title="Environment"
+                side="bottom"
+                content={
+                  <>
+                    <p>`TEST` is simulation-only and safest for validation.</p>
+                    <p>`STAGING` and `PRODUCTION` keep the same planning pipeline but are intended for real integrations later.</p>
+                  </>
+                }
+              />
+            </div>
             <div className="form-row single">
-              <select
-                id="env-select"
-                data-testid="env-select"
-                value={env}
-                onChange={(event) => setEnv(event.target.value as AppEnv)}
-              >
-                <option value="TEST">TEST</option>
-                <option value="STAGING">STAGING</option>
-                <option value="PRODUCTION">PRODUCTION</option>
-              </select>
+              <HelpTooltip content="Selects which execution environment label is sent to the Rust pipeline." side="bottom">
+                <select
+                  id="env-select"
+                  data-testid="env-select"
+                  value={env}
+                  onChange={(event) => setEnv(event.target.value as AppEnv)}
+                >
+                  <option value="TEST">TEST</option>
+                  <option value="STAGING">STAGING</option>
+                  <option value="PRODUCTION">PRODUCTION</option>
+                </select>
+              </HelpTooltip>
             </div>
 
             <fieldset className="platform-fieldset">
-              <legend>Platforms</legend>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  data-testid="platform-mock-checkbox"
-                  checked={mockSelected}
-                  onChange={(event) => setMockSelected(event.target.checked)}
-                />
-                Mock connector (safe simulation)
-              </label>
+              <legend>
+                <span className="legend-with-help">
+                  <span>Platforms</span>
+                  <HelpTooltip content="Choose which publishers the plan/execute pipeline will target." side="bottom" />
+                </span>
+              </legend>
+              <HelpTooltip content="Enables the mock publisher only. This is a safe simulated connector for offline testing." side="bottom">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    data-testid="platform-mock-checkbox"
+                    checked={mockSelected}
+                    onChange={(event) => setMockSelected(event.target.checked)}
+                  />
+                  Mock connector (safe simulation)
+                </label>
+              </HelpTooltip>
             </fieldset>
 
             <div className="action-row">
-              <button type="button" data-testid="load-spec-button" onClick={onLoadSpec} disabled={loadingSpec || planning || executing}>
-                {loadingSpec ? "Loading Spec..." : "Load Spec"}
-              </button>
-              <button type="submit" data-testid="validate-plan-button" disabled={planning || executing}>
-                {planning ? "Planning..." : "Plan / Preview"}
-              </button>
-              <button type="button" data-testid="execute-button" onClick={() => void onExecute()} disabled={executing || !planResult?.release_id}>
-                {executing ? "Executing..." : "Execute"}
-              </button>
+              <HelpTooltip content="Loads the YAML release spec and shows validation results.">
+                <button type="button" data-testid="load-spec-button" onClick={onLoadSpec} disabled={loadingSpec || planning || executing}>
+                  {loadingSpec ? "Loading Spec..." : "Load Spec"}
+                </button>
+              </HelpTooltip>
+
+              <span className="help-action-group">
+                <HelpTooltip content="Builds a safe preview of platform actions before any execute step.">
+                  <button type="submit" data-testid="validate-plan-button" disabled={planning || executing}>
+                    {planning ? "Planning..." : "Plan / Preview"}
+                  </button>
+                </HelpTooltip>
+                <HelpTooltip
+                  variant="popover"
+                  iconLabel="How Plan / Preview works"
+                  title="Plan / Preview"
+                  content={
+                    <>
+                      <p>
+                        Parses and normalizes the release spec, reads the local media file, and asks the Rust core to derive a deterministic
+                        BLAKE3-based release identity.
+                      </p>
+                      <p>
+                        Persists release and platform plan rows in SQLite (WAL mode), writes planned request artifacts, and prepares the QC step
+                        without publishing anything.
+                      </p>
+                    </>
+                  }
+                />
+              </span>
+
+              <span className="help-action-group">
+                <HelpTooltip content="Runs the planned pipeline using the currently approved QC result.">
+                  <button
+                    type="button"
+                    data-testid="execute-button"
+                    onClick={() => void onExecute()}
+                    disabled={executing || !planResult?.release_id || !qcApprovedAndReadyForExecuteCurrentPlan}
+                  >
+                    {executing ? "Executing..." : "Execute"}
+                  </button>
+                </HelpTooltip>
+                <HelpTooltip
+                  variant="popover"
+                  iconLabel="How Execute works"
+                  title="Execute"
+                  content={
+                    <>
+                      <p>
+                        Loads the persisted plan descriptor, acquires a release run lock, and advances the deterministic state machine through the
+                        execute/verify pipeline in Rust.
+                      </p>
+                      <p>
+                        In TEST mode, actions remain simulation-only (MockTransport). Audit logs, platform status, and report artifacts are saved
+                        locally, with SQLite writes committed through WAL.
+                      </p>
+                    </>
+                  }
+                />
+              </span>
             </div>
           </form>
 
@@ -473,6 +1004,20 @@ export default function App() {
           <div className="helper-text" data-testid="plan-summary">
             Planned release: {planResult?.release_id ?? "none"} | actions: {planResult?.planned_actions.length ?? 0} | history: {historyRows.length}
           </div>
+          <div className="helper-text" data-testid="execute-gate-hint">
+            Execute gate:{" "}
+            {!planResult?.release_id
+              ? "Plan a release to enable Execute."
+              : loadingQcAnalysis
+                ? "QC analysis is running. Execute is temporarily locked."
+              : !qcAnalysis || qcAnalysis.release.id !== planResult.release_id
+                ? "Analyze the planned audio in Verify / QC."
+                : !isValidQcTrackForApproval(qcAnalysis.track)
+                  ? "QC analysis is invalid or incomplete. Re-run Verify / QC."
+                : !qcApprovedForCurrentPlan
+                  ? "Click Approve for Release in Verify / QC."
+                  : "QC approved. Execute is enabled."}
+          </div>
         </div>
 
         <div>
@@ -481,13 +1026,20 @@ export default function App() {
             <li>TEST mode is simulation-only in Rust core.</li>
             <li>Per-run caps are enforced in core and tested.</li>
             <li>Idempotent reruns reuse the same release_id.</li>
+            <li>Manual QC approval gates the current planned Execute action.</li>
           </ul>
           <div className="mini-card"><strong>Selected ENV:</strong> <span data-testid="env-display">{env}</span></div>
           <div className="mini-card"><strong>Selected platforms:</strong> <span data-testid="selected-platforms">{selectedPlatforms.join(", ") || "none"}</span></div>
+          <div className="mini-card">
+            <strong>QC approval:</strong>{" "}
+            <span data-testid="qc-gate-status">
+              {qcApprovalForCurrentPlan ? `approved at ${qcApprovalForCurrentPlan.approved_at}` : "pending"}
+            </span>
+          </div>
         </div>
       </section>
 
-      <section className="panel" aria-labelledby="plan-preview-heading">
+      <section hidden={activeScreen !== "Plan / Preview"} className="panel" aria-labelledby="plan-preview-heading">
         <h2 id="plan-preview-heading">Plan / Preview</h2>
         <div className="grid">
           <div>
@@ -533,7 +1085,173 @@ export default function App() {
         </div>
       </section>
 
-      <section className="panel" aria-labelledby="execute-heading">
+      <section hidden={activeScreen !== "Verify / QC"} className="panel" aria-labelledby="qc-heading">
+        <h2 id="qc-heading">Verify / QC</h2>
+        <div className="qc-layout">
+          <div className="qc-actions-card">
+            <div className="qc-header-row">
+              <div>
+                <h3>Audio Analysis</h3>
+                <p className="helper-text">
+                  Native Rust analysis precomputes waveform peaks and loudness so visual seeking stays responsive.
+                </p>
+              </div>
+              <div className="action-row qc-action-row">
+                <span className="help-action-group">
+                  <HelpTooltip content="Runs QC analysis on the current audio file and stores the results locally.">
+                    <button
+                      type="button"
+                      data-testid="analyze-qc-button"
+                      onClick={onAnalyzeQc}
+                      disabled={loadingQcAnalysis || planning || executing || !planResult?.release_id}
+                    >
+                      {loadingQcAnalysis ? "Analyzing..." : "Analyze & Persist QC"}
+                    </button>
+                  </HelpTooltip>
+                  <HelpTooltip
+                    variant="popover"
+                    iconLabel="How Verify / QC analysis works"
+                    title="Verify / QC"
+                    content={
+                      <>
+                        <p>
+                          Decodes the audio natively in Rust (symphonia), calculates integrated loudness (EBU R128 LUFS), and builds a
+                          downsampled dBFS waveform peak array for responsive visual seeking.
+                        </p>
+                        <p>
+                          The QC metrics are validated and stored against the planned release in SQLite so they can be reloaded later without
+                          reanalysis.
+                        </p>
+                      </>
+                    }
+                  />
+                </span>
+                <HelpTooltip content="Loads previously saved QC metrics for the selected release from local history.">
+                  <button
+                    type="button"
+                    data-testid="load-qc-history-button"
+                    onClick={onLoadQcFromSelectedHistory}
+                    disabled={loadingQcLookup || !selectedHistoryReleaseId}
+                  >
+                    {loadingQcLookup ? "Loading QC..." : "Load Saved QC"}
+                  </button>
+                </HelpTooltip>
+              </div>
+            </div>
+
+            {qcAnalysis ? (
+              <>
+                <div className="qc-meta-strip" data-testid="qc-analysis-summary">
+                  <div className="qc-meta-main">
+                    <div className="qc-meta-title">{qcAnalysis.release.title}</div>
+                    <div className="qc-meta-artist">{qcAnalysis.release.artist}</div>
+                    <div className="qc-chip-row">
+                      {(loadedSpec?.spec?.tags ?? []).map((tag) => (
+                        <span className="qc-chip" key={tag}>
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="qc-meta-side">
+                    <div>
+                      <strong>Track Path</strong>
+                      <div>{formatDiagnosticPath(qcAnalysis.track.file_path, revealFullDiagnosticPaths)}</div>
+                    </div>
+                    <div>
+                      <strong>Analysis Updated</strong>
+                      <div>{qcAnalysis.updated_at ?? "session-only"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <QcPlayer
+                  analysis={toQcPlayerAnalysis(qcAnalysis)}
+                  currentTimeSec={qcPlayerCurrentTimeSec}
+                  isPlaying={qcPlayerIsPlaying}
+                  onTogglePlay={onToggleQcPlayback}
+                  onSeek={onSeekQc}
+                  onTimeUpdate={setQcCurrentTimeSec}
+                  onPlay={() => setQcIsPlaying(true)}
+                  onPause={() => setQcIsPlaying(false)}
+                  audioRef={qcAudioRef}
+                  renderAudioElement={!qcUsesSharedTransport}
+                  showPlayToggle={!qcUsesSharedTransport}
+                />
+
+                <div className="qc-approval-card">
+                  <div>
+                    <h3 className="qc-approval-title">Manual Approval Gate</h3>
+                    <p className="helper-text">
+                      Listen, inspect the waveform, then approve to unlock Execute for the currently planned release.
+                    </p>
+                  </div>
+                  <div className="action-row qc-approval-actions">
+                    <span className="help-action-group">
+                      <HelpTooltip content="Unlocks Execute for this planned release after manual QC review.">
+                        <button
+                          type="button"
+                          className={`approve-button${qcApprovedForCurrentPlan ? " approved" : ""}`}
+                          data-testid="approve-release-button"
+                          onClick={onApproveForRelease}
+                          disabled={
+                            !planResult?.release_id ||
+                            qcAnalysis.release.id !== planResult.release_id ||
+                            !isValidQcTrackForApproval(qcAnalysis.track) ||
+                            loadingQcAnalysis
+                          }
+                        >
+                          {qcApprovedForCurrentPlan ? "Approved for Release" : "Approve for Release"}
+                        </button>
+                      </HelpTooltip>
+                      <HelpTooltip
+                        variant="popover"
+                        iconLabel="How Approve for Release works"
+                        title="Approve for Release"
+                        content={
+                          <>
+                            <p>
+                              Records a local manual approval gate for the currently planned release after waveform inspection and listening.
+                            </p>
+                            <p>
+                              This action does not publish anything. It only enables the Execute button in the UI for the matching planned
+                              release_id.
+                            </p>
+                          </>
+                        }
+                      />
+                    </span>
+                    <HelpTooltip content="Removes the local QC approval and re-locks Execute for the current plan.">
+                      <button
+                        type="button"
+                        className="approve-button secondary"
+                        onClick={onClearQcApproval}
+                        disabled={!qcApprovedForCurrentPlan}
+                      >
+                        Clear Approval
+                      </button>
+                    </HelpTooltip>
+                  </div>
+                  {!isValidQcTrackForApproval(qcAnalysis.track) ? (
+                    <p className="error-text" role="alert" data-testid="qc-analysis-invalid">
+                      QC analysis is invalid or incomplete. Re-run audio analysis before approving.
+                    </p>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="qc-empty" data-testid="qc-analysis-summary">
+                <p>No QC analysis loaded.</p>
+                <p className="helper-text">
+                  Plan a release and run audio analysis to display waveform peaks, LUFS, and playback controls.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section hidden={activeScreen !== "Execute"} className="panel" aria-labelledby="execute-heading">
         <h2 id="execute-heading">Execute</h2>
         <div className="grid">
           <div className="mini-card" data-testid="execute-result">
@@ -558,18 +1276,24 @@ export default function App() {
         </div>
       </section>
 
-      <section className="panel" aria-labelledby="history-heading">
+      <section hidden={activeScreen !== "Report / History"} className="panel" aria-labelledby="history-heading">
         <h2 id="history-heading">Report / History</h2>
         <div className="action-row">
-          <button type="button" data-testid="refresh-history-button" onClick={onRefreshHistory} disabled={refreshingHistory}>
-            {refreshingHistory ? "Refreshing..." : "Refresh History"}
-          </button>
-          <button type="button" data-testid="open-report-button" onClick={onOpenReport} disabled={loadingReport || !selectedHistoryReleaseId}>
-            {loadingReport ? "Loading Report..." : "Open Report"}
-          </button>
-          <button type="button" data-testid="resume-release-button" onClick={onResume} disabled={executing || !selectedHistoryReleaseId}>
-            Resume
-          </button>
+          <HelpTooltip content="Reloads the release history list from local SQLite storage.">
+            <button type="button" data-testid="refresh-history-button" onClick={onRefreshHistory} disabled={refreshingHistory}>
+              {refreshingHistory ? "Refreshing..." : "Refresh History"}
+            </button>
+          </HelpTooltip>
+          <HelpTooltip content="Loads the saved report artifact for the currently selected release." side="bottom">
+            <button type="button" data-testid="open-report-button" onClick={onOpenReport} disabled={loadingReport || !selectedHistoryReleaseId}>
+              {loadingReport ? "Loading Report..." : "Open Report"}
+            </button>
+          </HelpTooltip>
+          <HelpTooltip content="Resumes execution for the selected release using its persisted plan/report state." side="bottom">
+            <button type="button" data-testid="resume-release-button" onClick={onResume} disabled={executing || !selectedHistoryReleaseId}>
+              Resume
+            </button>
+          </HelpTooltip>
         </div>
 
         <div className="grid history-grid">
@@ -579,17 +1303,22 @@ export default function App() {
               {historyRows.length ? (
                 historyRows.map((row) => (
                   <li key={row.release_id}>
-                    <label className="history-row">
-                      <input
-                        type="radio"
-                        name="history-selection"
-                        checked={selectedHistoryReleaseId === row.release_id}
-                        onChange={() => setSelectedHistoryReleaseId(row.release_id)}
-                      />
-                      <span className="history-row-title">{row.title}</span>
-                      <span className="history-row-state">{row.state}</span>
-                      <code className="history-row-id">{row.release_id.slice(0, 12)}</code>
-                    </label>
+                    <HelpTooltip
+                      content="Selects this release for Open Report, Load Saved QC, and Resume actions."
+                      side="bottom"
+                    >
+                      <label className="history-row">
+                        <input
+                          type="radio"
+                          name="history-selection"
+                          checked={selectedHistoryReleaseId === row.release_id}
+                          onChange={() => setSelectedHistoryReleaseId(row.release_id)}
+                        />
+                        <span className="history-row-title">{row.title}</span>
+                        <span className="history-row-state">{row.state}</span>
+                        <code className="history-row-id">{row.release_id.slice(0, 12)}</code>
+                      </label>
+                    </HelpTooltip>
                   </li>
                 ))
               ) : (

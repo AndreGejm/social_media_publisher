@@ -10,6 +10,22 @@ type MockTauriState = {
     summary: string;
     actions: Array<{ platform: string; action: string; simulated: boolean }>;
   } | null;
+  qcByReleaseId: Record<
+    string,
+    {
+      release: {
+        id: string;
+        title: string;
+        artist: string;
+        tracks: Array<{ file_path: string; duration_ms: number; peak_data: number[]; loudness_lufs: number }>;
+      };
+      media_fingerprint: string;
+      sample_rate_hz: number;
+      channels: number;
+      created_at: string;
+      updated_at: string;
+    }
+  >;
 };
 
 type TauriMockOptions = {
@@ -38,8 +54,43 @@ function installTauriMock(options: TauriMockOptions = {}) {
   const state: MockTauriState = {
     plannedReleaseId: null,
     history: [],
-    report: null
+    report: null,
+    qcByReleaseId: {}
   };
+
+  const buildAnalyzeAudioResponse = (filePath: string) => ({
+    canonical_path: filePath.replace(/\\/g, "/"),
+    media_fingerprint: "f".repeat(64),
+    track: {
+      file_path: filePath,
+      duration_ms: 3000,
+      peak_data: [-10, -8, -6, -5, -7, -9],
+      loudness_lufs: -14.2
+    },
+    sample_rate_hz: 44_100,
+    channels: 2
+  });
+
+  const buildPersistedQcResponse = (releaseId: string, filePath: string) => ({
+    release: {
+      id: releaseId,
+      title: "Test Track",
+      artist: "Example Artist",
+      tracks: [
+        {
+          file_path: filePath,
+          duration_ms: 3000,
+          peak_data: [-10, -8, -6, -5, -7, -9],
+          loudness_lufs: -14.2
+        }
+      ]
+    },
+    media_fingerprint: "f".repeat(64),
+    sample_rate_hz: 44_100,
+    channels: 2,
+    created_at: "2026-02-26T12:00:00Z",
+    updated_at: "2026-02-26T12:00:01Z"
+  });
 
   const invokeMock = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
     switch (command) {
@@ -105,6 +156,21 @@ function installTauriMock(options: TauriMockOptions = {}) {
         return state.history;
       case "get_report":
         return state.report;
+      case "analyze_audio_file": {
+        const path = (args as { path?: string } | undefined)?.path ?? "C:\\fixtures\\test.wav";
+        return buildAnalyzeAudioResponse(path);
+      }
+      case "analyze_and_persist_release_track": {
+        const releaseId = (args as { releaseId?: string } | undefined)?.releaseId ?? state.plannedReleaseId ?? "unknown";
+        const path = (args as { path?: string } | undefined)?.path ?? "C:\\fixtures\\test.wav";
+        const persisted = buildPersistedQcResponse(releaseId, path);
+        state.qcByReleaseId[releaseId] = persisted;
+        return persisted;
+      }
+      case "get_release_track_analysis": {
+        const releaseId = (args as { releaseId?: string } | undefined)?.releaseId ?? "";
+        return state.qcByReleaseId[releaseId] ?? null;
+      }
       default:
         throw {
           code: "UNKNOWN_COMMAND",
@@ -176,6 +242,20 @@ describe("App", () => {
       expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
     });
     expect(screen.getByTestId("planned-actions-list")).toHaveTextContent("mock: mock.plan");
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("Analyze the planned audio in Verify / QC.");
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+      expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("Click Approve for Release in Verify / QC.");
+    });
+
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
+      expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("QC approved. Execute is enabled.");
+    });
 
     fireEvent.click(screen.getByTestId("execute-button"));
     await waitFor(() => {
@@ -184,6 +264,35 @@ describe("App", () => {
     expect(screen.getByTestId("history-list")).toHaveTextContent("COMMITTED");
     expect(screen.getByTestId("report-summary")).toHaveTextContent("COMMITTED");
     expect(screen.getByTestId("report-actions-list")).toHaveTextContent("VERIFIED (simulated)");
+  });
+
+  it("requires QC analysis and manual approval before enabling execute for the planned release", async () => {
+    installTauriMock();
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+    });
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("pending");
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+      expect(screen.getByTestId("qc-lufs")).toHaveTextContent("LUFS");
+      expect(screen.getByTestId("qc-peak")).toHaveTextContent("dBFS");
+    });
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
+      expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("approved at");
+    });
   });
 
   it("redacts absolute diagnostic paths in the UI by default", async () => {
@@ -209,6 +318,15 @@ describe("App", () => {
       expect(screen.getByTestId("planned-request-files")).toHaveTextContent("[local]/.../planned_requests/mock.json");
     });
     expect(screen.getByTestId("planned-request-files")).not.toHaveTextContent("C:/Users/alice/AppData");
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
+    });
 
     fireEvent.click(screen.getByTestId("execute-button"));
     await waitFor(() => {
@@ -242,6 +360,15 @@ describe("App", () => {
       expect(screen.getByTestId("planned-request-files")).toHaveTextContent(
         "C:/Users/alice/AppData/Local/ReleasePublisher/artifacts/planned_requests/mock.json"
       );
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
     });
 
     fireEvent.click(screen.getByTestId("execute-button"));
@@ -368,6 +495,29 @@ describe("App", () => {
             errors: [],
             canonical_path: "C:/fixtures/spec.yaml"
           };
+        case "analyze_and_persist_release_track":
+          return {
+            release: {
+              id: releaseId,
+              title: "Test Track",
+              artist: "Example Artist",
+              tracks: [
+                {
+                  file_path: "C:\\media.bin",
+                  duration_ms: 3000,
+                  peak_data: [-10, -8, -6, -5],
+                  loudness_lufs: -14.2
+                }
+              ]
+            },
+            media_fingerprint: "f".repeat(64),
+            sample_rate_hz: 44_100,
+            channels: 2,
+            created_at: "2026-02-26T12:00:00Z",
+            updated_at: "2026-02-26T12:00:01Z"
+          };
+        case "get_release_track_analysis":
+          return null;
         default:
           throw { code: "UNEXPECTED", message: `unhandled command ${command}` };
       }
@@ -390,6 +540,15 @@ describe("App", () => {
     });
     await waitFor(() => {
       expect(listHistoryCalls).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
     });
 
     fireEvent.click(screen.getByTestId("execute-button"));
@@ -480,6 +639,27 @@ describe("App", () => {
             message: "Execution completed (TEST mode remains simulation-only).",
             report_path: "artifacts/release_report.json"
           };
+        case "analyze_and_persist_release_track":
+          return {
+            release: {
+              id: releaseId,
+              title: "Report Race Track",
+              artist: "Example Artist",
+              tracks: [
+                {
+                  file_path: "C:\\media.bin",
+                  duration_ms: 3200,
+                  peak_data: [-12, -9, -7, -6],
+                  loudness_lufs: -13.8
+                }
+              ]
+            },
+            media_fingerprint: "e".repeat(64),
+            sample_rate_hz: 44_100,
+            channels: 2,
+            created_at: "2026-02-26T12:10:00Z",
+            updated_at: "2026-02-26T12:10:01Z"
+          };
         case "get_report": {
           const deferred = createDeferred<{
             release_id: string;
@@ -489,6 +669,8 @@ describe("App", () => {
           getReportCalls.push(deferred);
           return deferred.promise;
         }
+        case "get_release_track_analysis":
+          return null;
         default:
           throw { code: "UNEXPECTED", message: `unhandled command ${command}` };
       }
@@ -512,6 +694,15 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByTestId("history-list")).toHaveTextContent("Report Race Track");
       expect(screen.getByTestId("open-report-button")).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Report Race Track");
+    });
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
     });
 
     fireEvent.click(screen.getByTestId("open-report-button"));
@@ -551,5 +742,299 @@ describe("App", () => {
       expect(screen.getByTestId("report-summary")).not.toHaveTextContent("Stale report summary");
       expect(screen.getByTestId("report-actions-list")).not.toHaveTextContent("STALE");
     });
+  });
+
+  it("gracefully rejects malformed QC payloads and keeps the approval gate locked", async () => {
+    installTauriMock();
+    const originalInvoke = window.__TAURI__?.core?.invoke;
+    if (!originalInvoke) throw new Error("tauri mock invoke missing");
+
+    window.__TAURI__ = {
+      core: {
+        invoke: (async (command: string, args?: Record<string, unknown>) => {
+          if (command === "analyze_and_persist_release_track") {
+            const releaseId = (args as { releaseId?: string } | undefined)?.releaseId ?? "a".repeat(64);
+            const path = (args as { path?: string } | undefined)?.path ?? "C:\\media.bin";
+            return {
+              release: {
+                id: releaseId,
+                title: "Test Track",
+                artist: "Example Artist",
+                tracks: [{ file_path: path, duration_ms: 3000, peak_data: [], loudness_lufs: -14.2 }]
+              },
+              media_fingerprint: "f".repeat(64),
+              sample_rate_hz: 44_100,
+              channels: 2,
+              created_at: "2026-02-26T12:00:00Z",
+              updated_at: "2026-02-26T12:00:01Z"
+            };
+          }
+          if (command === "analyze_audio_file") {
+            const path = (args as { path?: string } | undefined)?.path ?? "C:\\media.bin";
+            return {
+              canonical_path: path.replace(/\\/g, "/"),
+              media_fingerprint: "f".repeat(64),
+              track: {
+                file_path: path,
+                duration_ms: 3000,
+                peak_data: [],
+                loudness_lufs: -14.2
+              },
+              sample_rate_hz: 44_100,
+              channels: 2
+            };
+          }
+          return originalInvoke(command, args);
+        }) as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("backend-error")).toHaveTextContent("INVALID_QC_PAYLOAD");
+    });
+    expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("No QC analysis loaded.");
+    expect(screen.queryByTestId("approve-release-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("pending");
+    expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("Analyze the planned audio in Verify / QC.");
+  });
+
+  it("re-locks execute immediately during reanalysis and keeps it locked after QC analysis failure", async () => {
+    installTauriMock();
+    const originalInvoke = window.__TAURI__?.core?.invoke;
+    if (!originalInvoke) throw new Error("tauri mock invoke missing");
+
+    let analyzePersistCalls = 0;
+    const secondAnalyzeDeferred = createDeferred<unknown>();
+    let failFallbackAnalyze = false;
+
+    window.__TAURI__ = {
+      core: {
+        invoke: (async (command: string, args?: Record<string, unknown>) => {
+          if (command === "analyze_and_persist_release_track") {
+            analyzePersistCalls += 1;
+            if (analyzePersistCalls === 2) {
+              return secondAnalyzeDeferred.promise;
+            }
+          }
+          if (command === "analyze_audio_file" && failFallbackAnalyze) {
+            throw { code: "AUDIO_ANALYSIS_FAILED", message: "simulated terminal QC failure" };
+          }
+          return originalInvoke(command, args);
+        }) as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
+      expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("approved at");
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+
+    await waitFor(() => {
+      expect(analyzePersistCalls).toBe(2);
+      expect(screen.getByTestId("analyze-qc-button")).toHaveTextContent("Analyzing...");
+    });
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("pending");
+    expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("QC analysis is running. Execute is temporarily locked.");
+
+    failFallbackAnalyze = true;
+    await act(async () => {
+      secondAnalyzeDeferred.reject({ code: "AUDIO_ANALYSIS_FAILED", message: "simulated terminal QC failure" });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("backend-error")).toHaveTextContent("AUDIO_ANALYSIS_FAILED");
+    });
+    expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("No QC analysis loaded.");
+    expect(screen.queryByTestId("approve-release-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("pending");
+  });
+
+  it("preserves both persisted and fallback QC analysis errors in debug details", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    window.__RELEASE_PUBLISHER_DEBUG_ERROR_DETAILS__ = true;
+    installTauriMock();
+    const originalInvoke = window.__TAURI__?.core?.invoke;
+    if (!originalInvoke) throw new Error("tauri mock invoke missing");
+
+    window.__TAURI__ = {
+      core: {
+        invoke: (async (command: string, args?: Record<string, unknown>) => {
+          if (command === "analyze_and_persist_release_track") {
+            throw {
+              code: "UNKNOWN_COMMAND",
+              message: "persisting QC command is unavailable"
+            };
+          }
+          if (command === "analyze_audio_file") {
+            throw {
+              code: "AUDIO_ANALYSIS_FAILED",
+              message: "decoder rejected hostile input",
+              details: { path: "C:\\media.bin" }
+            };
+          }
+          return originalInvoke(command, args);
+        }) as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+
+    expect(await screen.findByTestId("backend-error")).toHaveTextContent("AUDIO_ANALYSIS_FAILED");
+    expect(errorSpy).toHaveBeenCalledWith("release-publisher.error.details", {
+      strategy: "persist_then_fallback",
+      persisted_attempt: {
+        code: "UNKNOWN_COMMAND",
+        message: "persisting QC command is unavailable"
+      },
+      fallback_attempt: {
+        code: "AUDIO_ANALYSIS_FAILED",
+        message: "decoder rejected hostile input",
+        details: { path: "C:\\media.bin" }
+      }
+    });
+
+    errorSpy.mockRestore();
+  });
+
+  it("clears stale QC state when loading persisted QC returns a malformed payload", async () => {
+    installTauriMock();
+    const originalInvoke = window.__TAURI__?.core?.invoke;
+    if (!originalInvoke) throw new Error("tauri mock invoke missing");
+
+    let corruptSavedQc = false;
+    window.__TAURI__ = {
+      core: {
+        invoke: (async (command: string, args?: Record<string, unknown>) => {
+          if (command === "get_release_track_analysis" && corruptSavedQc) {
+            const releaseId = (args as { releaseId?: string } | undefined)?.releaseId ?? "a".repeat(64);
+            return {
+              release: {
+                id: releaseId,
+                title: "Test Track",
+                artist: "Example Artist",
+                tracks: [{ file_path: "C:\\media.bin", duration_ms: 3000, peak_data: [], loudness_lufs: -14.2 }]
+              },
+              media_fingerprint: "f".repeat(64),
+              sample_rate_hz: 44_100,
+              channels: 2,
+              created_at: "2026-02-26T12:00:00Z",
+              updated_at: "2026-02-26T12:00:01Z"
+            };
+          }
+          return originalInvoke(command, args);
+        }) as unknown as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.bin" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+      expect(screen.getByTestId("load-qc-history-button")).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+    fireEvent.click(screen.getByTestId("approve-release-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("execute-button")).toBeEnabled();
+    });
+
+    corruptSavedQc = true;
+    fireEvent.click(screen.getByTestId("load-qc-history-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("backend-error")).toHaveTextContent("INVALID_QC_PAYLOAD");
+    });
+    expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("No QC analysis loaded.");
+    expect(screen.getByTestId("execute-button")).toBeDisabled();
+    expect(screen.getByTestId("qc-gate-status")).toHaveTextContent("approved at");
+    expect(screen.getByTestId("execute-gate-hint")).toHaveTextContent("Analyze the planned audio in Verify / QC.");
+  });
+
+  it("uses the shared transport bridge for QC playback when provided", async () => {
+    installTauriMock();
+    const sharedTransport = {
+      state: {
+        sourceKey: null as string | null,
+        currentTimeSec: 0,
+        isPlaying: false
+      },
+      ensureSource: vi.fn((source: { sourceKey: string }) => {
+        sharedTransport.state.sourceKey = source.sourceKey;
+      }),
+      seekToRatio: vi.fn()
+    };
+
+    render(<App sharedTransport={sharedTransport} />);
+
+    fireEvent.change(screen.getByTestId("spec-path-input"), { target: { value: "C:\\spec.yaml" } });
+    fireEvent.change(screen.getByTestId("media-path-input"), { target: { value: "C:\\media.wav" } });
+    fireEvent.click(screen.getByTestId("validate-plan-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plan-summary")).toHaveTextContent("actions: 1");
+    });
+
+    fireEvent.click(screen.getByTestId("analyze-qc-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("qc-analysis-summary")).toHaveTextContent("Test Track");
+    });
+
+    expect(sharedTransport.ensureSource).toHaveBeenCalled();
+    expect(screen.queryByTestId("qc-play-toggle")).not.toBeInTheDocument();
+    expect(screen.getByText("Playback is controlled by the global transport.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("qc-seek-range"), { target: { value: "250" } });
+    expect(sharedTransport.seekToRatio).toHaveBeenCalled();
   });
 });

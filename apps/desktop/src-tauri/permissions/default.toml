@@ -1,0 +1,24 @@
+# Default app ACL for the desktop renderer.
+# This scopes frontend IPC to the audited Tauri command surface only.
+[default]
+description = "Default app permissions for the desktop publisher UI."
+permissions = [
+  "allow-load-spec",
+  "allow-plan-release",
+  "allow-execute-release",
+  "allow-list-history",
+  "allow-get-report",
+  "allow-analyze-audio-file",
+  "allow-analyze-and-persist-release-track",
+  "allow-get-release-track-analysis",
+  "allow-catalog-import-files",
+  "allow-catalog-list-tracks",
+  "allow-catalog-get-track",
+  "allow-publisher-create-draft-from-track",
+  "allow-catalog-update-track-metadata",
+  "allow-catalog-add-library-root",
+  "allow-catalog-list-library-roots",
+  "allow-catalog-remove-library-root",
+  "allow-catalog-scan-root",
+  "allow-catalog-get-ingest-job",
+]

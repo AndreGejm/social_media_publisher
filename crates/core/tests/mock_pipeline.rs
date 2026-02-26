@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use release_publisher_core::idempotency::try_build_idempotency_keys;
 use release_publisher_core::orchestrator::{Orchestrator, OrchestratorError, RunReleaseInput};
 use release_publisher_core::pipeline::{
     ExecuteContext, ExecutionEnvironment, ExecutionResult, ExecutionStatus, PlanContext,
@@ -6,12 +7,13 @@ use release_publisher_core::pipeline::{
 };
 use release_publisher_core::spec::parse_release_spec_yaml;
 use release_publisher_db::{
-    Db, DbConfig, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
+    Db, DbConfig, NewReleaseRecord, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
 };
 use release_publisher_mock_connector::MockPublisher;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
+use tokio::sync::oneshot;
 
 fn sqlite_file_url(db_path: &std::path::Path) -> String {
     let mut normalized = db_path.to_string_lossy().replace('\\', "/");
@@ -39,6 +41,14 @@ async fn file_backed_db(db_path: &std::path::Path) -> Db {
     let mut cfg = DbConfig::sqlite(url);
     cfg.max_connections = 1;
     Db::connect(&cfg).await.expect("db connect")
+}
+
+async fn set_sqlite_busy_timeout_ms(db: &Db, timeout_ms: i64) {
+    assert!(timeout_ms >= 0, "busy_timeout must be non-negative");
+    sqlx::query(&format!("PRAGMA busy_timeout = {timeout_ms};"))
+        .execute(db.pool())
+        .await
+        .expect("set sqlite busy_timeout");
 }
 
 fn sample_spec() -> release_publisher_core::spec::ReleaseSpec {
@@ -160,6 +170,77 @@ async fn mock_pipeline_runs_end_to_end_and_is_idempotent_on_rerun() {
         second.report.platforms[0].reused_completed_result,
         "idempotent rerun should report reused completed results"
     );
+}
+
+#[tokio::test]
+async fn orchestrator_retries_busy_locked_write_during_run_release() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("phase2-busy-retry.sqlite");
+
+    let orchestrator_db = file_backed_db(&db_path).await;
+    let lock_holder_db = file_backed_db(&db_path).await;
+    set_sqlite_busy_timeout_ms(&orchestrator_db, 1).await;
+    set_sqlite_busy_timeout_ms(&lock_holder_db, 1).await;
+
+    let orchestrator = Orchestrator::with_publishers(
+        orchestrator_db.clone(),
+        vec![Arc::new(MockPublisher) as Arc<dyn release_publisher_core::pipeline::Publisher>],
+    )
+    .expect("orchestrator");
+
+    let (lock_held_tx, lock_held_rx) = oneshot::channel::<()>();
+    let (release_lock_tx, release_lock_rx) = oneshot::channel::<()>();
+    let holder = tokio::spawn(async move {
+        let mut tx = lock_holder_db.begin_tx().await.expect("holder begin tx");
+        tx.upsert_release(&NewReleaseRecord {
+            release_id: "lock-holder".to_string(),
+            title: "Lock Holder".to_string(),
+            state: ReleaseState::Validated,
+            spec_hash: "1".repeat(64),
+            media_fingerprint: "2".repeat(64),
+            normalized_spec_json: "{\"title\":\"Lock Holder\"}".to_string(),
+        })
+        .await
+        .expect("holder write");
+        let _ = lock_held_tx.send(());
+        let _ = release_lock_rx.await;
+        tx.commit().await.expect("holder commit");
+    });
+
+    lock_held_rx.await.expect("wait for lock holder");
+
+    let releaser = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let _ = release_lock_tx.send(());
+    });
+
+    let spec = sample_spec();
+    let media_bytes = b"phase2-lock-contention-media".to_vec();
+    let artifacts_root = dir.path().join("artifacts");
+    let run = tokio::time::timeout(
+        Duration::from_secs(5),
+        orchestrator.run_release(RunReleaseInput::new(
+            spec,
+            media_bytes,
+            ExecutionEnvironment::Test,
+            vec!["mock".to_string()],
+            &artifacts_root,
+        )),
+    )
+    .await
+    .expect("run_release timeout")
+    .expect("orchestrator should recover from BusyLocked");
+
+    assert_eq!(run.report.state, "COMMITTED");
+    assert_eq!(run.report.platforms.len(), 1);
+    assert_eq!(run.report.platforms[0].platform, "mock");
+    assert_eq!(
+        run.report.platforms[0].status,
+        PlatformActionStatus::Verified.as_str()
+    );
+
+    releaser.await.expect("releaser join");
+    holder.await.expect("holder join");
 }
 
 #[tokio::test]
@@ -307,6 +388,122 @@ impl Publisher for TestPublisher {
     }
 }
 
+#[derive(Clone)]
+struct ExecuteFailGatePublisher {
+    execute_called_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    resume_execute_rx: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+#[async_trait]
+impl Publisher for ExecuteFailGatePublisher {
+    fn platform_name(&self) -> &'static str {
+        "failgate"
+    }
+
+    async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+        Ok(vec![PlannedAction {
+            platform: "failgate".to_string(),
+            action: "plan fail after gate".to_string(),
+            action_type: PlannedActionType::Publish,
+            simulated: true,
+        }])
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &ExecuteContext,
+        _plan: &[PlannedAction],
+    ) -> anyhow::Result<Vec<ExecutionResult>> {
+        if let Some(sender) = self
+            .execute_called_tx
+            .lock()
+            .expect("poisoned execute_called_tx")
+            .take()
+        {
+            let _ = sender.send(());
+        }
+
+        let receiver = self
+            .resume_execute_rx
+            .lock()
+            .expect("poisoned resume_execute_rx")
+            .take();
+        if let Some(receiver) = receiver {
+            let _ = receiver.await;
+        }
+
+        anyhow::bail!("injected execute failure after gate");
+    }
+
+    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+        unreachable!("verify should not run when execute fails")
+    }
+}
+
+#[derive(Clone)]
+struct VerifyGatePublisher {
+    verify_called_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    resume_verify_rx: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+#[async_trait]
+impl Publisher for VerifyGatePublisher {
+    fn platform_name(&self) -> &'static str {
+        "gate"
+    }
+
+    async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+        Ok(vec![PlannedAction {
+            platform: "gate".to_string(),
+            action: "plan gated".to_string(),
+            action_type: PlannedActionType::Publish,
+            simulated: true,
+        }])
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &ExecuteContext,
+        plan: &[PlannedAction],
+    ) -> anyhow::Result<Vec<ExecutionResult>> {
+        Ok(plan
+            .iter()
+            .map(|p| ExecutionResult {
+                platform: p.platform.clone(),
+                external_id: Some("gate-id".to_string()),
+                status: ExecutionStatus::Simulated,
+                simulated: true,
+            })
+            .collect())
+    }
+
+    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+        if let Some(sender) = self
+            .verify_called_tx
+            .lock()
+            .expect("poisoned verify_called_tx")
+            .take()
+        {
+            let _ = sender.send(());
+        }
+
+        let receiver = self
+            .resume_verify_rx
+            .lock()
+            .expect("poisoned resume_verify_rx")
+            .take();
+        if let Some(receiver) = receiver {
+            let _ = receiver.await;
+        }
+
+        Ok(vec![VerificationResult {
+            platform: "gate".to_string(),
+            verified: true,
+            message: "ok".to_string(),
+        }])
+    }
+}
+
 #[tokio::test]
 async fn partial_failure_resume_skips_completed_platform_and_retries_only_failed_one() {
     let dir = tempdir().expect("tempdir");
@@ -420,6 +617,190 @@ async fn partial_failure_resume_skips_completed_platform_and_retries_only_failed
         .unwrap();
     assert_eq!(alpha_row.attempt_count, 1);
     assert_eq!(beta_row.attempt_count, 2);
+}
+
+#[tokio::test]
+async fn orchestrator_retries_busy_locked_during_verify_transaction() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("phase2-verify-tx-busy.sqlite");
+
+    let orchestrator_db = file_backed_db(&db_path).await;
+    let lock_holder_db = file_backed_db(&db_path).await;
+    set_sqlite_busy_timeout_ms(&orchestrator_db, 1).await;
+    set_sqlite_busy_timeout_ms(&lock_holder_db, 1).await;
+
+    let (verify_called_tx, verify_called_rx) = oneshot::channel::<()>();
+    let (resume_verify_tx, resume_verify_rx) = oneshot::channel::<()>();
+    let publisher = Arc::new(VerifyGatePublisher {
+        verify_called_tx: Arc::new(Mutex::new(Some(verify_called_tx))),
+        resume_verify_rx: Arc::new(Mutex::new(Some(resume_verify_rx))),
+    }) as Arc<dyn Publisher>;
+
+    let orchestrator = Orchestrator::with_publishers(orchestrator_db.clone(), vec![publisher])
+        .expect("orchestrator");
+    let artifacts_root = dir.path().join("artifacts");
+
+    let run_task = tokio::spawn(async move {
+        orchestrator
+            .run_release(RunReleaseInput::new(
+                sample_spec(),
+                b"phase2-verify-lock-media".to_vec(),
+                ExecutionEnvironment::Test,
+                vec!["gate".to_string()],
+                artifacts_root,
+            ))
+            .await
+    });
+
+    verify_called_rx.await.expect("verify should be reached");
+
+    let (lock_held_tx, lock_held_rx) = oneshot::channel::<()>();
+    let (release_lock_tx, release_lock_rx) = oneshot::channel::<()>();
+    let holder_task = tokio::spawn(async move {
+        let mut tx = lock_holder_db.begin_tx().await.expect("holder begin tx");
+        tx.upsert_release(&NewReleaseRecord {
+            release_id: "verify-lock-holder".to_string(),
+            title: "Verify Lock Holder".to_string(),
+            state: ReleaseState::Validated,
+            spec_hash: "3".repeat(64),
+            media_fingerprint: "4".repeat(64),
+            normalized_spec_json: "{\"title\":\"Verify Lock Holder\"}".to_string(),
+        })
+        .await
+        .expect("holder write");
+        let _ = lock_held_tx.send(());
+        let _ = release_lock_rx.await;
+        tx.commit().await.expect("holder commit");
+    });
+
+    lock_held_rx.await.expect("holder lock acquired");
+    let _ = resume_verify_tx.send(());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let _ = release_lock_tx.send(());
+
+    let output = tokio::time::timeout(Duration::from_secs(5), run_task)
+        .await
+        .expect("run task timeout")
+        .expect("join run task")
+        .expect("orchestrator should recover from verify-tx BusyLocked");
+
+    holder_task.await.expect("holder join");
+
+    assert_eq!(output.report.state, "COMMITTED");
+    assert_eq!(output.report.platforms.len(), 1);
+    assert_eq!(output.report.platforms[0].platform, "gate");
+    assert_eq!(
+        output.report.platforms[0].status,
+        PlatformActionStatus::Verified.as_str()
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_retries_busy_locked_during_mark_platform_failed_transaction() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("phase2-error-tx-busy.sqlite");
+
+    let orchestrator_db = file_backed_db(&db_path).await;
+    let lock_holder_db = file_backed_db(&db_path).await;
+    set_sqlite_busy_timeout_ms(&orchestrator_db, 1).await;
+    set_sqlite_busy_timeout_ms(&lock_holder_db, 1).await;
+
+    let (execute_called_tx, execute_called_rx) = oneshot::channel::<()>();
+    let (resume_execute_tx, resume_execute_rx) = oneshot::channel::<()>();
+    let publisher = Arc::new(ExecuteFailGatePublisher {
+        execute_called_tx: Arc::new(Mutex::new(Some(execute_called_tx))),
+        resume_execute_rx: Arc::new(Mutex::new(Some(resume_execute_rx))),
+    }) as Arc<dyn Publisher>;
+
+    let orchestrator = Orchestrator::with_publishers(orchestrator_db.clone(), vec![publisher])
+        .expect("orchestrator");
+    let artifacts_root = dir.path().join("artifacts");
+    let spec = sample_spec();
+    let media_bytes = b"phase2-error-lock-media".to_vec();
+    let keys = try_build_idempotency_keys(&spec, &media_bytes).expect("build idempotency keys");
+
+    let run_task = tokio::spawn(async move {
+        orchestrator
+            .run_release(RunReleaseInput::new(
+                spec,
+                media_bytes,
+                ExecutionEnvironment::Test,
+                vec!["failgate".to_string()],
+                artifacts_root,
+            ))
+            .await
+    });
+
+    execute_called_rx.await.expect("execute should be reached");
+
+    let (lock_held_tx, lock_held_rx) = oneshot::channel::<()>();
+    let (release_lock_tx, release_lock_rx) = oneshot::channel::<()>();
+    let holder_task = tokio::spawn(async move {
+        let mut tx = lock_holder_db.begin_tx().await.expect("holder begin tx");
+        tx.upsert_release(&NewReleaseRecord {
+            release_id: "error-lock-holder".to_string(),
+            title: "Error Lock Holder".to_string(),
+            state: ReleaseState::Validated,
+            spec_hash: "5".repeat(64),
+            media_fingerprint: "6".repeat(64),
+            normalized_spec_json: "{\"title\":\"Error Lock Holder\"}".to_string(),
+        })
+        .await
+        .expect("holder write");
+        let _ = lock_held_tx.send(());
+        let _ = release_lock_rx.await;
+        tx.commit().await.expect("holder commit");
+    });
+
+    lock_held_rx.await.expect("holder lock acquired");
+    let _ = resume_execute_tx.send(());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let _ = release_lock_tx.send(());
+
+    let err = tokio::time::timeout(Duration::from_secs(5), run_task)
+        .await
+        .expect("run task timeout")
+        .expect("join run task")
+        .expect_err("orchestrator should return execute failure after retrying error tx");
+
+    holder_task.await.expect("holder join");
+
+    match err {
+        OrchestratorError::InvalidReleaseState(message) => {
+            assert!(
+                message.contains("publisher `failgate` execute failed"),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("injected execute failure after gate"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    let release = orchestrator_db
+        .get_release(&keys.release_id)
+        .await
+        .expect("release read")
+        .expect("release row should exist");
+    assert_eq!(release.state, ReleaseState::Failed);
+
+    let action = orchestrator_db
+        .get_platform_action(&keys.release_id, "failgate")
+        .await
+        .expect("platform action read")
+        .expect("platform action row should exist");
+    assert_eq!(action.status, PlatformActionStatus::Failed);
+    assert_eq!(action.attempt_count, 1);
+    assert!(
+        action
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("injected execute failure after gate"),
+        "expected failure message to be persisted"
+    );
 }
 
 #[tokio::test]
