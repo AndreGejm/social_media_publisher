@@ -1,4 +1,5 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { sanitizeUiText } from "./ui-sanitize";
 
 export type UiAppError = { code: string; message: string; details?: unknown };
 
@@ -114,6 +115,62 @@ export type CatalogIngestJobResponse = {
   updated_at: string;
 };
 
+function sanitizeTrackModel(track: TrackModel): TrackModel {
+  return {
+    file_path: sanitizeUiText(track.file_path, 4096),
+    duration_ms: track.duration_ms,
+    peak_data: track.peak_data,
+    loudness_lufs: track.loudness_lufs
+  };
+}
+
+function sanitizeCatalogTrackListItem(item: CatalogTrackListItem): CatalogTrackListItem {
+  return {
+    ...item,
+    title: sanitizeUiText(item.title, 256),
+    artist_name: sanitizeUiText(item.artist_name, 256),
+    album_title: item.album_title == null ? item.album_title : sanitizeUiText(item.album_title, 256),
+    file_path: sanitizeUiText(item.file_path, 4096),
+    media_fingerprint: sanitizeUiText(item.media_fingerprint, 128),
+    updated_at: sanitizeUiText(item.updated_at, 128)
+  };
+}
+
+function sanitizeCatalogTrackDetail(detail: CatalogTrackDetailResponse): CatalogTrackDetailResponse {
+  return {
+    ...detail,
+    title: sanitizeUiText(detail.title, 256),
+    artist_name: sanitizeUiText(detail.artist_name, 256),
+    album_title: detail.album_title == null ? detail.album_title : sanitizeUiText(detail.album_title, 256),
+    file_path: sanitizeUiText(detail.file_path, 4096),
+    media_fingerprint: sanitizeUiText(detail.media_fingerprint, 128),
+    visibility_policy: sanitizeUiText(detail.visibility_policy, 64),
+    license_policy: sanitizeUiText(detail.license_policy, 64),
+    tags: detail.tags.map((tag) => sanitizeUiText(tag, 64)).filter(Boolean),
+    created_at: sanitizeUiText(detail.created_at, 128),
+    updated_at: sanitizeUiText(detail.updated_at, 128),
+    track: sanitizeTrackModel(detail.track)
+  };
+}
+
+function sanitizeImportFailure(item: CatalogImportFailure): CatalogImportFailure {
+  return {
+    path: sanitizeUiText(item.path, 4096),
+    code: sanitizeUiText(item.code, 64),
+    message: sanitizeUiText(item.message, 256)
+  };
+}
+
+function sanitizeLibraryRoot(root: LibraryRootResponse): LibraryRootResponse {
+  return {
+    ...root,
+    root_id: sanitizeUiText(root.root_id, 128),
+    path: sanitizeUiText(root.path, 4096),
+    created_at: sanitizeUiText(root.created_at, 128),
+    updated_at: sanitizeUiText(root.updated_at, 128)
+  };
+}
+
 declare global {
   interface Window {
     __TAURI__?: { core?: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> } };
@@ -152,17 +209,26 @@ export async function invokeCommand<T>(command: string, args?: Record<string, un
 }
 
 export async function catalogImportFiles(paths: string[]): Promise<CatalogImportFilesResponse> {
-  return invokeCommand<CatalogImportFilesResponse>("catalog_import_files", { paths });
+  const response = await invokeCommand<CatalogImportFilesResponse>("catalog_import_files", { paths });
+  return {
+    imported: response.imported.map(sanitizeCatalogTrackListItem),
+    failed: response.failed.map(sanitizeImportFailure)
+  };
 }
 
 export async function catalogListTracks(
   query?: CatalogListTracksInput
 ): Promise<CatalogListTracksResponse> {
-  return invokeCommand<CatalogListTracksResponse>("catalog_list_tracks", { query });
+  const response = await invokeCommand<CatalogListTracksResponse>("catalog_list_tracks", { query });
+  return {
+    ...response,
+    items: response.items.map(sanitizeCatalogTrackListItem)
+  };
 }
 
 export async function catalogGetTrack(trackId: string): Promise<CatalogTrackDetailResponse | null> {
-  return invokeCommand<CatalogTrackDetailResponse | null>("catalog_get_track", { trackId });
+  const response = await invokeCommand<CatalogTrackDetailResponse | null>("catalog_get_track", { trackId });
+  return response ? sanitizeCatalogTrackDetail(response) : null;
 }
 
 export async function publisherCreateDraftFromTrack(
@@ -176,15 +242,18 @@ export async function publisherCreateDraftFromTrack(
 export async function catalogUpdateTrackMetadata(
   input: CatalogUpdateTrackMetadataInput
 ): Promise<CatalogTrackDetailResponse> {
-  return invokeCommand<CatalogTrackDetailResponse>("catalog_update_track_metadata", { input });
+  const response = await invokeCommand<CatalogTrackDetailResponse>("catalog_update_track_metadata", { input });
+  return sanitizeCatalogTrackDetail(response);
 }
 
 export async function catalogAddLibraryRoot(path: string): Promise<LibraryRootResponse> {
-  return invokeCommand<LibraryRootResponse>("catalog_add_library_root", { path });
+  const response = await invokeCommand<LibraryRootResponse>("catalog_add_library_root", { path });
+  return sanitizeLibraryRoot(response);
 }
 
 export async function catalogListLibraryRoots(): Promise<LibraryRootResponse[]> {
-  return invokeCommand<LibraryRootResponse[]>("catalog_list_library_roots");
+  const response = await invokeCommand<LibraryRootResponse[]>("catalog_list_library_roots");
+  return response.map(sanitizeLibraryRoot);
 }
 
 export async function catalogRemoveLibraryRoot(rootId: string): Promise<boolean> {

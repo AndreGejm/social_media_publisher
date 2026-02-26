@@ -43,4 +43,28 @@ describe("QcPlayer", () => {
     expect(screen.getByTestId("qc-peak")).toHaveTextContent("n/a");
     expect(screen.getByTestId("qc-lufs")).toHaveTextContent("LUFS");
   });
+
+  it("sanitizes untrusted title and artist text before rendering", () => {
+    const audioRef = createRef<HTMLAudioElement>();
+    render(
+      <QcPlayer
+        analysis={baseAnalysis({
+          releaseTitle: "Bad\u0000Title\u202E",
+          releaseArtist: "Artist\u0007Name"
+        })}
+        currentTimeSec={0}
+        isPlaying={false}
+        onTogglePlay={() => undefined}
+        onSeek={() => undefined}
+        onTimeUpdate={() => undefined}
+        onPlay={() => undefined}
+        onPause={() => undefined}
+        audioRef={audioRef}
+        renderAudioElement={false}
+      />
+    );
+
+    expect(screen.getByText("Bad Title")).toBeInTheDocument();
+    expect(screen.getByText("Artist Name")).toBeInTheDocument();
+  });
 });

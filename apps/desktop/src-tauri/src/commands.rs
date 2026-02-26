@@ -230,10 +230,14 @@ pub struct CatalogIngestJobResponse {
 const PLANNED_RELEASE_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 const PLANNED_RELEASE_DESCRIPTOR_FILE_NAME: &str = "planned_release_descriptor.json";
 const MAX_IPC_PATH_CHARS: usize = 4_096;
+const MAX_IPC_ERROR_MESSAGE_CHARS: usize = 512;
 const MAX_CATALOG_TRACK_SEARCH_CHARS: usize = 512;
 const MAX_IPC_PEAK_BINS: usize = 8_192;
+const MAX_CATALOG_IMPORT_TOTAL_PATH_CHARS: usize = 131_072;
 const MAX_CATALOG_TRACK_TAGS: usize = 32;
 const MAX_CATALOG_TAG_LABEL_CHARS: usize = 64;
+const MAX_PLAN_RELEASE_PLATFORMS: usize = 32;
+const MAX_PLATFORM_LABEL_CHARS: usize = 64;
 const MAX_RELEASE_SPEC_TAGS_FROM_CATALOG: usize = 10;
 const MAX_RELEASE_SPEC_TAG_LEN_CHARS: usize = 32;
 const PUBLISHER_CATALOG_DRAFTS_DIR: &str = "publisher_catalog_drafts";
@@ -358,9 +362,10 @@ pub struct AppError {
 
 impl AppError {
     fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             code: code.into(),
-            message: message.into(),
+            message: sanitize_error_message(&message),
             details: None,
         }
     }
@@ -389,6 +394,7 @@ impl AppError {
 
 fn redact_error_details_value(value: Value) -> Value {
     match value {
+        Value::String(text) => Value::String(sanitize_error_message(&text)),
         Value::Array(items) => {
             Value::Array(items.into_iter().map(redact_error_details_value).collect())
         }
@@ -407,6 +413,33 @@ fn redact_error_details_value(value: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn sanitize_error_message(raw: &str) -> String {
+    let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if contains_suspicious_error_payload(&normalized) {
+        return "internal error".to_string();
+    }
+
+    if normalized.chars().count() <= MAX_IPC_ERROR_MESSAGE_CHARS {
+        normalized
+    } else {
+        let mut truncated = normalized
+            .chars()
+            .take(MAX_IPC_ERROR_MESSAGE_CHARS)
+            .collect::<String>();
+        truncated.push_str("...");
+        truncated
+    }
+}
+
+fn contains_suspicious_error_payload(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("stack backtrace")
+        || lower.contains("panicked at")
+        || lower.contains("thread '")
+        || lower.contains(" at src/")
+        || lower.contains(" at src\\")
 }
 
 fn is_sensitive_detail_key(key: &str) -> bool {
@@ -686,6 +719,7 @@ impl CommandService {
     ) -> Result<PlanReleaseResponse, AppError> {
         let spec_path = canonicalize_file_path(&input.spec_path, "spec file").await?;
         let media_path = canonicalize_file_path(&input.media_path, "media file").await?;
+        let platforms = validate_plan_release_platforms(&input.platforms)?;
 
         let spec_bytes = tokio::fs::read(&spec_path)
             .await
@@ -710,7 +744,7 @@ impl CommandService {
                 spec,
                 media_bytes,
                 input.env.clone().into(),
-                input.platforms.clone(),
+                platforms,
                 &self.artifacts_root,
             ))
             .await?;
@@ -911,6 +945,12 @@ impl CommandService {
             return Err(AppError::invalid_argument(
                 "catalog_import_files accepts at most 200 paths per request",
             ));
+        }
+        let total_path_chars: usize = paths.iter().map(String::len).sum();
+        if total_path_chars > MAX_CATALOG_IMPORT_TOTAL_PATH_CHARS {
+            return Err(AppError::invalid_argument(format!(
+                "catalog_import_files payload exceeds maximum aggregate path length of {MAX_CATALOG_IMPORT_TOTAL_PATH_CHARS} characters"
+            )));
         }
 
         let mut imported = Vec::new();
@@ -1572,6 +1612,51 @@ fn validate_catalog_track_tags_for_ipc(tags: &[String]) -> Result<(), AppError> 
         }
     }
     Ok(())
+}
+
+fn validate_plan_release_platforms(raw: &[String]) -> Result<Vec<String>, AppError> {
+    if raw.is_empty() {
+        return Err(AppError::invalid_argument(
+            "plan_release requires at least one platform",
+        ));
+    }
+    if raw.len() > MAX_PLAN_RELEASE_PLATFORMS {
+        return Err(AppError::invalid_argument(format!(
+            "plan_release accepts at most {MAX_PLAN_RELEASE_PLATFORMS} platforms"
+        )));
+    }
+
+    let mut normalized = Vec::with_capacity(raw.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for platform_raw in raw {
+        let platform = platform_raw.trim().to_ascii_lowercase();
+        if platform.is_empty() {
+            return Err(AppError::invalid_argument(
+                "platform labels must not be blank",
+            ));
+        }
+        if platform.len() > MAX_PLATFORM_LABEL_CHARS {
+            return Err(AppError::invalid_argument(format!(
+                "platform labels exceed maximum length of {MAX_PLATFORM_LABEL_CHARS} characters"
+            )));
+        }
+        if !platform
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err(AppError::invalid_argument(
+                "platform labels must only contain ASCII alphanumeric, '.', '_' or '-' characters",
+            ));
+        }
+        if !seen.insert(platform.clone()) {
+            return Err(AppError::invalid_argument(format!(
+                "duplicate platform label `{platform}` is not allowed"
+            )));
+        }
+        normalized.push(platform);
+    }
+
+    Ok(normalized)
 }
 
 fn validate_catalog_policy(raw: &str, label: &str, allowed: &[&str]) -> Result<String, AppError> {
@@ -2737,6 +2822,18 @@ tags: ["mock"]"#,
     }
 
     #[tokio::test]
+    async fn catalog_import_files_rejects_oversized_aggregate_path_payload() {
+        let (service, _dir) = new_service().await;
+        let oversized = "a".repeat((MAX_CATALOG_IMPORT_TOTAL_PATH_CHARS / 2) + 1024);
+        let err = service
+            .handle_catalog_import_files(vec![format!("C:/{oversized}"), format!("D:/{oversized}")])
+            .await
+            .expect_err("oversized import payload must be rejected");
+        assert_eq!(err.code, "INVALID_ARGUMENT");
+        assert!(err.message.contains("payload exceeds maximum aggregate path length"));
+    }
+
+    #[tokio::test]
     async fn catalog_library_root_round_trip_and_remove() {
         let (service, dir) = new_service().await;
         let root_dir = dir.path().join("library-root");
@@ -3600,6 +3697,45 @@ tags: ["mock"]"#,
         }
     }
 
+    #[test]
+    fn validate_plan_release_platforms_accepts_normalized_unique_labels() {
+        let normalized = validate_plan_release_platforms(&[
+            " Mock ".to_string(),
+            "spotify-live".to_string(),
+            "you_tube.v2".to_string(),
+        ])
+        .expect("valid platform labels should pass");
+
+        assert_eq!(
+            normalized,
+            vec![
+                "mock".to_string(),
+                "spotify-live".to_string(),
+                "you_tube.v2".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_plan_release_platforms_rejects_invalid_cases() {
+        let cases = vec![
+            vec![],
+            vec!["   ".to_string()],
+            vec!["mock".to_string(), "MOCK".to_string()],
+            vec!["mock/platform".to_string()],
+            vec!["a".repeat(MAX_PLATFORM_LABEL_CHARS + 1)],
+            (0..(MAX_PLAN_RELEASE_PLATFORMS + 1))
+                .map(|idx| format!("p-{idx}"))
+                .collect::<Vec<_>>(),
+        ];
+
+        for case in cases {
+            let err = validate_plan_release_platforms(&case)
+                .expect_err("invalid platform labels must be rejected");
+            assert_eq!(err.code, "INVALID_ARGUMENT");
+        }
+    }
+
     #[tokio::test]
     async fn get_report_rejects_invalid_release_id_inputs() {
         let (service, _dir) = new_service().await;
@@ -3829,6 +3965,19 @@ tags: ["mock"]"#,
         assert_eq!(details["items"][1]["api_key"], "<redacted>");
         assert_eq!(details["items"][2]["safe"], "value");
         assert_eq!(details["safe"], "keep");
+    }
+
+    #[test]
+    fn app_error_new_sanitizes_sensitive_or_oversized_messages() {
+        let panic_like = AppError::new(
+            "TEST",
+            "thread 'main' panicked at src/main.rs:10:3\nstack backtrace: ...",
+        );
+        assert_eq!(panic_like.message, "internal error");
+
+        let long = AppError::new("TEST", "x".repeat(MAX_IPC_ERROR_MESSAGE_CHARS + 64));
+        assert!(long.message.ends_with("..."));
+        assert!(long.message.chars().count() <= MAX_IPC_ERROR_MESSAGE_CHARS + 3);
     }
 
     #[test]

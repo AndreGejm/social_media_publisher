@@ -2,6 +2,7 @@ import type { MouseEvent, RefObject } from "react";
 import { useMemo } from "react";
 import { HelpTooltip } from "./HelpTooltip";
 import { localFilePathToMediaUrl } from "./media-url";
+import { sanitizeUiText } from "./ui-sanitize";
 
 export type QcPlayerAnalysis = {
   releaseTitle: string;
@@ -151,6 +152,9 @@ export function QcPlayer({
   audioSrc?: string;
   showPlayToggle?: boolean;
 }) {
+  const safeReleaseTitle = sanitizeUiText(analysis.releaseTitle, 256) || "Untitled";
+  const safeReleaseArtist = sanitizeUiText(analysis.releaseArtist, 256) || "Unknown Artist";
+  const safeFingerprint = sanitizeUiText(analysis.mediaFingerprint, 128);
   const durationSec = Math.max(analysis.durationMs / 1000, 0.001);
   const progress = Math.max(0, Math.min(1, currentTimeSec / durationSec));
   const peak = maxPeakDbfs(analysis.peakData);
@@ -160,8 +164,8 @@ export function QcPlayer({
       <div className="qc-player-head">
         <div>
           <p className="eyebrow">Verify / QC</p>
-          <h3 className="qc-track-title">{analysis.releaseTitle}</h3>
-          <p className="qc-track-subtitle">{analysis.releaseArtist}</p>
+          <h3 className="qc-track-title">{safeReleaseTitle}</h3>
+          <p className="qc-track-subtitle">{safeReleaseArtist}</p>
         </div>
         <div className="qc-badge-stack">
           <span className="qc-pill">{analysis.channels} ch</span>
@@ -244,7 +248,9 @@ export function QcPlayer({
         </div>
         <div className="qc-metric-card">
           <span className="qc-metric-label">Media Fingerprint</span>
-          <strong className="truncate">{analysis.mediaFingerprint.slice(0, 16)}...</strong>
+          <strong className="truncate">
+            {safeFingerprint ? `${safeFingerprint.slice(0, 16)}...` : "n/a"}
+          </strong>
         </div>
       </div>
 

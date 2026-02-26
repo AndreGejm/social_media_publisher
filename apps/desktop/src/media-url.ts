@@ -1,7 +1,24 @@
 import * as tauriCore from "@tauri-apps/api/core";
+import { sanitizeUiText } from "./ui-sanitize";
 
 function normalizeDisplayPath(path: string): string {
   return path.split("\\").join("/");
+}
+
+function isLikelyLocalPath(path: string): boolean {
+  if (!path) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(path)) return true;
+  if (path.startsWith("\\\\")) return true;
+  if (path.startsWith("/")) return true;
+  if (path.startsWith("file://")) return true;
+  return false;
+}
+
+function hasUnsupportedScheme(path: string): boolean {
+  const schemeMatch = path.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  if (!schemeMatch) return false;
+  const scheme = schemeMatch[1].toLowerCase();
+  return scheme !== "file" && !/^[a-zA-Z]$/.test(schemeMatch[1]);
 }
 
 /**
@@ -11,8 +28,10 @@ function normalizeDisplayPath(path: string): string {
  * can fail in WebView security contexts. In browser preview/tests, fall back to `file://`.
  */
 export function localFilePathToMediaUrl(path: string): string {
-  const trimmed = path.trim();
+  const trimmed = sanitizeUiText(path, 4096);
   if (!trimmed) return "";
+  if (hasUnsupportedScheme(trimmed)) return "";
+  if (!isLikelyLocalPath(trimmed)) return "";
 
   try {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -28,7 +47,8 @@ export function localFilePathToMediaUrl(path: string): string {
   const normalized = normalizeDisplayPath(trimmed);
   if (/^[a-zA-Z]:\//.test(normalized)) return encodeURI(`file:///${normalized}`);
   if (normalized.startsWith("/")) return encodeURI(`file://${normalized}`);
-  return normalized;
+  if (normalized.startsWith("file://")) return encodeURI(normalized);
+  return "";
 }
 
 /**
