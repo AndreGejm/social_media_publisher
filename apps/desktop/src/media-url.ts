@@ -1,6 +1,24 @@
 import * as tauriCore from "@tauri-apps/api/core";
 import { sanitizeUiText } from "./ui-sanitize";
 
+function stripWindowsExtendedPathPrefix(path: string): string {
+  if (path.startsWith("\\\\?\\")) {
+    const trimmed = path.slice(4);
+    if (trimmed.toUpperCase().startsWith("UNC\\")) {
+      return `\\\\${trimmed.slice(4)}`;
+    }
+    return trimmed;
+  }
+  if (path.startsWith("//?/")) {
+    const trimmed = path.slice(4);
+    if (trimmed.toUpperCase().startsWith("UNC/")) {
+      return `//${trimmed.slice(4)}`;
+    }
+    return trimmed;
+  }
+  return path;
+}
+
 function normalizeDisplayPath(path: string): string {
   return path.split("\\").join("/");
 }
@@ -28,7 +46,7 @@ function hasUnsupportedScheme(path: string): boolean {
  * can fail in WebView security contexts. In browser preview/tests, fall back to `file://`.
  */
 export function localFilePathToMediaUrl(path: string): string {
-  const trimmed = sanitizeUiText(path, 4096);
+  const trimmed = sanitizeUiText(stripWindowsExtendedPathPrefix(path), 4096);
   if (!trimmed) return "";
   if (hasUnsupportedScheme(trimmed)) return "";
   if (!isLikelyLocalPath(trimmed)) return "";

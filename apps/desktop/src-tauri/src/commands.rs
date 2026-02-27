@@ -28,7 +28,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::OnceCell;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1377,10 +1377,31 @@ fn db_error_code_name(error: &DbError) -> &'static str {
 
 async fn shared_service() -> Result<Arc<CommandService>, AppError> {
     static SERVICE: OnceCell<Arc<CommandService>> = OnceCell::const_new();
-    SERVICE
+    let should_log_init = SERVICE.get().is_none();
+    let init_started = Instant::now();
+    if should_log_init {
+        tracing::info!(target: "desktop.catalog", "command service init started");
+    }
+    let service = SERVICE
         .get_or_try_init(|| async { CommandService::from_default_location().await.map(Arc::new) })
-        .await
-        .map(Arc::clone)
+        .await;
+    if should_log_init {
+        match &service {
+            Ok(_) => tracing::info!(
+                target: "desktop.catalog",
+                elapsed_ms = init_started.elapsed().as_millis() as u64,
+                "command service init completed"
+            ),
+            Err(error) => tracing::warn!(
+                target: "desktop.catalog",
+                elapsed_ms = init_started.elapsed().as_millis() as u64,
+                error_code = %error.code,
+                error = %error.message,
+                "command service init failed"
+            ),
+        }
+    }
+    service.map(Arc::clone)
 }
 
 struct AnalyzedTrackPayload {
@@ -2289,20 +2310,78 @@ pub async fn get_release_track_analysis(
 pub async fn catalog_import_files(
     paths: Vec<String>,
 ) -> Result<CatalogImportFilesResponse, AppError> {
-    shared_service()
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_import_files",
+        path_count = paths.len(),
+        "command started"
+    );
+    let result = shared_service()
         .await?
         .handle_catalog_import_files(paths)
-        .await
+        .await;
+    match &result {
+        Ok(response) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_import_files",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            imported = response.imported.len(),
+            failed = response.failed.len(),
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_import_files",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn catalog_list_tracks(
     query: Option<CatalogListTracksInput>,
 ) -> Result<CatalogListTracksResponse, AppError> {
-    shared_service()
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_list_tracks",
+        has_search = query
+            .as_ref()
+            .and_then(|item| item.search.as_ref())
+            .map(|item| !item.trim().is_empty())
+            .unwrap_or(false),
+        limit = query.as_ref().and_then(|item| item.limit).unwrap_or(100),
+        offset = query.as_ref().and_then(|item| item.offset).unwrap_or(0),
+        "command started"
+    );
+    let result = shared_service()
         .await?
         .handle_catalog_list_tracks(query)
-        .await
+        .await;
+    match &result {
+        Ok(response) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_list_tracks",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            returned = response.items.len(),
+            total = response.total,
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_list_tracks",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -2337,18 +2416,67 @@ pub async fn catalog_update_track_metadata(
 
 #[tauri::command]
 pub async fn catalog_add_library_root(path: String) -> Result<LibraryRootResponse, AppError> {
-    shared_service()
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_add_library_root",
+        path_len = path.len(),
+        "command started"
+    );
+    let result = shared_service()
         .await?
         .handle_catalog_add_library_root(&path)
-        .await
+        .await;
+    match &result {
+        Ok(response) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_add_library_root",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            root_id = %response.root_id,
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_add_library_root",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn catalog_list_library_roots() -> Result<Vec<LibraryRootResponse>, AppError> {
-    shared_service()
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_list_library_roots",
+        "command started"
+    );
+    let result = shared_service()
         .await?
         .handle_catalog_list_library_roots()
-        .await
+        .await;
+    match &result {
+        Ok(response) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_list_library_roots",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            roots = response.len(),
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_list_library_roots",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -2361,12 +2489,38 @@ pub async fn catalog_remove_library_root(root_id: String) -> Result<bool, AppErr
 
 #[tauri::command]
 pub async fn catalog_scan_root(root_id: String) -> Result<CatalogScanRootResponse, AppError> {
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_scan_root",
+        root_id = %root_id,
+        "command started"
+    );
     let service = shared_service().await?;
-    let prepared = service.handle_catalog_scan_root_prepare(&root_id).await?;
+    let prepared = service.handle_catalog_scan_root_prepare(&root_id).await.map_err(|error| {
+        tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_scan_root",
+            root_id = %root_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed before dispatch"
+        );
+        error
+    })?;
     let response = CatalogScanRootResponse {
         job_id: prepared.job.job_id.clone(),
         root_id: prepared.root.root_id.clone(),
     };
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_scan_root",
+        root_id = %response.root_id,
+        job_id = %response.job_id,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "command dispatched background job"
+    );
     let service_clone = Arc::clone(&service);
     tokio::spawn(async move {
         run_catalog_scan_job(service_clone, prepared.root, prepared.job.job_id).await;

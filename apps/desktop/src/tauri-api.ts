@@ -271,18 +271,46 @@ export async function catalogGetIngestJob(jobId: string): Promise<CatalogIngestJ
 export async function pickDirectoryDialog(
   options?: { title?: string }
 ): Promise<string | null> {
+  let timeoutId: number | undefined;
   try {
     const dialog = await import("@tauri-apps/plugin-dialog");
-    const selected = await dialog.open({
-      directory: true,
-      multiple: false,
-      title: options?.title ?? "Select Folder"
+    const timeoutMs = 20000;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        reject({
+          code: "TAURI_DIALOG_TIMEOUT",
+          message: "Folder picker timed out. Retry browsing for a folder."
+        } satisfies UiAppError);
+      }, timeoutMs);
     });
+
+    const selected = await Promise.race([
+      dialog.open({
+        directory: true,
+        multiple: false,
+        title: options?.title ?? "Select Folder"
+      }),
+      timeoutPromise
+    ]);
     return typeof selected === "string" ? selected : null;
-  } catch {
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      "message" in error &&
+      typeof (error as { code?: unknown }).code === "string" &&
+      typeof (error as { message?: unknown }).message === "string"
+    ) {
+      throw error as UiAppError;
+    }
     throw {
       code: "TAURI_DIALOG_UNAVAILABLE",
       message: "Native folder picker is not available in this runtime."
     } satisfies UiAppError;
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
   }
 }

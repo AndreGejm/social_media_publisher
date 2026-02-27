@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop capabilities for local development.","local":true,"windows":["main"],"permissions":["default","dialog:allow-open"]}}
+{"default":{"identifier":"default","description":"Default desktop capabilities for local development.","local":true,"windows":["main"],"permissions":["default","dialog:default"]}}

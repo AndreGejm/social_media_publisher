@@ -4,7 +4,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { HelpTooltip } from "./HelpTooltip";
 import { QcPlayer, type QcPlayerAnalysis } from "./QcPlayer";
 
-type Screen = "New Release" | "Plan / Preview" | "Verify / QC" | "Execute" | "Report / History";
+export type PublisherOpsScreen = "New Release" | "Plan / Preview" | "Verify / QC" | "Execute" | "Report / History";
+type Screen = PublisherOpsScreen;
 type AppEnv = "TEST" | "STAGING" | "PRODUCTION";
 
 type UiAppError = { code: string; message: string; details?: unknown };
@@ -294,6 +295,8 @@ type AppProps = {
   prefillMediaPath?: string | null;
   prefillSpecPath?: string | null;
   sharedTransport?: SharedTransportBridgeForPublisherOps | null;
+  externalRequestedScreen?: PublisherOpsScreen | null;
+  onScreenChange?: ((screen: PublisherOpsScreen) => void) | null;
 };
 
 export type SharedTransportSourceForPublisherOps = {
@@ -332,7 +335,9 @@ function toPublisherOpsSharedTransportSource(
 export default function App({
   prefillMediaPath = null,
   prefillSpecPath = null,
-  sharedTransport = null
+  sharedTransport = null,
+  externalRequestedScreen = null,
+  onScreenChange = null
 }: AppProps) {
   const [activeScreen, setActiveScreen] = useState<Screen>("New Release");
   const [specPath, setSpecPath] = useState("");
@@ -366,6 +371,15 @@ export default function App({
   const reportRequestSeqRef = useRef(0);
   const qcRequestSeqRef = useRef(0);
   const qcAudioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    if (!externalRequestedScreen) return;
+    setActiveScreen((current) => (current === externalRequestedScreen ? current : externalRequestedScreen));
+  }, [externalRequestedScreen]);
+
+  useEffect(() => {
+    onScreenChange?.(activeScreen);
+  }, [activeScreen, onScreenChange]);
 
   useEffect(() => {
     const nextMediaPath = prefillMediaPath?.trim();
@@ -1286,12 +1300,12 @@ export default function App({
           </HelpTooltip>
           <HelpTooltip content="Loads the saved report artifact for the currently selected release." side="bottom">
             <button type="button" data-testid="open-report-button" onClick={onOpenReport} disabled={loadingReport || !selectedHistoryReleaseId}>
-              {loadingReport ? "Loading Report..." : "Open Report"}
+              {loadingReport ? "Loading Release Report..." : "Open Release Report"}
             </button>
           </HelpTooltip>
           <HelpTooltip content="Resumes execution for the selected release using its persisted plan/report state." side="bottom">
             <button type="button" data-testid="resume-release-button" onClick={onResume} disabled={executing || !selectedHistoryReleaseId}>
-              Resume
+              Resume Release
             </button>
           </HelpTooltip>
         </div>
@@ -1304,7 +1318,7 @@ export default function App({
                 historyRows.map((row) => (
                   <li key={row.release_id}>
                     <HelpTooltip
-                      content="Selects this release for Open Report, Load Saved QC, and Resume actions."
+                      content="Selects this release for Open Release Report, Load Saved QC, and Resume Release actions."
                       side="bottom"
                     >
                       <label className="history-row">

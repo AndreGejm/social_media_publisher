@@ -1,475 +1,358 @@
-# GUI Button Intended Behavior Reference (Desktop App)
+﻿# GUI Button Intended Behavior Reference (Desktop App)
 
-Purpose: This document describes what each visible button in the current desktop GUI is intended to do, including key preconditions/disabled states. Use this as the baseline when reporting bugs.
-
-Scope:
-- `Music Core` shell (`Library`, `Albums`, `Tracks`, `Playlists`, `Publisher Ops`, `Settings`)
-- Embedded `Publisher Ops` workflow UI
-- Shared/QC player controls
-- Contextual help `?` buttons
+Purpose: This document defines how each major GUI button is intended to behave in the current build. Use it as the source of truth when reporting bugs.
 
 Version context:
-- Desktop app `0.2.0`
+- Desktop app: 0.2.0
 - Offline-first mode
-- Publisher transport is still `MockTransport` (simulation/test publishing pipeline)
+- Publisher execution transport: MockTransport (test simulation)
 
 ## How To Use This For Bug Reports
 
-When reporting a bug, include:
-- Workspace / screen (`Music Core > Tracks`, `Publisher Ops > Verify / QC`, etc.)
-- Button label (exact text shown)
-- Preconditions (what was selected / loaded / approved)
+Include:
+- Mode and workspace/screen (`Listen > Tracks`, `Publish > Publisher Ops > Verify / QC`, etc.)
+- Exact button label
+- Preconditions (selected track, loaded draft, approved QC, and so on)
 - Expected behavior (from this document)
 - Actual behavior
-- Any error banner text/code shown in the UI
-- Whether the issue happens after app restart or only in the current session
+- Any visible error code/message
+- Whether it reproduces after restart
 
-## Help `?` Buttons (Global Behavior)
+## Global Help `?` Buttons
 
-All contextual help icon buttons are rendered by `HelpTooltip`.
+All help icons are rendered by `HelpTooltip`.
 
 Intended behavior:
-- Hover or keyboard focus shows help text.
-- `?` icon buttons toggle richer popovers (where used).
-- `Escape` closes the tooltip/popover.
-- Clicking outside a pinned popover closes it.
-- Help buttons do not mutate business data or trigger pipeline/catalog operations.
+- Hover or keyboard focus shows tooltip text.
+- Popover-style help opens from `?` icon buttons where used.
+- `Escape` closes open tooltip/popover.
+- Clicking outside closes pinned popovers.
+- Help buttons do not mutate app data.
 
-## Music Core Shell (Sidebar Workspace Buttons)
+## Global App Shell
 
-These are the left-sidebar workspace navigation buttons.
+### Top mode tabs (`Listen`, `Publish`)
+
+Intended behavior:
+- Switches the app between listening/library workflows and publish workflows.
+- Persists mode in local storage key `rp.music.activeMode.v1`.
+- Mode switch does not run Rust IPC by itself.
+
+### Global bottom transport (`Shared transport`)
 
 Buttons:
+- `Prev`
+- `Play` / `Pause`
+- `Next`
+
+Intended behavior:
+- This is the single global transport for playback.
+- Operates on the current queue context.
+- Stays visible across all workspaces and scrolling.
+
+Disabled states:
+- `Prev`: disabled when queue index is at start.
+- `Next`: disabled when no next queue item exists.
+- `Play`: disabled if there is no active player source and queue is empty.
+
+Related control:
+- `Shared player seek` slider seeks current track position.
+
+### Global right dock (`Queue and session state`)
+
+The dock switches content by app mode:
+- `Listen` mode: `Queue`
+- `Publish` mode: `Release Selection`
+
+No backend mutation for dock-only queue operations (local state).
+
+## Listen Mode Navigation
+
+Visible left-sidebar workspace buttons:
 - `Library`
 - `Albums`
 - `Tracks`
 - `Playlists`
-- `Publisher Ops`
 - `Settings`
 
 Intended behavior:
-- Changes the visible workspace panel in the main content area.
-- Persists selected workspace in local storage (`rp.music.activeWorkspace.v1`).
-- Does not call Rust IPC by itself (except effects in the destination workspace may load data if needed).
+- Switches visible center workspace.
+- Persists workspace in `rp.music.activeWorkspace.v1`.
 
-## Music Core Sidebar: Library Roots Panel
+## Publish Mode Navigation
 
-### `Add Root`
+Visible left-sidebar workspace button:
+- `Publisher Ops`
+
+Additional shell-level publish step bar (top of content):
+- `New Release`
+- `Plan / Preview`
+- `Verify / QC`
+- `Execute`
+- `Report / History`
+
 Intended behavior:
-- Adds the folder path from the `Library root path` text input as a persisted library root in SQLite.
-- On success:
-  - Clears the input field
-  - Adds/updates the root in the list immediately
+- Step buttons control/sync the embedded Publisher Ops screen.
+- Persists shell step in `rp.publish.shellStep.v1`.
 
-Disabled when:
-- A library root mutation is already in progress (`libraryRootMutating`)
+## Listen > Library
 
-Backend side effect:
-- Calls Tauri IPC `catalog_add_library_root(path)`
+### Collapsible section toggles
 
-### `Refresh Roots`
+Buttons (dynamic labels):
+- `Show Library Ingest` / `Hide Library Ingest`
+- `Show Library overview` / `Hide Library overview`
+- `Show Quick actions` / `Hide Quick actions`
+
 Intended behavior:
-- Reloads the library roots list from SQLite.
+- Expands/collapses the corresponding card.
+- Persists collapsed state in local storage.
 
-Disabled when:
-- Root list is already loading (`libraryRootsLoading`)
+### Quick Actions
 
-Backend side effect:
-- Calls Tauri IPC `catalog_list_library_roots()`
+Buttons:
+- `Open Tracks Workspace`
+- `Open Albums Workspace`
+- `Open Publish Workflow`
 
-### Per-root `Scan`
 Intended behavior:
-- Starts a background ingest scan job for that root (recursive local file scan).
-- Adds a pending job to the UI and polling begins.
-- Completed jobs refresh the track list automatically.
+- First two switch Listen workspaces.
+- `Open Publish Workflow` switches app mode to `Publish`.
+- No Rust IPC call by button click itself.
 
-Disabled when:
-- A root mutation/scan action is already in progress (`libraryRootMutating`)
+### Library Ingest tabs
 
-Backend side effect:
-- Calls Tauri IPC `catalog_scan_root(root_id)` (job creation)
-- UI then polls `catalog_get_ingest_job(job_id)`
+Tabs:
+- `Scan Folders`
+- `Import Files`
 
-### Per-root `Remove`
 Intended behavior:
-- Removes the saved library root configuration only.
-- Does not delete local files.
-- Does not delete imported tracks already in the catalog.
+- Switches ingest sub-panel in the Library card.
+- Persists tab in `rp.music.libraryIngestTab.v1`.
 
-Disabled when:
-- A root mutation action is already in progress (`libraryRootMutating`)
+#### `Scan Folders` panel
 
-Backend side effect:
-- Calls Tauri IPC `catalog_remove_library_root(root_id)`
+Buttons:
+- `Browse...`
+- `Add Folder`
+- `Refresh Folders`
+- Per-root: `Scan Folder`, `Remove Folder`
 
-### Library Roots panel `?` help button
 Intended behavior:
-- Explains how root scanning works (background ingest jobs + SQLite-backed progress).
-- No data mutation.
+- `Browse...`: opens native folder picker and fills `Library root path` input.
+- `Add Folder`: persists folder as a library root.
+- `Refresh Folders`: reloads roots from SQLite.
+- `Scan Folder`: starts background ingest job for that root.
+- `Remove Folder`: removes saved root config only (does not delete files).
 
-## Music Core Sidebar: Import Audio Panel
+Backend calls:
+- `catalog_add_library_root`
+- `catalog_list_library_roots`
+- `catalog_scan_root`
+- `catalog_get_ingest_job` (polling)
+- `catalog_remove_library_root`
 
-### `Import to Library`
+#### `Import Files` panel
+
+Button:
+- `Import Files`
+
 Intended behavior:
-- Parses file paths from the textarea (newline/comma separated).
-- Imports supported local audio files into the catalog.
-- Rust performs audio decode + LUFS + waveform peak analysis + BLAKE3 fingerprinting.
-- Updates imported track list and selects the first imported track (if any).
-- Shows per-file failures without failing the whole batch.
+- Parses newline/comma-separated paths from `Import file paths` textarea.
+- Imports those files into catalog analysis flow.
+- Updates list + status messages with partial-failure tolerance.
 
-Disabled when:
-- Import operation is currently running (`catalogImporting`)
+Backend call:
+- `catalog_import_files`
 
-Backend side effect:
-- Calls Tauri IPC `catalog_import_files(paths[])`
+## Listen > Tracks
 
-### Catalog Import panel `?` help button
+### Tracks header actions
+
+Buttons:
+- `Refresh List`
+- `All Tracks` / `Favorites Only`
+- `Albums View`
+
 Intended behavior:
-- Explains Rust-native analysis + SQLite catalog persistence.
-- No data mutation.
+- `Refresh List`: reloads tracks from SQLite with current search.
+- `All Tracks`/`Favorites Only`: toggles local favorites filter (`rp.music.onlyFavorites.v1`).
+- `Albums View`: switches workspace to `Albums`.
 
-## Music Core: Library Workspace
+Related non-button controls:
+- `Search tracks` input
+- `Track sort` select
 
-### `Open Tracks Workspace`
+### Batch actions for selected tracks
+
+Visible when at least one track checkbox is selected.
+
+Buttons:
+- `Play Selection`
+- `Add Selection to Queue`
+- `Play Selection Next`
+- `Clear Selection`
+
 Intended behavior:
-- Switches active workspace to `Tracks`.
-- No backend call by itself.
+- Uses selected tracks in visible-list order.
+- `Play Selection`: replaces session queue with selection and starts playback from first selected.
+- `Add Selection to Queue`: appends selected tracks.
+- `Play Selection Next`: inserts selected tracks after current queue item.
+- `Clear Selection`: clears track multi-select.
 
-### `Open Albums Workspace`
+### Track rows
+
+Controls:
+- Row checkbox (`Select <track> for batch actions`)
+- Row main button (track title)
+- Row menu button (`Track actions for <track>`) and right-click context menu
+
+Row main button behavior:
+- Selects track and loads detail panel.
+
+Row context menu actions:
+- `Play Now`
+- `Add to Queue`
+- `Play Next`
+- `Add Favorite` / `Remove Favorite`
+- `Show in Tracks`
+- `Add to Selection` / `Already in Selection`
+
+### Track Detail header actions
+
+Buttons:
+- `Play Now`
+- `Add to Queue`
+- `Play Next`
+- `Favorite` / `Unfavorite`
+- `Edit Metadata` (view mode)
+- `Save Metadata` (edit mode)
+- `Reset Fields` (edit mode)
+- `Cancel Edit` (edit mode)
+- `Prepare for Release...`
+
 Intended behavior:
-- Switches active workspace to `Albums`.
-- No backend call by itself.
+- Playback/queue buttons dispatch to global shared transport queue state.
+- Favorite toggles local favorite set (`rp.music.favorites.v1`).
+- Edit buttons mutate local metadata editor state and persist via save.
+- `Prepare for Release...` creates a draft release from selected track and switches to Publish mode with Publisher Ops prefilled.
 
-### `Open Publisher Ops`
+Backend calls:
+- `catalog_get_track` (selection/detail load effect)
+- `catalog_update_track_metadata` (save)
+- `publisher_create_draft_from_track` (bridge)
+
+### Track Detail QC panel
+
 Intended behavior:
-- Switches active workspace to embedded `Publisher Ops`.
-- No backend call by itself.
+- QC panel is inspection/seek/rate oriented in this shell integration.
+- Local audio element is not mounted in this panel (`renderAudioElement=false`).
+- Playback is controlled by global shared transport.
 
-## Music Core: Tracks Workspace
+## Listen > Albums
 
-## Tracks Toolbar
+### Album group list
 
-### `Refresh`
+Control:
+- Album row button (dynamic title)
+
 Intended behavior:
-- Reloads the local track list from SQLite using the current search text.
-- Keeps current local sort/favorites filter logic in the UI.
+- Selects album group for detail panel.
 
-Disabled when:
-- Track list is loading (`catalogLoading`)
+### Album detail header actions
 
-Backend side effect:
-- Calls Tauri IPC `catalog_list_tracks({ search, limit, offset })`
+Buttons:
+- `Play Album`
+- `Add Album to Queue`
+- `Show in Tracks`
 
-### `All Tracks` / `Favorites Only` (toggle chip button)
 Intended behavior:
-- Toggles local favorites filtering in the visible track list.
-- Text changes:
-  - `All Tracks` means clicking enables favorites-only view
-  - `Favorites Only` means clicking returns to all visible tracks
-- Persists toggle state in local storage (`rp.music.onlyFavorites.v1`)
+- `Play Album`: seeds queue from album tracks and starts from first track.
+- `Add Album to Queue`: appends album tracks to queue.
+- `Show in Tracks`: jumps to Tracks workspace, selecting first album track.
 
-Backend side effect:
-- None (local UI/session state only)
+### Batch actions for selected album tracks
 
-### `Albums View`
+Visible when one or more album-track checkboxes are selected.
+
+Buttons:
+- `Add Selection to Queue`
+- `Play Selection Next`
+- `Clear Selection`
+
 Intended behavior:
-- Switches to `Albums` workspace using the currently visible track data context.
-- No backend call by itself.
+- Works like track batch actions, but uses selected tracks inside the active album detail list.
 
-## Track List (Dynamic Buttons)
+### Album track rows
 
-### Per-track row button (label is the track title)
+Controls:
+- Row checkbox (`Select <track> for album batch actions`)
+- Row main button
+- Row menu button (`Open actions for <track>`) and right-click context menu
+
+Row context menu actions:
+- `Play Now`
+- `Add to Queue`
+- `Play Next`
+- `Add Favorite` / `Remove Favorite`
+- `Show in Tracks`
+- `Add to Selection` / `Already in Selection`
+
+## Listen > Settings
+
+### Collapsible section toggles
+
+Buttons (dynamic labels):
+- `Show Preferences` / `Hide Preferences`
+- `Show Display summary` / `Hide Display summary`
+
+### Preference controls
+
+Clickable controls:
+- `Theme preference` select (`System`, `Light`, `Dark`)
+- `Compact density` checkbox
+- `Show full file paths in detail panels` checkbox
+
 Intended behavior:
-- Selects the track and loads the track detail panel.
-- If detail is fetched successfully, detail pane/QC player updates.
+- Updates local UI preferences.
+- Persists to local storage:
+  - `rp.music.themePreference.v1`
+  - `rp.music.compactDensity.v1`
+  - `rp.music.showFullPaths.v1`
 
-Backend side effect:
-- Calls Tauri IPC `catalog_get_track(track_id)` after selection effect runs
+## Global right dock details
 
-Notes:
-- A leading `*` marker indicates local favorite status in the list row.
+### Listen mode (`Queue`)
 
-## Track Detail Actions
+Buttons:
+- `Shuffle`
+- `Clear Queue`
+- `Show in Tracks`
+- Per-row `Remove` (only when manual session queue is active)
+- Per-row main button (select/focus queue item)
 
-### `Play Now`
 Intended behavior:
-- Sets this track as the active player track.
-- Resets playback time to start.
-- Moves the track to the front of the local session queue (or materializes a session queue from current visible order and promotes it).
-- Keeps/opens the current workspace context (does not force Publisher Ops).
+- `Shuffle`: randomizes current queue order.
+- `Clear Queue`: clears manual queue and falls back to visible-list ordering.
+- `Show in Tracks`: jumps to Tracks workspace.
 
-Backend side effect:
-- None (local player/session state only)
+### Publish mode (`Release Selection`)
 
-### `Add to Queue`
+Buttons:
+- `Clear Selection`
+- `Show in Tracks`
+- Per-row `Remove`
+- Per-row main button (loads that draft prefill)
+
 Intended behavior:
-- Appends the selected track to the end of the local session queue.
-- Does not start playback.
+- This selection list is separate from Listen queue (`rp.publish.selectionQueue.v1`).
+- `Show in Tracks` returns to Listen mode for adding more tracks.
 
-Backend side effect:
-- None (local player/session state only)
+## Publish > Publisher Ops (embedded)
 
-### `Play Next`
-Intended behavior:
-- Inserts the selected track immediately after the currently playing queue item.
-- If nothing is actively in queue focus, inserts near the start (per current queue index logic).
-- Does not immediately switch playback.
+The embedded Publisher Ops remains the deterministic plan/execute flow.
 
-Backend side effect:
-- None (local player/session state only)
-
-### `Favorite` / `Unfavorite`
-Intended behavior:
-- Toggles local favorite status for the selected track.
-- Updates local favorites set used by:
-  - Tracks list star markers
-  - Favorites-only filter
-  - Albums workspace favorites counts/labels
-- Persists favorites in local storage (`rp.music.favorites.v1`)
-
-Backend side effect:
-- None (local UI/session preference only)
-
-### `Open in Publisher Ops`
-Intended behavior:
-- Generates a catalog-backed draft release spec from the selected track.
-- Writes the generated spec YAML to the local artifacts folder.
-- Switches to `Publisher Ops` workspace.
-- Prefills `Publisher Ops` with:
-  - media file path
-  - generated spec path
-
-Disabled when:
-- Draft generation is already in progress for that selected track (`publisherBridgeLoadingTrackId === selectedTrackDetail.track_id`)
-
-Backend side effect:
-- Calls Tauri IPC `publisher_create_draft_from_track(track_id)`
-
-### Track detail “Bridge to Publisher Ops” `?` button
-Intended behavior:
-- Explains draft generation + Publisher Ops bridge behavior.
-- No data mutation.
-
-## Track Metadata Editor (Authoring)
-
-### `Save Metadata`
-Intended behavior:
-- Saves local catalog metadata for the selected track:
-  - `visibility_policy`
-  - `license_policy`
-  - `downloadable`
-  - normalized/deduplicated `tags`
-- Updates track detail panel immediately.
-- Updates `updated_at` in the track list row for the same track.
-- Shows success notice `Track metadata saved.`
-
-Disabled when:
-- Editor is saving (`trackEditorSaving`)
-- Editor is not bound to the currently selected track
-- No unsaved changes (`!trackEditorDirty`)
-
-Backend side effect:
-- Calls Tauri IPC `catalog_update_track_metadata(...)`
-
-### `Reset`
-Intended behavior:
-- Resets the metadata editor fields back to the currently saved values for the selected track.
-- Clears editor error and notice.
-
-Disabled when:
-- Editor is saving (`trackEditorSaving`)
-- No selected track
-- No unsaved changes (`!trackEditorDirty`)
-
-Backend side effect:
-- None (local editor state reset only)
-
-### Track Metadata editor `?` button
-Intended behavior:
-- Explains local-only authoring fields and later publish adapter usage.
-- No data mutation.
-
-## Tracks Workspace: Embedded QC Player (Track Detail)
-
-This is `QcPlayer` reused inside Music Core track detail.
-
-### `Play` / `Pause`
-Intended behavior:
-- Controls playback of the selected track in the QC-style player area.
-- If a different track was selected than the current player track, the selected track becomes the current player track first.
-
-Backend side effect:
-- None (frontend `HTMLAudioElement` playback)
-
-### `-5%`
-Intended behavior:
-- Seeks playback backward by 5% of the selected track’s duration.
-
-### `+5%`
-Intended behavior:
-- Seeks playback forward by 5% of the selected track’s duration.
-
-### QC Metrics `?` button
-Intended behavior:
-- Explains LUFS / waveform peak / peak bin meanings.
-- No data mutation.
-
-Related non-button controls (important for bug reports):
-- Waveform click/keyboard left-right: seek within track
-- Seek slider (`Playback position`): fine seek
-
-## Tracks Workspace: Queue Panel
-
-### `Shuffle`
-Intended behavior:
-- Randomizes the current local queue order.
-- If no manual session queue exists, it materializes from the current visible queue basis first.
-
-Disabled when:
-- Fewer than 2 items are available in the queue
-
-Backend side effect:
-- None (local session queue only)
-
-### `Reset Queue`
-Intended behavior:
-- Clears manual session queue ordering.
-- Queue falls back to following the current visible track list order.
-
-Disabled when:
-- No manual session queue is active (`!queueUsesSessionOrder`)
-
-Backend side effect:
-- None
-
-### Per-queue row main button (dynamic; row title/artist)
-Intended behavior:
-- Selects and starts queue focus for that track in the shared player context (sets player track / selected track via queue index).
-- Does not remove/reorder queue items.
-
-Backend side effect:
-- None
-
-### Per-queue row `Remove` (shown only when manual session queue is active)
-Intended behavior:
-- Removes that item from the local session queue.
-- If queue reverts to empty, visible list fallback queue behavior resumes.
-
-Backend side effect:
-- None
-
-## Music Core: Albums Workspace
-
-Album groups are derived from catalog track metadata and are not separate authored album entities yet.
-
-## Album Group List (Dynamic Buttons)
-
-### Per-album row button (dynamic title)
-Intended behavior:
-- Selects the album group for the right-side album detail panel.
-
-Backend side effect:
-- None (uses already loaded track list data)
-
-## Album Detail Actions
-
-### `Play Album`
-Intended behavior:
-- Loads the selected album group track IDs into the local session queue.
-- Starts playback from the first track.
-- Opens the `Tracks` workspace.
-
-Disabled when:
-- Selected album group has zero tracks
-
-Backend side effect:
-- None (local player/session state)
-
-### `Add Album to Queue`
-Intended behavior:
-- Appends all tracks in the selected album group to the local session queue.
-- Does not immediately start playback.
-
-Disabled when:
-- Selected album group has zero tracks
-
-Backend side effect:
-- None
-
-### `Open in Tracks`
-Intended behavior:
-- Switches to `Tracks` workspace and selects the first track in the selected album group.
-
-Disabled when:
-- Selected album group has zero tracks
-
-Backend side effect:
-- None
-
-## Album Track Rows (Dynamic Buttons)
-
-### Album track row main button (dynamic track title)
-Intended behavior:
-- Opens `Tracks` workspace and selects that track in the track detail panel.
-- Does not start playback automatically.
-
-Backend side effect:
-- Triggers track detail load effect (`catalog_get_track(track_id)`) after selection
-
-### Album track `Play`
-Intended behavior:
-- Plays that track now and promotes it to the front of the local session queue.
-- Opens `Tracks` workspace.
-
-Backend side effect:
-- None
-
-### Album track `Fav` / `Unfav`
-Intended behavior:
-- Toggles local favorite status for that track.
-
-Backend side effect:
-- None
-
-## Music Core: Persistent Shared Player Bar (Bottom)
-
-### `Prev`
-Intended behavior:
-- Moves to the previous track in the current queue order.
-- Selects/focuses that track.
-
-Disabled when:
-- Current queue index is at the first item or invalid (`queueIndex <= 0`)
-
-Backend side effect:
-- None (frontend/local player state)
-
-### `Play` / `Pause`
-Intended behavior:
-- Starts or pauses local playback of the currently selected/shared player track.
-
-Backend side effect:
-- None (`HTMLAudioElement`)
-
-### `Next`
-Intended behavior:
-- Moves to the next track in the current queue order.
-- Selects/focuses that track.
-
-Disabled when:
-- No valid next track exists (`queueIndex < 0 || queueIndex >= queue.length - 1`)
-
-Backend side effect:
-- None
-
-Related non-button control:
-- Shared player seek slider (`Shared player seek`) changes current playback position.
-
-## Publisher Ops Workspace (Embedded Release Publisher UI)
-
-This is the existing deterministic pipeline UI embedded inside the `Publisher Ops` workspace.
-
-## Workflow Screen Tabs
+### Screen tabs inside Publisher Ops
 
 Buttons:
 - `New Release`
@@ -479,217 +362,69 @@ Buttons:
 - `Report / History`
 
 Intended behavior:
-- Switches the active tab/screen within Publisher Ops.
-- Does not run backend actions by itself.
+- Switches active internal Publisher Ops panel.
+- Syncs with shell publish step bar.
 
-## New Release Screen Actions
-
-### `Load Spec`
-Intended behavior:
-- Loads and validates the YAML spec file from the `Spec File Path`.
-- Updates normalized spec summary / validation feedback.
-
-Disabled when:
-- Spec is currently loading
-- Planning is running
-- Execute is running
-
-Backend side effect:
-- Calls Tauri IPC `load_spec`
-
-### `Plan / Preview`
-Intended behavior:
-- Plans the release (no publish execution).
-- Parses/normalizes spec and computes deterministic BLAKE3 release identity.
-- Persists planned release + action rows and planned artifacts in SQLite/WAL.
-- Prepares QC step.
-
-Disabled when:
-- Planning is running
-- Execute is running
-
-Backend side effect:
-- Calls Tauri IPC `plan_release`
-
-### `Execute`
-Intended behavior:
-- Runs the persisted deterministic pipeline for the currently planned release.
-- In `TEST`, uses mock/simulated execution only.
-- Refreshes history/report state after execute.
-
-Disabled when:
-- Execute is running
-- No planned release exists
-- QC approval gate is not valid for the current planned release
-
-Important gate conditions (must all be true):
-- A planned `release_id` exists
-- QC analysis exists and matches the current planned `release_id`
-- QC analysis passes client-side validity checks
-- Manual approval has been recorded for the current plan
-- QC analysis is not currently running
-
-Backend side effect:
-- Calls Tauri IPC `execute_release`
-
-### `Plan / Preview` `?` button
-Intended behavior:
-- Explains deterministic planning, BLAKE3 identity generation, and SQLite/WAL persistence.
-- No data mutation.
-
-### `Execute` `?` button
-Intended behavior:
-- Explains execute/verify state-machine behavior, run locks, and TEST/MockTransport behavior.
-- No data mutation.
-
-## Verify / QC Screen Actions (Publisher Ops)
-
-### `Analyze & Persist QC`
-Intended behavior:
-- Runs Rust audio analysis for the current planned release media.
-- Computes waveform peaks + LUFS and stores them in SQLite tied to the planned release.
-- Displays QC player and metrics.
-- Re-locks approval gate during reanalysis and on failure.
-
-Disabled when:
-- QC analysis is running
-- Planning is running
-- Execute is running
-- No planned release exists
-
-Backend side effect:
-- Calls Tauri IPC QC analysis commands (analyze + persist/get flows)
-
-### `Load Saved QC`
-Intended behavior:
-- Loads previously saved QC metrics for the selected history release.
-- Useful for re-inspection without rerunning analysis.
-
-Disabled when:
-- QC lookup is running
-- No history release is selected
-
-Backend side effect:
-- Calls Tauri IPC `get_release_track_analysis` (through UI wrapper)
-
-### `Approve for Release` / `Approved for Release`
-Intended behavior:
-- Records a local manual approval gate for the currently planned release after listening + waveform inspection.
-- Enables `Execute` only for that matching `release_id`.
-- Does not publish by itself.
-
-Disabled when:
-- No planned release exists
-- QC analysis belongs to a different release than the current plan
-- QC analysis is invalid/incomplete
-- QC analysis is currently running
-
-Backend side effect:
-- None (UI-local approval gate state)
-
-### `Clear Approval`
-Intended behavior:
-- Removes the local QC approval gate for the current plan.
-- Re-locks `Execute`.
-
-Disabled when:
-- Current plan is not approved (`!qcApprovedForCurrentPlan`)
-
-Backend side effect:
-- None
-
-### `Verify / QC` `?` button
-Intended behavior:
-- Explains Rust symphonia/EBU R128 analysis and persisted QC metrics.
-- No data mutation.
-
-### `Approve for Release` `?` button
-Intended behavior:
-- Explains that approval is local gating only (not publishing).
-- No data mutation.
-
-## Embedded QC Player in Publisher Ops (same component behavior)
+### New Release actions
 
 Buttons:
-- `Play` / `Pause`
-- `-5%`
-- `+5%`
+- `Load Spec`
+- `Plan / Preview`
+- `Execute`
 
 Intended behavior:
-- Same as the `QcPlayer` behavior described in the Music Core Tracks workspace section.
+- `Load Spec`: parse/validate YAML spec.
+- `Plan / Preview`: deterministic planning only.
+- `Execute`: run mocked pipeline, gated by valid QC + manual approval.
 
-## Report / History Screen Actions (Publisher Ops)
+### Verify / QC actions
 
-### `Refresh History`
+Buttons:
+- `Analyze & Persist QC`
+- `Load Saved QC`
+- `Approve for Release` / `Approved for Release`
+- `Clear Approval`
+
 Intended behavior:
-- Reloads release history rows from local SQLite.
+- Runs/loads QC analysis tied to current plan release ID.
+- Approval unlocks execute only for matching planned release.
+- Clearing approval relocks execute.
 
-Disabled when:
-- History refresh is in progress (`refreshingHistory`)
+QC playback note in shell:
+- When embedded in Music shell, Publisher Ops QC delegates playback to shared transport and hides local QC play toggle.
 
-Backend side effect:
-- Calls Tauri IPC `list_history`
+### Report / History actions
 
-### `Open Report`
+Buttons:
+- `Refresh History`
+- `Open Release Report`
+- `Resume Release`
+
 Intended behavior:
-- Loads the saved report artifact for the currently selected history release.
-- Switches/updates report summary and report actions list.
+- `Refresh History`: reload history rows.
+- `Open Release Report`: load report artifact for selected release.
+- `Resume Release`: execute selected historical release.
 
-Disabled when:
-- Report load is in progress (`loadingReport`)
-- No history release is selected
+## Other Clickable Controls (Not `<button>`)
 
-Backend side effect:
-- Calls Tauri IPC `get_report`
+Common bug-report sources:
+- `Library root path` input
+- `Import file paths` textarea
+- Track search input
+- Track sort select
+- Metadata selects (`Visibility`, `License`) and tags textarea
+- Publisher Ops `Spec File Path` input
+- Publisher Ops `Media File Path` input
+- Publisher Ops `Environment` select
+- History release radio selection
+- `Shared player seek` slider
+- QC waveform click-to-seek and QC seek slider
 
-### `Resume`
-Intended behavior:
-- Resumes execution for the selected history release by reusing persisted plan/report state.
-- Internally routes to the same execute path used by `Execute`.
-
-Disabled when:
-- Execute is currently running
-- No history release is selected
-
-Backend side effect:
-- Calls the same execute path / Tauri IPC `execute_release` for the selected release ID
-
-## Publisher Ops Help `?` Buttons (Non-mutating)
-
-These buttons only show help text/popovers and do not change app data:
-- `Spec File Path` label help icon
-- `Media File Path` label help icon
-- `Environment` help icon
-- `Platforms` legend help icon
-- `Plan / Preview` help popover icon
-- `Execute` help popover icon
-- `Verify / QC` help popover icon
-- `Approve for Release` help popover icon
-
-## Other Important Clickable Controls (Not Buttons)
-
-These are common bug-report sources even though they are not rendered as `<button>`:
-
-- `Spec File Path` text input
-- `Media File Path` text input
-- `Environment` select
-- `Mock connector` checkbox
-- History row radio selection (selects release for `Open Report` / `Load Saved QC` / `Resume`)
-- `QcPlayer` waveform click area (seek)
-- `QcPlayer` seek slider
-- Shared player seek slider
-- Music Core:
-  - library root path input
-  - import paths textarea
-  - track search input
-  - track sort select
-  - metadata editor selects/textarea/checkbox
-
-## Bug Report Template (Copy/Paste)
+## Bug Report Template
 
 ```md
 ### Bug
-- Workspace / Screen:
+- Mode + Workspace / Screen:
 - Button label:
 - Preconditions:
 - Expected behavior:
@@ -703,4 +438,3 @@ These are common bug-report sources even though they are not rendered as `<butto
 - Happens after restart? (Yes/No):
 - Sample file path / release_id (if relevant):
 ```
-

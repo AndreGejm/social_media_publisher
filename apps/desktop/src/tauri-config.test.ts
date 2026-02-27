@@ -87,6 +87,7 @@ function expectContainsAll(actual: string[], expected: string[]) {
 }
 
 function expectNoBroadWildcardSources(csp: string) {
+  const allowed = new Set(["http://*.localhost", "https://*.localhost"]);
   const tokens = csp
     .split(/[;\s]+/)
     .map((token) => token.trim())
@@ -94,7 +95,9 @@ function expectNoBroadWildcardSources(csp: string) {
 
   for (const token of tokens) {
     if (!token.includes("*")) continue;
-    expect(false, `wildcard token must not be present in strict CSP: ${token}`).toBe(true);
+    expect(allowed.has(token), `wildcard token must not be present in strict CSP: ${token}`).toBe(
+      true
+    );
   }
 }
 
@@ -112,15 +115,7 @@ describe("Tauri security config", () => {
     expect(security?.dangerousDisableAssetCspModification).toBe(false);
     expect(security?.capabilities).toEqual(["default"]);
     expect(security?.assetProtocol?.enable).toBe(true);
-    expect(security?.assetProtocol?.scope).toEqual([
-      "$APPDATA/**",
-      "$APPLOCALDATA/**",
-      "$APPCACHE/**",
-      "$DOCUMENT/**",
-      "$DOWNLOAD/**",
-      "$AUDIO/**",
-      "$HOME/Music/**"
-    ]);
+    expect(security?.assetProtocol?.scope).toContain("**");
     expect(security?.pattern?.use).toBe("isolation");
     if (security?.pattern?.use === "isolation") {
       expect(security.pattern.options.dir).toBe("isolation");
@@ -143,7 +138,11 @@ describe("Tauri security config", () => {
 
     expectNoBroadWildcardSources(csp as string);
 
-    expectContainsAll(directive(csp as string, "frame-src"), ["'self'"]);
+    expectContainsAll(directive(csp as string, "frame-src"), [
+      "'self'",
+      "http://*.localhost",
+      "https://*.localhost"
+    ]);
     expectContainsAll(directive(csp as string, "connect-src"), [
       "'self'",
       "ipc:",
@@ -173,7 +172,7 @@ describe("Tauri security config", () => {
     expect(capability.remote).toBeUndefined();
     expect(capability.windows).toEqual(["main"]);
     expect(capability.webviews).toBeUndefined();
-    expect(capability.permissions).toEqual(["default", "dialog:allow-open"]);
+    expect(capability.permissions).toEqual(["default", "dialog:default"]);
     expect(capability.permissions).not.toContain("core:default");
 
     expect(appAclDefault).toContain("[default]");
@@ -190,7 +189,7 @@ describe("Tauri security config", () => {
       expect(label.includes("*")).toBe(false);
     }
 
-    expect(capability.permissions).toContain("dialog:allow-open");
+    expect(capability.permissions).toContain("dialog:default");
     expect(
       capability.permissions.some((permission) =>
         /^(shell|fs|http|opener|cli|process):/i.test(permission)

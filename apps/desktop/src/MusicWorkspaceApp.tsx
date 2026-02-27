@@ -453,6 +453,7 @@ export default function MusicWorkspaceApp() {
   const [libraryRoots, setLibraryRoots] = useState<LibraryRootResponse[]>([]);
   const [libraryRootsLoading, setLibraryRootsLoading] = useState(false);
   const [libraryRootMutating, setLibraryRootMutating] = useState(false);
+  const [libraryRootBrowsing, setLibraryRootBrowsing] = useState(false);
   const [activeScanJobs, setActiveScanJobs] = useState<Record<string, CatalogIngestJobResponse>>({});
 
   const [selectedTrackId, setSelectedTrackId] = useState<string>("");
@@ -1381,6 +1382,8 @@ export default function MusicWorkspaceApp() {
   };
 
   const handleBrowseLibraryRoot = async () => {
+    if (libraryRootBrowsing) return;
+    setLibraryRootBrowsing(true);
     setCatalogError(null);
     try {
       const selected = await pickDirectoryDialog({ title: "Select Library Root Folder" });
@@ -1389,6 +1392,8 @@ export default function MusicWorkspaceApp() {
       setAppNotice({ level: "info", message: "Library root path selected. Click Add Root to persist it." });
     } catch (error) {
       setCatalogError(normalizeUiError(error));
+    } finally {
+      setLibraryRootBrowsing(false);
     }
   };
 
@@ -1620,9 +1625,9 @@ export default function MusicWorkspaceApp() {
                         type="button"
                         className="secondary-action"
                         onClick={() => void handleBrowseLibraryRoot()}
-                        disabled={libraryRootMutating}
+                        disabled={libraryRootMutating || libraryRootBrowsing}
                       >
-                        Browse...
+                        {libraryRootBrowsing ? "Opening..." : "Browse..."}
                       </button>
                     </HelpTooltip>
                     <HelpTooltip content="Adds this folder as a persisted local library root.">

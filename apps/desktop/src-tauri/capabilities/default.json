@@ -5,6 +5,6 @@
   "windows": ["main"],
   "permissions": [
     "default",
-    "dialog:allow-open"
+    "dialog:default"
   ]
 }

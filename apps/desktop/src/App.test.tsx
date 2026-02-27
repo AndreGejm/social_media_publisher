@@ -708,7 +708,7 @@ describe("App", () => {
     fireEvent.click(screen.getByTestId("open-report-button"));
     await waitFor(() => {
       expect(getReportCalls).toHaveLength(1);
-      expect(screen.getByTestId("open-report-button")).toHaveTextContent("Loading Report...");
+      expect(screen.getByTestId("open-report-button")).toHaveTextContent("Loading Release Report...");
     });
 
     fireEvent.click(screen.getByTestId("execute-button"));

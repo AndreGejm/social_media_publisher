@@ -16,11 +16,20 @@ const tauriApiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./App", () => ({
-  default: (props: { prefillMediaPath?: string | null; prefillSpecPath?: string | null }) => (
+  default: (props: {
+    prefillMediaPath?: string | null;
+    prefillSpecPath?: string | null;
+    externalRequestedScreen?: string | null;
+    onScreenChange?: ((screen: string) => void) | null;
+  }) => (
     <div data-testid="publisher-ops-mock">
       Publisher Ops Mock
       <span data-testid="publisher-ops-prefill-media">{props.prefillMediaPath ?? ""}</span>
       <span data-testid="publisher-ops-prefill-spec">{props.prefillSpecPath ?? ""}</span>
+      <span data-testid="publisher-ops-requested-screen">{props.externalRequestedScreen ?? ""}</span>
+      <button type="button" onClick={() => props.onScreenChange?.("Verify / QC")}>
+        Mock Sync Verify
+      </button>
     </div>
   )
 }));
@@ -156,6 +165,46 @@ function installTwoTrackCatalog() {
   });
 }
 
+function installTwoTrackSingleAlbumCatalog() {
+  const albumTitle = "Night Session";
+  const albumTrackA = {
+    ...baseTrackListItem,
+    album_title: albumTitle
+  };
+  const albumTrackB = {
+    ...secondTrackListItem,
+    album_title: albumTitle
+  };
+  const albumDetailA = {
+    ...baseTrackDetail,
+    track_id: albumTrackA.track_id,
+    title: albumTrackA.title,
+    album_title: albumTitle,
+    file_path: albumTrackA.file_path,
+    media_fingerprint: albumTrackA.media_fingerprint,
+    track: {
+      ...baseTrackDetail.track,
+      file_path: albumTrackA.file_path,
+      duration_ms: albumTrackA.duration_ms,
+      loudness_lufs: albumTrackA.loudness_lufs
+    }
+  };
+  const albumDetailB = {
+    ...secondTrackDetail,
+    album_title: albumTitle
+  };
+  tauriApiMocks.catalogListTracks.mockResolvedValue({
+    items: [albumTrackA, albumTrackB],
+    total: 2,
+    limit: 100,
+    offset: 0
+  });
+  tauriApiMocks.catalogGetTrack.mockImplementation(async (trackId: string) => {
+    if (trackId === albumTrackB.track_id) return { ...albumDetailB };
+    return { ...albumDetailA };
+  });
+}
+
 async function openTracksAndSelectFirstTrack() {
   fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
   const trackRow = await screen.findByRole("button", { name: /^Authoring Track/i });
@@ -168,6 +217,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    window.localStorage.clear();
     Object.values(tauriApiMocks).forEach((mockFn) => mockFn.mockReset());
     installCatalogApiHappyDefaults();
   });
@@ -245,6 +295,26 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(alert).toHaveTextContent("tag labels exceed maximum length");
   });
 
+  it("keeps Track Detail metadata editing in a single panel with header save/cancel/reset actions", async () => {
+    const view = render(<MusicWorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Metadata" }));
+    fireEvent.change(screen.getByLabelText("Tags"), {
+      target: { value: "ambient, edited" }
+    });
+
+    expect(screen.getByText("Edit mode")).toBeInTheDocument();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Metadata" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset Fields" })).toBeInTheDocument();
+
+    expect(screen.queryByText(/Inline edit mode \(local catalog only\)/i)).not.toBeInTheDocument();
+    expect(view.container.querySelector(".track-detail-inline-reset")).toBeNull();
+    expect(view.container.querySelector(".track-meta-grid .track-meta-tags-panel")).not.toBeNull();
+  });
+
   it("supports multi-select batch actions in Tracks", async () => {
     installTwoTrackCatalog();
     render(<MusicWorkspaceApp />);
@@ -256,11 +326,32 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(screen.getByRole("button", { name: "Add Selection to Queue" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add Selection to Queue" }));
 
-    expect(await screen.findByText("Added 2 tracks to queue.")).toBeInTheDocument();
+    const dismissNoticeButton = await screen.findByRole("button", { name: "Dismiss notice" });
+    const noticeBanner = dismissNoticeButton.closest(".catalog-notice-banner");
+    expect(noticeBanner).not.toBeNull();
+    expect(within(noticeBanner as HTMLElement).getByText("Success")).toBeInTheDocument();
+    expect(within(noticeBanner as HTMLElement).getByText("Added 2 tracks to queue.")).toBeInTheDocument();
+    fireEvent.click(dismissNoticeButton);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Dismiss notice" })).not.toBeInTheDocument();
+    });
+
     const queueDock = screen.getByLabelText("Queue and session state");
     expect(within(queueDock).getByText("2 item(s)")).toBeInTheDocument();
+    expect(within(queueDock).getByText("Added 2 tracks to queue.")).toBeInTheDocument();
     expect(within(queueDock).getByText(baseTrackListItem.title)).toBeInTheDocument();
     expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+  });
+
+  it("keeps selected-track playback actions in Track Detail instead of duplicating them in the Tracks toolbar", async () => {
+    render(<MusicWorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    expect(screen.queryByRole("group", { name: "Selected track actions" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play Now" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add to Queue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play Next" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Tracks view actions" })).toBeInTheDocument();
   });
 
   it("opens a row context menu and runs Play Now", async () => {
@@ -281,6 +372,167 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(await screen.findByText("Playback started.")).toBeInTheDocument();
   });
 
+  it("opens an album-track row context menu and shows the track in Tracks", async () => {
+    installTwoTrackCatalog();
+    render(<MusicWorkspaceApp />);
+    fireEvent.click(screen.getByRole("button", { name: "Albums" }));
+
+    const albumRowMenuButton = await screen.findByRole("button", { name: "Open actions for Queue Candidate" });
+    fireEvent.click(albumRowMenuButton);
+
+    const menu = await screen.findByRole("menu", { name: /Actions for Queue Candidate/i });
+    expect(within(menu).getByRole("menuitem", { name: "Show in Tracks" })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Show in Tracks" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("menu", { name: /Actions for Queue Candidate/i })).not.toBeInTheDocument();
+    });
+    expect(await screen.findByRole("heading", { name: "Queue Candidate" })).toBeInTheDocument();
+  });
+
+  it("supports album multi-select batch queue actions in Albums detail", async () => {
+    installTwoTrackSingleAlbumCatalog();
+    render(<MusicWorkspaceApp />);
+    fireEvent.click(screen.getByRole("button", { name: "Albums" }));
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: `Select ${baseTrackListItem.title} for album batch actions`
+      })
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: `Select ${secondTrackListItem.title} for album batch actions`
+      })
+    );
+
+    const batchActions = screen.getByRole("group", { name: "Batch actions for selected album tracks" });
+    expect(within(batchActions).getByText("2 selected")).toBeInTheDocument();
+    expect(within(batchActions).getByRole("button", { name: "Add Selection to Queue" })).toBeInTheDocument();
+    expect(within(batchActions).getByRole("button", { name: "Play Selection Next" })).toBeInTheDocument();
+
+    const queueDock = screen.getByLabelText("Queue and session state");
+    fireEvent.click(within(batchActions).getByRole("button", { name: "Add Selection to Queue" }));
+    expect(await within(queueDock).findByText("Added 2 tracks to queue.")).toBeInTheDocument();
+    expect(within(queueDock).getByText(baseTrackListItem.title)).toBeInTheDocument();
+    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+
+    fireEvent.click(within(batchActions).getByRole("button", { name: "Play Selection Next" }));
+    expect(await within(queueDock).findByText("Queued 2 selected tracks to play next.")).toBeInTheDocument();
+  });
+
+  it("switches between Listen and Publish modes and filters the sidebar workspaces", async () => {
+    render(<MusicWorkspaceApp />);
+
+    expect(screen.getByRole("button", { name: "Library" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publisher Ops" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+
+    expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Library" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("publisher-ops-mock")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
+
+    expect(await screen.findByRole("button", { name: "Library" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publisher Ops" })).not.toBeInTheDocument();
+  });
+
+  it("shows a Publish step bar and syncs the requested Publisher Ops screen", async () => {
+    render(<MusicWorkspaceApp />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+
+    expect(await screen.findByRole("tablist", { name: "Publish workflow steps" })).toBeInTheDocument();
+    expect(screen.getByTestId("publisher-ops-requested-screen")).toHaveTextContent("New Release");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Execute" }));
+    expect(screen.getByTestId("publisher-ops-requested-screen")).toHaveTextContent("Execute");
+
+    fireEvent.click(screen.getByRole("button", { name: "Mock Sync Verify" }));
+    expect(await screen.findByTestId("publisher-ops-requested-screen")).toHaveTextContent("Verify / QC");
+  });
+
+  it("splits Library ingest tools into Scan Folders and Import Files tabs with clearer labels", async () => {
+    render(<MusicWorkspaceApp />);
+
+    const ingestTabs = screen.getByRole("tablist", { name: "Library ingest sections" });
+    expect(within(ingestTabs).getByRole("tab", { name: "Scan Folders" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Indexes files in-place. Does not copy audio files.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Folder" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh Folders" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("textbox", { name: "Import file paths" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(ingestTabs).getByRole("tab", { name: "Import Files" }));
+
+    expect(await screen.findByRole("textbox", { name: "Import file paths" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Manual ingest for explicit files only\. No folder root needs to be saved first\./i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/managed file-copy workflow is not enabled in this build/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import Files" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Folder" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    expect(screen.queryByRole("tablist", { name: "Library ingest sections" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the Listen queue separate from the Publish release selection dock", async () => {
+    installTwoTrackCatalog();
+    render(<MusicWorkspaceApp />);
+    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: `Select ${secondTrackListItem.title} for batch actions`
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Play Selection" }));
+
+    const queueDock = screen.getByLabelText("Queue and session state");
+    expect(within(queueDock).getByRole("heading", { name: "Queue" })).toBeInTheDocument();
+    expect(within(queueDock).getByText("1 item(s)")).toBeInTheDocument();
+    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+
+    expect(await within(queueDock).findByRole("heading", { name: "Release Selection" })).toBeInTheDocument();
+    expect(within(queueDock).getByText("0 draft(s)")).toBeInTheDocument();
+    expect(within(queueDock).getByText(/No tracks prepared yet\./i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
+    expect(await within(queueDock).findByRole("heading", { name: "Queue" })).toBeInTheDocument();
+    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+  });
+
+  it("adds prepared tracks to the Publish release selection when opening Publisher Ops", async () => {
+    installTwoTrackCatalog();
+    render(<MusicWorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Open in Publisher Ops|Prepare for Release|Open in Publish Workflow/i
+      })
+    );
+
+    expect(await screen.findByTestId("publisher-ops-mock")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Publish" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("publisher-ops-prefill-media")).toHaveTextContent(baseTrackDetail.file_path);
+    expect(screen.getByTestId("publisher-ops-prefill-spec")).toHaveTextContent("C:/tmp/release_spec.yaml");
+
+    const queueDock = screen.getByLabelText("Queue and session state");
+    expect(within(queueDock).getByRole("heading", { name: "Release Selection" })).toBeInTheDocument();
+    expect(within(queueDock).getByText("1 draft(s)")).toBeInTheDocument();
+    expect(within(queueDock).getByText(baseTrackListItem.title)).toBeInTheDocument();
+    expect(within(queueDock).getByText(baseTrackListItem.artist_name)).toBeInTheDocument();
+  });
+
   it("keeps the shared transport mounted across workspace navigation", async () => {
     render(<MusicWorkspaceApp />);
 
@@ -291,7 +543,39 @@ describe("MusicWorkspaceApp metadata editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Albums" }));
     expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Publisher Ops" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Publisher Ops" }));
     expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
+  });
+
+  it("persists collapsed Library and Settings sections across remounts", async () => {
+    const firstRender = render(<MusicWorkspaceApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide Library Ingest" }));
+    expect(screen.queryByRole("tablist", { name: "Library ingest sections" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide Library overview" }));
+    expect(
+      screen.queryByRole("heading", { name: /Music-first workspace, publisher pipeline preserved/i })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Hide Preferences" }));
+    expect(screen.queryByRole("combobox", { name: "Theme preference" })).not.toBeInTheDocument();
+
+    expect(window.localStorage.getItem("rp.music.libraryIngestCollapsed.v1")).toBe("true");
+    expect(window.localStorage.getItem("rp.music.libraryOverviewCollapsed.v1")).toBe("true");
+    expect(window.localStorage.getItem("rp.music.settingsPreferencesCollapsed.v1")).toBe("true");
+
+    firstRender.unmount();
+
+    render(<MusicWorkspaceApp />);
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+    expect(screen.getByRole("button", { name: "Show Library Ingest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show Library overview" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("button", { name: "Show Preferences" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Theme preference" })).not.toBeInTheDocument();
   });
 });

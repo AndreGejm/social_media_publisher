@@ -12,5 +12,9 @@ describe("media-url", () => {
     expect(localFilePathToMediaUrl("C:\\Music\\track.wav")).toContain("file:///");
     expect(localFilePathToMediaUrl("/var/audio/track.wav")).toContain("file://");
   });
-});
 
+  it("normalizes windows extended-length prefixes", () => {
+    expect(localFilePathToMediaUrl("\\\\?\\C:\\Music\\track.wav")).toContain("file:///");
+    expect(localFilePathToMediaUrl("//?/C:/Music/track.wav")).toContain("file:///");
+  });
+});

@@ -15,10 +15,10 @@
         "label": "main",
         "title": "Release Publisher",
         "center": true,
-        "width": 1280,
-        "height": 860,
-        "minWidth": 800,
-        "minHeight": 600,
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 720,
         "resizable": true
       }
     ],
@@ -29,13 +29,7 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/**",
-          "$APPLOCALDATA/**",
-          "$APPCACHE/**",
-          "$DOCUMENT/**",
-          "$DOWNLOAD/**",
-          "$AUDIO/**",
-          "$HOME/Music/**"
+          "**"
         ]
       },
       "pattern": {
@@ -44,8 +38,8 @@
           "dir": "isolation"
         }
       },
-      "csp": "default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' data: blob: asset: file: http://asset.localhost; font-src 'self' data:; worker-src 'none'; manifest-src 'self';",
-      "devCsp": "default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self'; script-src 'self' http://localhost:1420; style-src 'self' 'unsafe-inline' http://localhost:1420; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' data: blob: asset: http://asset.localhost http://localhost:1420; media-src 'self' data: blob: asset: file: http://asset.localhost http://localhost:1420; font-src 'self' data:; worker-src 'none'; manifest-src 'self';"
+      "csp": "default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' http://*.localhost https://*.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' data: blob: asset: file: http://asset.localhost; font-src 'self' data:; worker-src 'none'; manifest-src 'self';",
+      "devCsp": "default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' http://*.localhost https://*.localhost; script-src 'self' http://localhost:1420; style-src 'self' 'unsafe-inline' http://localhost:1420; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' data: blob: asset: http://asset.localhost http://localhost:1420; media-src 'self' data: blob: asset: file: http://asset.localhost http://localhost:1420; font-src 'self' data:; worker-src 'none'; manifest-src 'self';"
     }
   },
   "bundle": {
