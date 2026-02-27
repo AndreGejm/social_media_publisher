@@ -22,6 +22,7 @@ cat << 'MATRIX'
 TYPE       | COMMAND            | INPUT (Type)      | INVARIANT / OUTPUT BEHAVIOR
 -----------|--------------------|-------------------|-----------------------------------------------------
 MUTATOR    | push.sh            | msg (String)      | Atomic: Stage all -> Commit -> Push. (Exit 0/1)
+MUTATOR    | publish.sh         | None              | Push current branch without creating a commit.
 MUTATOR    | pull.sh            | None              | Atomic: Fetch -> Rebase. Aborts on conflict.
 MUTATOR    | commit.sh          | msg (String)      | Atomic: Stage all -> Commit locally. No push.
 MUTATOR    | merge.sh           | branch (String)   | Atomic: Merge branch to HEAD. Auto-aborts conflict.
@@ -76,6 +77,23 @@ git push origin "$BRANCH" || { echo "ERROR [push]: Push failed."; exit 1; }
 
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | PUSH | Branch: $BRANCH | Msg: $COMMIT_MSG | Status: SUCCESS" >> "$LOG_FILE"
 echo "SUCCESS: Changes pushed to $BRANCH."
+EOF
+
+# ---------------------------------------------------------
+# 3b. PUBLISH (State Mutator - Push Only)
+# ---------------------------------------------------------
+cat << 'EOF' > "$GIT_DIR/publish.sh"
+#!/bin/bash
+set -euo pipefail
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
+
+git rev-parse --is-inside-work-tree > /dev/null
+BRANCH="$(git branch --show-current)"
+
+git push origin "$BRANCH" || { echo "ERROR [publish]: Push failed."; exit 1; }
+
+echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | PUBLISH | Branch: $BRANCH | Status: SUCCESS" >> "$LOG_FILE"
+echo "SUCCESS: Branch $BRANCH pushed."
 EOF
 
 # ---------------------------------------------------------

@@ -6,6 +6,7 @@ cat << 'MATRIX'
 TYPE       | COMMAND            | INPUT (Type)      | INVARIANT / OUTPUT BEHAVIOR
 -----------|--------------------|-------------------|-----------------------------------------------------
 MUTATOR    | push.sh            | msg (String)      | Atomic: Stage all -> Commit -> Push. (Exit 0/1)
+MUTATOR    | publish.sh         | None              | Push current branch without creating a commit.
 MUTATOR    | pull.sh            | None              | Atomic: Fetch -> Rebase. Aborts on conflict.
 MUTATOR    | commit.sh          | msg (String)      | Atomic: Stage all -> Commit locally. No push.
 MUTATOR    | merge.sh           | branch (String)   | Atomic: Merge branch to HEAD. Auto-aborts conflict.
