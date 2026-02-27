@@ -1,10 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import MusicWorkspaceApp from "./MusicWorkspaceApp";
+import AppShell from "./app/shell/AppShell";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MusicWorkspaceApp />
+    <AppShell />
   </React.StrictMode>
 );

@@ -38,7 +38,7 @@ vi.mock("./QcPlayer", () => ({
   QcPlayer: () => <div data-testid="qc-player-mock">QC Player Mock</div>
 }));
 
-vi.mock("./tauri-api", () => tauriApiMocks);
+vi.mock("./services/tauriClient", () => tauriApiMocks);
 
 import MusicWorkspaceApp from "./MusicWorkspaceApp";
 
