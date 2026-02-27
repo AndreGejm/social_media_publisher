@@ -4,7 +4,7 @@
 set -euo pipefail
 
 GIT_DIR="./git-toolkit"
-LOG_FILE="$GIT_DIR/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 echo "Initializing Unified Git Toolkit in $GIT_DIR..."
 mkdir -p "$GIT_DIR"
@@ -59,7 +59,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/push.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 COMMIT_MSG="${1:-}"
 if [[ -z "$COMMIT_MSG" ]]; then
@@ -84,7 +84,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/pull.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 git rev-parse --is-inside-work-tree > /dev/null
 
 BRANCH="$(git branch --show-current)"
@@ -106,7 +106,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/branch-exp.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 git rev-parse --is-inside-work-tree > /dev/null
 
 SUFFIX="${1:-}"
@@ -134,7 +134,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/sync-main.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 git rev-parse --is-inside-work-tree > /dev/null
 
 CURRENT_BRANCH="$(git branch --show-current)"
@@ -162,7 +162,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/checkout.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 TARGET="${1:-}"
 
 if [[ -z "$TARGET" ]]; then
@@ -191,7 +191,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/commit.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 COMMIT_MSG="${1:-}"
 
 if [[ -z "$COMMIT_MSG" ]]; then
@@ -212,7 +212,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/merge.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 SOURCE="${1:-}"
 
 if [[ -z "$SOURCE" ]]; then
@@ -237,7 +237,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/stash.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 git stash push -m "AI Agent Auto-stash"
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | STASH | Status: SUCCESS" >> "$LOG_FILE"
@@ -247,7 +247,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/stash-pop.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 if ! git stash pop; then
     echo "ERROR [stash-pop]: Conflict during stash pop. Stash remains intact, but working tree requires manual resolution." >&2
@@ -265,7 +265,7 @@ EOF
 cat << 'EOF' > "$GIT_DIR/undo-soft.sh"
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 git reset --soft HEAD~1
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | UNDO_SOFT | Target: HEAD~1 | Status: SUCCESS" >> "$LOG_FILE"

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 COMMIT_MSG="${1:-}"
 
 if [[ -z "$COMMIT_MSG" ]]; then

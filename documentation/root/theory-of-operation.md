@@ -4,6 +4,7 @@
 
 | Version | Date | Author | Description of Changes |
 | --- | --- | --- | --- |
+| v1.0.2 | 2026-02-28 | Platform Engineering (Codex) | Documented deterministic Git wrapper operations (`git-toolkit`) and token-optimized Windows build wrapper (`build/make-exe.ps1`) with log-first output policy. |
 | v1.0.1 | 2026-02-27 | Platform Engineering (Codex) | Clarified pipeline semantics as `Plan -> QC -> Execute -> Audit/Remote Verify`; added Catalog Subsystem definition; documented shared-transport I/O handoff rules; clarified backend-authoritative spec parsing/validation path. |
 | v1.0.0 | 2026-02-26 | Platform Engineering (Codex) | Initial Theory of Operation covering frontend, IPC boundary, Rust backend, SQLite WAL persistence, audio analysis circuitry, idempotency, state machine, and error strategy. |
 
@@ -1300,6 +1301,25 @@ The following test functions validate behavior and fault tolerance of production
 - Publish execution currently uses mock transport semantics by design.
 - Catalog and publisher are integrated, but remain separate concerns.
 - Shared transport is globally mounted and persists across workspace navigation.
+
+### 9.1 Deterministic Git Operations
+
+- Repository mutation is executed through `./git-toolkit/*.sh` wrappers, not direct raw Git CLI use.
+- Required pre-mutation inspection path:
+  - `./git-toolkit/status.sh`
+  - `./git-toolkit/diff-stat.sh`
+  - `./git-toolkit/log.sh <N>`
+- Wrapper failures (`exit code 1`) are treated as hard stops requiring manual operator intervention.
+- Toolkit operational logs are written to `.git/git-toolkit-op.log` so wrapper execution does not keep the worktree dirty.
+
+### 9.2 Token-Optimized Windows Build Operations
+
+- Windows executable builds are launched through `build/make-exe.ps1`.
+- Build stdout/stderr is redirected to append-only logs in `build/logs/`.
+- Console output contract is deterministic:
+  - success: one line (`BUILD SUCCESS: ...`)
+  - failure: header + last 15 log lines (`BUILD FAILED. Tail of log:`)
+- This isolates verbose compiler traces from normal operator/agent interaction while retaining full traceability in log files.
 
 ## 10. Known Constraints and Non-Goals (Current Version)
 

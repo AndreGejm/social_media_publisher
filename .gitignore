@@ -8,6 +8,7 @@ test-results/
 target/
 artifacts/
 revisions/
+build/logs/
 .runtime-e2e-temp/
 .snapshot_tag_name
 *.tsbuildinfo

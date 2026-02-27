@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 git rev-parse --is-inside-work-tree > /dev/null
 
 CURRENT_BRANCH="$(git branch --show-current)"

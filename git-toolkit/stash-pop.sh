@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-LOG_FILE="$(dirname "$0")/git_op.log"
+LOG_FILE="$(git rev-parse --git-dir)/git-toolkit-op.log"
 
 if ! git stash pop; then
     echo "ERROR [stash-pop]: Conflict during stash pop. Stash remains intact, but working tree requires manual resolution." >&2
