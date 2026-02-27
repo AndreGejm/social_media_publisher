@@ -847,12 +847,16 @@ body {
   --workspace-content-max-width: 1360px;
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 320px;
+  grid-template-columns: 300px minmax(0, 1fr);
   padding-bottom: calc(var(--shared-player-height) + env(safe-area-inset-bottom, 0px));
   isolation: isolate;
   background:
     radial-gradient(1200px 500px at 0% 0%, rgba(18, 104, 106, 0.1), transparent 60%),
     linear-gradient(180deg, #f8fbfb 0%, #f4f6f7 100%);
+}
+
+.music-shell.with-right-dock {
+  grid-template-columns: 300px minmax(0, 1fr) 320px;
 }
 
 :root[data-theme="dark"] .music-shell {
@@ -1291,6 +1295,77 @@ body {
   width: min(calc(100% - 2rem), var(--workspace-content-max-width));
 }
 
+.notification-stack-top {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0.65rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(100vw - 1.5rem), 640px);
+  display: grid;
+  gap: 0.45rem;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.app-notification {
+  pointer-events: auto;
+  border: 1px solid rgba(17, 100, 102, 0.2);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 20, 25, 0.2);
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.app-notification-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.app-notification-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.app-notification-dismiss {
+  border: 1px solid rgba(17, 100, 102, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-notification.info {
+  border-color: rgba(17, 100, 102, 0.24);
+}
+
+.app-notification.success {
+  border-color: rgba(57, 136, 88, 0.34);
+  background: rgba(242, 252, 245, 0.96);
+}
+
+.app-notification.warning {
+  border-color: rgba(170, 111, 23, 0.36);
+  background: rgba(255, 247, 231, 0.96);
+  color: #754600;
+}
+
+.app-notification.error {
+  background: #ffeceb;
+  color: #972f23;
+  border: 1px solid #d76356;
+}
+
 .workspace-content {
   min-height: 0;
   overflow-x: hidden;
@@ -1416,8 +1491,9 @@ body {
 }
 
 .tracks-view-head {
-  position: relative;
-  z-index: 1;
+  position: sticky;
+  top: 0;
+  z-index: 50;
   display: grid;
   gap: 0.35rem;
   background: rgba(247, 250, 250, 0.96);
@@ -1429,8 +1505,20 @@ body {
 
 .tracks-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+  min-width: 0;
+}
+
+.tracks-list-column {
+  position: relative;
+  z-index: 50;
+}
+
+.tracks-detail-column {
+  position: relative;
+  z-index: 20;
 }
 
 .tracks-toolbar-select {
@@ -1440,6 +1528,7 @@ body {
   color: var(--text);
   padding: 0.6rem 0.7rem;
   font: inherit;
+  width: 100%;
 }
 
 .tracks-subtoolbar {
@@ -1448,6 +1537,33 @@ body {
   align-items: center;
   gap: 0.45rem;
   background: inherit;
+}
+
+.play-list-mode-toggle {
+  display: inline-flex;
+  gap: 0.2rem;
+  border: 1px solid rgba(17, 100, 102, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 0.18rem;
+}
+
+.play-list-mode-tab {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.3rem 0.58rem;
+  cursor: pointer;
+}
+
+.play-list-mode-tab.active {
+  background: rgba(17, 100, 102, 0.1);
+  border-color: rgba(17, 100, 102, 0.2);
+  color: #0f585a;
 }
 
 .tracks-selection-actions {
@@ -1503,6 +1619,24 @@ body {
   background: #fff;
   padding: 0.65rem 0.75rem;
   font: inherit;
+  width: 100%;
+}
+
+.tracks-toolbar > .help-tooltip-root {
+  min-width: 0;
+}
+
+.tracks-toolbar > .help-tooltip-root:first-child {
+  flex: 1 1 100%;
+}
+
+.tracks-toolbar > .help-tooltip-root:nth-child(2),
+.tracks-toolbar > .help-tooltip-root:nth-child(3) {
+  flex: 1 1 9.5rem;
+}
+
+.tracks-toolbar > .help-tooltip-root:nth-child(3) > .secondary-action {
+  width: 100%;
 }
 
 .tracks-list-shell {
@@ -1539,6 +1673,14 @@ body {
 .track-row-shell.batch-selected:not(.selected) {
   border-color: rgba(198, 115, 45, 0.22);
   background: rgba(198, 115, 45, 0.05);
+}
+
+.queue-row-shell {
+  cursor: grab;
+}
+
+.queue-row-shell.queue-dragging {
+  opacity: 0.62;
 }
 
 .track-row-batch-checkbox {
@@ -1584,6 +1726,11 @@ body {
   display: flex;
   gap: 0.35rem;
   align-items: center;
+}
+
+.track-row-queue-index {
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .track-row-favorite {
@@ -2294,7 +2441,18 @@ body {
   border-color: rgba(94, 199, 201, 0.14);
 }
 
+:root[data-theme="dark"] .play-list-mode-toggle {
+  background: rgba(20, 26, 32, 0.9);
+  border-color: rgba(94, 199, 201, 0.14);
+}
+
 :root[data-theme="dark"] .music-mode-tab.active {
+  background: rgba(94, 199, 201, 0.12);
+  border-color: rgba(94, 199, 201, 0.22);
+  color: #b5fbff;
+}
+
+:root[data-theme="dark"] .play-list-mode-tab.active {
   background: rgba(94, 199, 201, 0.12);
   border-color: rgba(94, 199, 201, 0.22);
   color: #b5fbff;
@@ -2450,6 +2608,8 @@ body {
 :root[data-theme="dark"] .topbar-pill.button,
 :root[data-theme="dark"] .tracks-view-head,
 :root[data-theme="dark"] .albums-head,
+:root[data-theme="dark"] .play-list-mode-toggle,
+:root[data-theme="dark"] .play-list-mode-tab,
 :root[data-theme="dark"] .queue-card,
 :root[data-theme="dark"] .settings-card,
 :root[data-theme="dark"] .placeholder-workspace,
@@ -2499,6 +2659,7 @@ body {
 
 :root[data-theme="dark"] .workspace-nav-item.active,
 :root[data-theme="dark"] .music-mode-tab.active,
+:root[data-theme="dark"] .play-list-mode-tab.active,
 :root[data-theme="dark"] .library-ingest-tab.active,
 :root[data-theme="dark"] .publish-step-tab.active,
 :root[data-theme="dark"] .topbar-pill,
@@ -2509,6 +2670,7 @@ body {
 
 :root[data-theme="dark"] .workspace-nav-item.active,
 :root[data-theme="dark"] .music-mode-tab.active,
+:root[data-theme="dark"] .play-list-mode-tab.active,
 :root[data-theme="dark"] .library-ingest-tab.active,
 :root[data-theme="dark"] .publish-step-tab.active {
   background: rgba(46, 160, 67, 0.16);
@@ -2534,6 +2696,40 @@ body {
   background: #2d2415;
   border-color: #8d6a2f;
   color: #f2d097;
+}
+
+:root[data-theme="dark"] .app-notification {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--line);
+}
+
+:root[data-theme="dark"] .app-notification-dismiss {
+  background: #1a222a;
+  border-color: #3b4652;
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .app-notification.info {
+  background: #162028;
+  border-color: #314454;
+}
+
+:root[data-theme="dark"] .app-notification.success {
+  background: #16251a;
+  border-color: var(--accent);
+}
+
+:root[data-theme="dark"] .app-notification.warning {
+  background: #2d2415;
+  border-color: #8d6a2f;
+  color: #f2d097;
+}
+
+:root[data-theme="dark"] .app-notification.error {
+  background: #2a1212;
+  color: #ff6b6b;
+  border: 1px solid #ff5c5c;
 }
 
 :root[data-theme="dark"] .catalog-error-banner,

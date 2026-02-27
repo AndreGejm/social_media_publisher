@@ -36,6 +36,7 @@ type AppMode = "Listen" | "Publish";
 type LibraryIngestTab = "scan_folders" | "import_files";
 type TrackSortKey = "updated_desc" | "title_asc" | "artist_asc" | "duration_desc" | "loudness_desc";
 type ThemePreference = "system" | "light" | "dark";
+type PlayListMode = "library" | "queue";
 
 const workspaces: Workspace[] = ["Library", "Albums", "Tracks", "Playlists", "Publisher Ops", "Settings"];
 const listenModeWorkspaces: Workspace[] = ["Library", "Albums", "Tracks", "Playlists", "Settings"];
@@ -78,7 +79,8 @@ const STORAGE_KEYS = {
   publishSelectionQueue: "rp.publish.selectionQueue.v1",
   themePreference: "rp.music.themePreference.v1",
   compactDensity: "rp.music.compactDensity.v1",
-  showFullPaths: "rp.music.showFullPaths.v1"
+  showFullPaths: "rp.music.showFullPaths.v1",
+  playListMode: "rp.music.playListMode.v1"
 } as const;
 
 type TrackMetadataEditorState = {
@@ -108,8 +110,21 @@ type AlbumGroup = {
 };
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
-type TrackRowContextMenuSource = "tracks" | "albums";
-type TrackRowContextMenuState = { trackId: string; x: number; y: number; source: TrackRowContextMenuSource };
+type TopNotification = {
+  id: string;
+  level: "info" | "success" | "warning" | "error";
+  label: string;
+  message: string;
+  dismiss: () => void;
+};
+type TrackRowContextMenuSource = "tracks" | "albums" | "queue";
+type TrackRowContextMenuState = {
+  trackId: string;
+  x: number;
+  y: number;
+  source: TrackRowContextMenuSource;
+  queueIndex?: number;
+};
 type ExternalPlayerSource = {
   key: string;
   filePath: string;
@@ -245,6 +260,10 @@ function isTrackSortKey(value: unknown): value is TrackSortKey {
 
 function isLibraryIngestTab(value: unknown): value is LibraryIngestTab {
   return value === "scan_folders" || value === "import_files";
+}
+
+function isPlayListMode(value: unknown): value is PlayListMode {
+  return value === "library" || value === "queue";
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -419,6 +438,9 @@ export default function MusicWorkspaceApp() {
   const [trackSort, setTrackSort] = useState<TrackSortKey>(() =>
     readStorage<TrackSortKey>(STORAGE_KEYS.trackSort, "updated_desc", isTrackSortKey)
   );
+  const [playListMode, setPlayListMode] = useState<PlayListMode>(() =>
+    readStorage<PlayListMode>(STORAGE_KEYS.playListMode, "library", isPlayListMode)
+  );
   const [showFavoritesOnly, setShowFavoritesOnly] = useState<boolean>(() =>
     readStorage<boolean>(STORAGE_KEYS.onlyFavorites, false, (value): value is boolean => typeof value === "boolean")
   );
@@ -459,6 +481,7 @@ export default function MusicWorkspaceApp() {
   const [selectedTrackId, setSelectedTrackId] = useState<string>("");
   const [batchSelectedTrackIds, setBatchSelectedTrackIds] = useState<string[]>([]);
   const [trackRowContextMenu, setTrackRowContextMenu] = useState<TrackRowContextMenuState | null>(null);
+  const [queueDragTrackId, setQueueDragTrackId] = useState<string | null>(null);
   const [selectedTrackDetail, setSelectedTrackDetail] = useState<CatalogTrackDetailResponse | null>(null);
   const [trackDetailsById, setTrackDetailsById] = useState<Record<string, CatalogTrackDetailResponse>>({});
   const [selectedTrackLoading, setSelectedTrackLoading] = useState(false);
@@ -515,7 +538,16 @@ export default function MusicWorkspaceApp() {
       .filter((item): item is CatalogListTracksResponse["items"][number] => Boolean(item));
     return sessionQueue.length > 0 ? sessionQueue : visibleTracks;
   }, [sessionQueueTrackIds, visibleTracks, visibleTracksById]);
+  const isQueueMode = playListMode === "queue";
+  const activePlayListItems = useMemo(
+    () => (isQueueMode ? queue : visibleTracks),
+    [isQueueMode, queue, visibleTracks]
+  );
   const queueUsesSessionOrder = sessionQueueTrackIds.length > 0;
+  const queueIndexByTrackId = useMemo(
+    () => new Map(queue.map((item, index) => [item.track_id, index] as const)),
+    [queue]
+  );
   const publishSelectionCount = publishSelectionItems.length;
   const albumGroups = useMemo(() => buildAlbumGroups(visibleTracks), [visibleTracks]);
   const selectedAlbumGroup = useMemo(
@@ -537,6 +569,11 @@ export default function MusicWorkspaceApp() {
   const favoriteTrackCount = favoriteTrackIds.length;
   const isSelectedTrackFavorite = Boolean(selectedTrackDetail && favoriteTrackIdSet.has(selectedTrackDetail.track_id));
   const contextMenuTrack = trackRowContextMenu ? visibleTracksById.get(trackRowContextMenu.trackId) ?? null : null;
+  const contextMenuQueueIndex =
+    trackRowContextMenu?.source === "queue"
+      ? trackRowContextMenu.queueIndex ?? queueIndexByTrackId.get(trackRowContextMenu.trackId) ?? -1
+      : -1;
+  const contextMenuIsQueueSource = trackRowContextMenu?.source === "queue";
 
   const selectedTrackAnalysis = selectedTrackDetail ? toQcAnalysis(selectedTrackDetail) : null;
   const playerTrackDetail = useMemo(() => {
@@ -599,6 +636,71 @@ export default function MusicWorkspaceApp() {
   const notePublishSelectionAction = (message: string) => {
     setPublishSelectionFeedback(message);
   };
+
+  const topNotifications = useMemo<TopNotification[]>(() => {
+    const items: TopNotification[] = [];
+    if (catalogError) {
+      items.push({
+        id: "catalog-error",
+        level: "error",
+        label: catalogError.code,
+        message: catalogError.message,
+        dismiss: () => setCatalogError(null)
+      });
+    }
+    if (playerError) {
+      items.push({
+        id: "player-error",
+        level: "error",
+        label: "Playback Error",
+        message: playerError,
+        dismiss: () => setPlayerError(null)
+      });
+    }
+    if (appNotice) {
+      items.push({
+        id: "app-notice",
+        level: appNotice.level,
+        label: appNotice.level === "success" ? "Success" : appNotice.level === "warning" ? "Warning" : "Info",
+        message: appNotice.message,
+        dismiss: () => {
+          setAppNotice(null);
+          if (listenQueueFeedback === appNotice.message) {
+            setListenQueueFeedback(null);
+          }
+          if (publishSelectionFeedback === appNotice.message) {
+            setPublishSelectionFeedback(null);
+          }
+        }
+      });
+    }
+    if (activeMode === "Listen" && listenQueueFeedback && appNotice?.message !== listenQueueFeedback) {
+      items.push({
+        id: "listen-queue-feedback",
+        level: "info",
+        label: "Queue",
+        message: listenQueueFeedback,
+        dismiss: () => setListenQueueFeedback(null)
+      });
+    }
+    if (activeMode === "Publish" && publishSelectionFeedback && appNotice?.message !== publishSelectionFeedback) {
+      items.push({
+        id: "publish-selection-feedback",
+        level: "info",
+        label: "Release Selection",
+        message: publishSelectionFeedback,
+        dismiss: () => setPublishSelectionFeedback(null)
+      });
+    }
+    return items;
+  }, [
+    activeMode,
+    appNotice,
+    catalogError,
+    listenQueueFeedback,
+    playerError,
+    publishSelectionFeedback
+  ]);
 
   const refreshLibraryRoots = async () => {
     setLibraryRootsLoading(true);
@@ -673,6 +775,10 @@ export default function MusicWorkspaceApp() {
   }, [trackSort]);
 
   useEffect(() => {
+    writeStorage(STORAGE_KEYS.playListMode, playListMode);
+  }, [playListMode]);
+
+  useEffect(() => {
     writeStorage(STORAGE_KEYS.onlyFavorites, showFavoritesOnly);
   }, [showFavoritesOnly]);
 
@@ -708,6 +814,12 @@ export default function MusicWorkspaceApp() {
     const timer = window.setTimeout(() => setPublishSelectionFeedback(null), 2400);
     return () => window.clearTimeout(timer);
   }, [publishSelectionFeedback]);
+
+  useEffect(() => {
+    if (!playerError) return;
+    const timer = window.setTimeout(() => setPlayerError((current) => (current === playerError ? null : current)), 6000);
+    return () => window.clearTimeout(timer);
+  }, [playerError]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1054,32 +1166,60 @@ export default function MusicWorkspaceApp() {
     showNotice({ level: "success", message });
   };
 
+  const armTrackFromPlayList = (trackId: string, options?: { queueIndex?: number }) => {
+    if (options?.queueIndex != null) {
+      setPlayerTrackFromQueueIndex(options.queueIndex, { autoplay: false });
+      return;
+    }
+    setSelectedTrackId(trackId);
+    setPlayerExternalSource(null);
+    setPlayerTrackId(trackId);
+    setAutoplayRequestSourceKey(null);
+    setPlayerError(null);
+    setPlayerTimeSec(0);
+  };
+
   const openTrackRowContextMenu = (
     trackId: string,
     x: number,
     y: number,
-    source: TrackRowContextMenuSource = "tracks"
+    source: TrackRowContextMenuSource = "tracks",
+    queueIndex?: number
   ) => {
     const clampedX = Math.max(8, Math.min(window.innerWidth - 220, x));
     const clampedY = Math.max(8, Math.min(window.innerHeight - 180, y));
     setSelectedTrackId(trackId);
-    setTrackRowContextMenu({ trackId, x: clampedX, y: clampedY, source });
+    setTrackRowContextMenu({ trackId, x: clampedX, y: clampedY, source, queueIndex });
   };
 
   const handleTrackRowContextMenu = (
     event: ReactMouseEvent<HTMLElement>,
-    trackId: string
+    trackId: string,
+    options?: { source?: TrackRowContextMenuSource; queueIndex?: number }
   ) => {
     event.preventDefault();
-    openTrackRowContextMenu(trackId, event.clientX, event.clientY);
+    openTrackRowContextMenu(
+      trackId,
+      event.clientX,
+      event.clientY,
+      options?.source ?? "tracks",
+      options?.queueIndex
+    );
   };
 
   const handleTrackRowMenuButtonClick = (
     event: ReactMouseEvent<HTMLButtonElement>,
-    trackId: string
+    trackId: string,
+    options?: { source?: TrackRowContextMenuSource; queueIndex?: number }
   ) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    openTrackRowContextMenu(trackId, rect.right, rect.bottom + 6);
+    openTrackRowContextMenu(
+      trackId,
+      rect.right,
+      rect.bottom + 6,
+      options?.source ?? "tracks",
+      options?.queueIndex
+    );
   };
 
   const handleAlbumTrackRowContextMenu = (
@@ -1098,10 +1238,50 @@ export default function MusicWorkspaceApp() {
     openTrackRowContextMenu(trackId, rect.right, rect.bottom + 6, "albums");
   };
 
+  const reorderQueueByIndex = (sourceIndex: number, targetIndex: number) => {
+    const ids = queue.map((item) => item.track_id);
+    if (sourceIndex < 0 || sourceIndex >= ids.length) return false;
+    if (targetIndex < 0 || targetIndex >= ids.length) return false;
+    if (sourceIndex === targetIndex) return false;
+    const [moved] = ids.splice(sourceIndex, 1);
+    ids.splice(targetIndex, 0, moved);
+    setSessionQueueFromTrackIds(ids);
+    return true;
+  };
+
+  const moveTrackInQueue = (trackId: string, offset: -1 | 1) => {
+    const sourceIndex = queueIndexByTrackId.get(trackId);
+    if (sourceIndex == null) return;
+    const targetIndex = sourceIndex + offset;
+    if (!reorderQueueByIndex(sourceIndex, targetIndex)) return;
+    const direction = offset < 0 ? "up" : "down";
+    const message = `Moved track ${direction} in queue.`;
+    noteListenQueueAction(message);
+    showNotice({ level: "info", message });
+  };
+
+  const reorderQueueByDrop = (dragTrackId: string, targetTrackId: string) => {
+    const sourceIndex = queueIndexByTrackId.get(dragTrackId);
+    const targetIndex = queueIndexByTrackId.get(targetTrackId);
+    if (sourceIndex == null || targetIndex == null) return;
+    if (!reorderQueueByIndex(sourceIndex, targetIndex)) return;
+    noteListenQueueAction("Queue reordered.");
+    showNotice({ level: "success", message: "Queue reordered." });
+  };
+
   const runTrackContextMenuAction = (
-    action: "play_now" | "add_queue" | "play_next" | "select_batch" | "toggle_favorite" | "show_in_tracks"
+    action:
+      | "play_now"
+      | "add_queue"
+      | "play_next"
+      | "select_batch"
+      | "toggle_favorite"
+      | "show_in_tracks"
+      | "remove_queue"
+      | "move_up_queue"
+      | "move_down_queue"
   ) => {
-    if (!contextMenuTrack) return;
+    if (!contextMenuTrack || !trackRowContextMenu) return;
     switch (action) {
       case "play_now":
         playTrackNow(contextMenuTrack.track_id);
@@ -1122,13 +1302,24 @@ export default function MusicWorkspaceApp() {
       case "show_in_tracks":
         setSelectedTrackId(contextMenuTrack.track_id);
         setActiveWorkspace("Tracks");
+        setPlayListMode("library");
+        break;
+      case "remove_queue":
+        removeTrackFromSessionQueue(contextMenuTrack.track_id);
+        break;
+      case "move_up_queue":
+        moveTrackInQueue(contextMenuTrack.track_id, -1);
+        break;
+      case "move_down_queue":
+        moveTrackInQueue(contextMenuTrack.track_id, 1);
         break;
     }
     setTrackRowContextMenu(null);
   };
 
   const removeTrackFromSessionQueue = (trackId: string) => {
-    setSessionQueueTrackIds((current) => current.filter((id) => id !== trackId));
+    const next = queue.map((item) => item.track_id).filter((id) => id !== trackId);
+    setSessionQueueFromTrackIds(next);
     noteListenQueueAction("Removed track from queue.");
     showNotice({ level: "info", message: "Removed track from queue." });
   };
@@ -1524,7 +1715,7 @@ export default function MusicWorkspaceApp() {
   };
 
   return (
-    <div className={`music-shell${compactDensity ? " compact" : ""}`}>
+    <div className={`music-shell${compactDensity ? " compact" : ""}${activeMode === "Publish" ? " with-right-dock" : ""}`}>
       <aside className="music-sidebar">
         <div className="music-brand">
           <p className="eyebrow">Rauversion-style</p>
@@ -1801,28 +1992,29 @@ export default function MusicWorkspaceApp() {
           )}
         </header>
 
-        {appNotice ? (
-          <div className={`catalog-notice-banner ${appNotice.level}`} role="status" aria-live="polite">
-            <div className="catalog-notice-banner-main">
-              <strong className="catalog-notice-banner-label">
-                {appNotice.level === "success" ? "Success" : appNotice.level === "warning" ? "Warning" : "Info"}
-              </strong>
-              <span>{appNotice.message}</span>
-            </div>
-            <button
-              type="button"
-              className="catalog-notice-banner-dismiss"
-              onClick={() => setAppNotice(null)}
-              aria-label="Dismiss notice"
-            >
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        {catalogError ? (
-          <div className="catalog-error-banner" role="alert">
-            <strong>{catalogError.code}</strong>: {catalogError.message}
+        {topNotifications.length > 0 ? (
+          <div className="notification-stack-top" aria-label="Notifications">
+            {topNotifications.map((notification) => (
+              <div
+                key={notification.id}
+                className={`app-notification ${notification.level}`}
+                role={notification.level === "warning" || notification.level === "error" ? "alert" : "status"}
+                aria-live={notification.level === "warning" || notification.level === "error" ? "assertive" : "polite"}
+              >
+                <div className="app-notification-main">
+                  <strong className="app-notification-label">{notification.label}</strong>
+                  <span>{notification.message}</span>
+                </div>
+                <button
+                  type="button"
+                  className="app-notification-dismiss"
+                  onClick={notification.dismiss}
+                  aria-label={`Dismiss ${notification.label} notification`}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ))}
           </div>
         ) : null}
 
@@ -1971,24 +2163,71 @@ export default function MusicWorkspaceApp() {
                   </HelpTooltip>
                 </div>
                 <div className="tracks-subtoolbar">
-                  <HelpTooltip content="Toggle a favorites-only view using local session favorites.">
+                  <div className="play-list-mode-toggle" role="tablist" aria-label="Play list mode">
                     <button
                       type="button"
-                      className={`filter-chip${showFavoritesOnly ? " active" : ""}`}
-                      onClick={() => setShowFavoritesOnly((current) => !current)}
+                      role="tab"
+                      aria-selected={!isQueueMode}
+                      className={`play-list-mode-tab${!isQueueMode ? " active" : ""}`}
+                      onClick={() => setPlayListMode("library")}
                     >
-                      {showFavoritesOnly ? "Favorites Only" : "All Tracks"}
+                      Library
                     </button>
-                  </HelpTooltip>
-                  <HelpTooltip content="Opens the album grouping view for the current visible tracks.">
-                    <button type="button" className="secondary-action compact" onClick={() => setActiveWorkspace("Albums")}>
-                      Albums View
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={isQueueMode}
+                      className={`play-list-mode-tab${isQueueMode ? " active" : ""}`}
+                      onClick={() => setPlayListMode("queue")}
+                    >
+                      Queue
                     </button>
-                  </HelpTooltip>
+                  </div>
                   <span className={`queue-mode-pill${queueUsesSessionOrder ? "" : " subtle"}`}>
-                    {queueUsesSessionOrder ? "Session queue active" : "Queue follows visible list"}
+                    {queueUsesSessionOrder ? "Queue locked" : "Queue follows visible list"}
                   </span>
-                  {orderedBatchSelectionIds.length > 0 ? (
+                  {isQueueMode ? (
+                    <>
+                      <HelpTooltip content="Randomizes the current local queue order for this app session.">
+                        <button
+                          type="button"
+                          className="secondary-action compact"
+                          onClick={shuffleSessionQueue}
+                          disabled={queue.length < 2}
+                        >
+                          Shuffle
+                        </button>
+                      </HelpTooltip>
+                      <HelpTooltip content="Clears the manual queue so playback follows the visible library list again.">
+                        <button
+                          type="button"
+                          className="secondary-action compact"
+                          onClick={clearSessionQueue}
+                          disabled={!queueUsesSessionOrder}
+                        >
+                          Clear Queue
+                        </button>
+                      </HelpTooltip>
+                    </>
+                  ) : (
+                    <>
+                      <HelpTooltip content="Toggle a favorites-only view using local session favorites.">
+                        <button
+                          type="button"
+                          className={`filter-chip${showFavoritesOnly ? " active" : ""}`}
+                          onClick={() => setShowFavoritesOnly((current) => !current)}
+                        >
+                          {showFavoritesOnly ? "Favorites Only" : "All Tracks"}
+                        </button>
+                      </HelpTooltip>
+                      <HelpTooltip content="Opens the album grouping view for the current visible tracks.">
+                        <button type="button" className="secondary-action compact" onClick={() => setActiveWorkspace("Albums")}>
+                          Albums View
+                        </button>
+                      </HelpTooltip>
+                    </>
+                  )}
+                  {!isQueueMode && orderedBatchSelectionIds.length > 0 ? (
                     <div className="tracks-batch-actions" role="group" aria-label="Batch actions for selected tracks">
                       <span className="queue-mode-pill">{orderedBatchSelectionIds.length} selected</span>
                       <HelpTooltip content="Replace the session queue with the selected tracks (visible-list order) and start playback from the first selected track.">
@@ -2024,20 +2263,42 @@ export default function MusicWorkspaceApp() {
                 </div>
               </div>
 
-              <div className="tracks-list-shell" role="list" aria-label="Imported tracks">
-                {visibleTracks.length === 0 ? (
+              <div className="tracks-list-shell" role="list" aria-label={isQueueMode ? "Queue tracks" : "Library tracks"}>
+                {activePlayListItems.length === 0 ? (
                   <p className="empty-state">
-                    {catalogPage.items.length === 0
-                      ? "No tracks imported yet. Use Library > Import Files in the sidebar."
-                      : "No tracks match the current filters. Try clearing search or turning off Favorites Only."}
+                    {isQueueMode
+                      ? "Queue is empty. Add tracks from Library mode or Play Selection."
+                      : catalogPage.items.length === 0
+                        ? "No tracks imported yet. Use Library > Import Files in the sidebar."
+                        : "No tracks match the current filters. Try clearing search or turning off Favorites Only."}
                   </p>
                 ) : (
-                  visibleTracks.map((item) => (
+                  activePlayListItems.map((item, index) => (
                     <div
                       key={item.track_id}
                       role="listitem"
-                      className={`track-row-shell${selectedTrackId === item.track_id ? " selected" : ""}${batchSelectedTrackIdSet.has(item.track_id) ? " batch-selected" : ""}`}
-                      onContextMenu={(event) => handleTrackRowContextMenu(event, item.track_id)}
+                      className={`track-row-shell${selectedTrackId === item.track_id ? " selected" : ""}${batchSelectedTrackIdSet.has(item.track_id) ? " batch-selected" : ""}${isQueueMode ? " queue-row-shell" : ""}${queueDragTrackId === item.track_id ? " queue-dragging" : ""}`}
+                      onContextMenu={(event) =>
+                        handleTrackRowContextMenu(event, item.track_id, {
+                          source: isQueueMode ? "queue" : "tracks",
+                          queueIndex: isQueueMode ? index : undefined
+                        })
+                      }
+                      draggable={isQueueMode}
+                      onDragStart={() => {
+                        if (!isQueueMode) return;
+                        setQueueDragTrackId(item.track_id);
+                      }}
+                      onDragOver={(event) => {
+                        if (!isQueueMode || !queueDragTrackId) return;
+                        event.preventDefault();
+                      }}
+                      onDrop={() => {
+                        if (!isQueueMode || !queueDragTrackId || queueDragTrackId === item.track_id) return;
+                        reorderQueueByDrop(queueDragTrackId, item.track_id);
+                        setQueueDragTrackId(null);
+                      }}
+                      onDragEnd={() => setQueueDragTrackId(null)}
                     >
                       <label className="track-row-batch-checkbox">
                         <input
@@ -2051,10 +2312,17 @@ export default function MusicWorkspaceApp() {
                       <button
                         type="button"
                         className="track-row track-row-main-button"
-                        onClick={() => setSelectedTrackId(item.track_id)}
+                        onClick={() =>
+                          armTrackFromPlayList(
+                            item.track_id,
+                            isQueueMode ? { queueIndex: index } : undefined
+                          )
+                        }
+                        onDoubleClick={() => playTrackNow(item.track_id)}
                         aria-current={selectedTrackId === item.track_id ? "true" : undefined}
                       >
                         <span className="track-row-title">
+                          {isQueueMode ? <span className="track-row-queue-index">{index + 1}. </span> : null}
                           {favoriteTrackIdSet.has(item.track_id) ? <span className="track-row-favorite">*</span> : null}
                           {item.title}
                         </span>
@@ -2073,7 +2341,12 @@ export default function MusicWorkspaceApp() {
                           aria-label={`Track actions for ${item.title}`}
                           aria-haspopup="menu"
                           aria-expanded={trackRowContextMenu?.trackId === item.track_id}
-                          onClick={(event) => handleTrackRowMenuButtonClick(event, item.track_id)}
+                          onClick={(event) =>
+                            handleTrackRowMenuButtonClick(event, item.track_id, {
+                              source: isQueueMode ? "queue" : "tracks",
+                              queueIndex: isQueueMode ? index : undefined
+                            })
+                          }
                         >
                           â‹¯
                         </button>
@@ -2775,12 +3048,6 @@ export default function MusicWorkspaceApp() {
               <span>{formatClock((playerSource?.durationMs ?? 0) / 1000)}</span>
             </div>
 
-            {playerError ? (
-              <div className="player-error-inline" role="alert">
-                {playerError}
-              </div>
-            ) : null}
-
             <audio
               ref={playerAudioRef}
               src={playerAudioSrc}
@@ -2803,159 +3070,74 @@ export default function MusicWorkspaceApp() {
           </div>
       </div>
 
-      <aside className="music-right-dock" aria-label="Queue and session state">
-        <div className="queue-card queue-card-docked">
-          <div className="queue-head">
-            <h3>{activeMode === "Publish" ? "Release Selection" : "Queue"}</h3>
-            {activeMode === "Publish" ? (
+      {activeMode === "Publish" ? (
+        <aside className="music-right-dock" aria-label="Queue and session state">
+          <div className="queue-card queue-card-docked">
+            <div className="queue-head">
+              <h3>Release Selection</h3>
               <HelpTooltip content="Tracks prepared for the Publish workflow. This list is separate from the Listen playback queue.">
                 <span className="queue-help-badge">Publish mode</span>
               </HelpTooltip>
-            ) : (
-              <HelpTooltip content="Visible in all workspaces. Playback always uses this local session queue or the current visible list fallback.">
-                <span className="queue-help-badge">{queueUsesSessionOrder ? "Session queue" : "Visible list"}</span>
+            </div>
+            <div className="queue-card-controls">
+              <HelpTooltip content="Clears the current release selection list used to seed the publish workflow from Library/Tracks.">
+                <button
+                  type="button"
+                  className="secondary-action compact"
+                  onClick={clearPublishSelection}
+                  disabled={publishSelectionItems.length === 0}
+                >
+                  Clear Selection
+                </button>
               </HelpTooltip>
-            )}
-          </div>
-          {activeMode === "Publish" ? (
-            <>
-              <div className="queue-card-controls">
-                <HelpTooltip content="Clears the current release selection list used to seed the publish workflow from Library/Tracks.">
-                  <button
-                    type="button"
-                    className="secondary-action compact"
-                    onClick={clearPublishSelection}
-                    disabled={publishSelectionItems.length === 0}
+              <HelpTooltip content="Return to Tracks in Listen mode to prepare more tracks for publishing.">
+                <button type="button" className="secondary-action compact" onClick={() => switchAppMode("Listen")}>
+                  Show in Tracks
+                </button>
+              </HelpTooltip>
+            </div>
+            <div className="queue-summary-strip">
+              <span>{publishSelectionItems.length} draft(s)</span>
+              <span>{publisherDraftPrefill ? "Draft loaded" : "No draft loaded"}</span>
+            </div>
+            <div className="queue-list">
+              {publishSelectionItems.length === 0 ? (
+                <p className="empty-state">No tracks prepared yet. Use "Prepare for Release..." from Listen mode.</p>
+              ) : (
+                publishSelectionItems.map((item, index) => (
+                  <div
+                    key={item.trackId}
+                    className={`queue-row${publisherDraftPrefill?.source_track_id === item.trackId ? " active" : ""}`}
                   >
-                    Clear Selection
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Return to Tracks in Listen mode to prepare more tracks for publishing.">
-                  <button type="button" className="secondary-action compact" onClick={() => switchAppMode("Listen")}>
-                    Show in Tracks
-                  </button>
-                </HelpTooltip>
-              </div>
-              <div className="queue-summary-strip">
-                <span>{publishSelectionItems.length} draft(s)</span>
-                <span>{publisherDraftPrefill ? "Draft loaded" : "No draft loaded"}</span>
-              </div>
-              {publishSelectionFeedback ? (
-                <div className="queue-feedback-line" role="status" aria-live="polite">
-                  {publishSelectionFeedback}
-                </div>
-              ) : null}
-              <div className="queue-list">
-                {publishSelectionItems.length === 0 ? (
-                  <p className="empty-state">No tracks prepared yet. Use "Prepare for Release..." from Listen mode.</p>
-                ) : (
-                  publishSelectionItems.map((item, index) => (
-                    <div
-                      key={item.trackId}
-                      className={`queue-row${publisherDraftPrefill?.source_track_id === item.trackId ? " active" : ""}`}
+                    <button
+                      type="button"
+                      className="queue-row-select"
+                      onClick={() => applyPublishSelectionItem(item)}
+                      aria-label={`Load ${item.title} into Publish workflow`}
                     >
+                      <span>{index + 1}</span>
+                      <span className="queue-row-main">
+                        <strong>{item.title}</strong>
+                        <small>{item.artistName}</small>
+                      </span>
+                    </button>
+                    <HelpTooltip content="Remove this prepared track from the release selection list.">
                       <button
                         type="button"
-                        className="queue-row-select"
-                        onClick={() => applyPublishSelectionItem(item)}
-                        aria-label={`Load ${item.title} into Publish workflow`}
+                        className="queue-row-remove"
+                        onClick={() => removePublishSelectionItem(item.trackId)}
+                        aria-label={`Remove ${item.title} from release selection`}
                       >
-                        <span>{index + 1}</span>
-                        <span className="queue-row-main">
-                          <strong>{item.title}</strong>
-                          <small>{item.artistName}</small>
-                        </span>
+                        Remove
                       </button>
-                      <HelpTooltip content="Remove this prepared track from the release selection list.">
-                        <button
-                          type="button"
-                          className="queue-row-remove"
-                          onClick={() => removePublishSelectionItem(item.trackId)}
-                          aria-label={`Remove ${item.title} from release selection`}
-                        >
-                          Remove
-                        </button>
-                      </HelpTooltip>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="queue-card-controls">
-                <HelpTooltip content="Randomizes the current local queue order for this app session.">
-                  <button
-                    type="button"
-                    className="secondary-action compact"
-                    onClick={shuffleSessionQueue}
-                    disabled={queue.length < 2}
-                  >
-                    Shuffle
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Clears the manual session queue so playback follows the visible track list order again.">
-                  <button
-                    type="button"
-                    className="secondary-action compact"
-                    onClick={clearSessionQueue}
-                    disabled={!queueUsesSessionOrder}
-                  >
-                    Clear Queue
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Open the Tracks workspace where queue source filtering and track list ordering can be changed.">
-                  <button type="button" className="secondary-action compact" onClick={() => setActiveWorkspace("Tracks")}>
-                    Show in Tracks
-                  </button>
-                </HelpTooltip>
-              </div>
-              <div className="queue-summary-strip">
-                <span>{queue.length} item(s)</span>
-                <span>{playerTrackId ? "Track loaded" : "No track loaded"}</span>
-              </div>
-              {listenQueueFeedback ? (
-                <div className="queue-feedback-line" role="status" aria-live="polite">
-                  {listenQueueFeedback}
-                </div>
-              ) : null}
-              <div className="queue-list">
-                {queue.length === 0 ? (
-                  <p className="empty-state">No playable tracks in the current queue/filter scope.</p>
-                ) : (
-                  queue.map((item, index) => (
-                    <div key={item.track_id} className={`queue-row${item.track_id === playerTrackId ? " active" : ""}`}>
-                      <button
-                        type="button"
-                        className="queue-row-select"
-                        onClick={() => setPlayerTrackFromQueueIndex(index)}
-                      >
-                        <span>{index + 1}</span>
-                        <span className="queue-row-main">
-                          <strong>{item.title}</strong>
-                          <small>{item.artist_name}</small>
-                        </span>
-                      </button>
-                      {queueUsesSessionOrder ? (
-                        <HelpTooltip content="Remove this track from the local session queue.">
-                          <button
-                            type="button"
-                            className="queue-row-remove"
-                            onClick={() => removeTrackFromSessionQueue(item.track_id)}
-                            aria-label={`Remove ${item.title} from queue`}
-                          >
-                            Remove
-                          </button>
-                        </HelpTooltip>
-                      ) : null}
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </aside>
+                    </HelpTooltip>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </aside>
+      ) : null}
 
       {trackRowContextMenu && contextMenuTrack ? (
         <div
@@ -2994,6 +3176,29 @@ export default function MusicWorkspaceApp() {
             >
               {batchSelectedTrackIdSet.has(contextMenuTrack.track_id) ? "Already in Selection" : "Add to Selection"}
             </button>
+            {contextMenuIsQueueSource ? (
+              <>
+                <button type="button" role="menuitem" onClick={() => runTrackContextMenuAction("remove_queue")}>
+                  Remove from Queue
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runTrackContextMenuAction("move_up_queue")}
+                  disabled={contextMenuQueueIndex <= 0}
+                >
+                  Move Up
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runTrackContextMenuAction("move_down_queue")}
+                  disabled={contextMenuQueueIndex < 0 || contextMenuQueueIndex >= queue.length - 1}
+                >
+                  Move Down
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

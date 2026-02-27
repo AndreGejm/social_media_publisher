@@ -1,0 +1,79 @@
+GUI TEST REPORT – MUSIC CORE / RELEASE PUBLISHER
+
+
+Scope
+GUI functional usability, action placement, transport behavior, metadata editing, queueing, QC gating, and
+workflow operability across multi-resolution environments.
+
+
+
+Test Summary
+Core publishing workflow operates correctly under mock conditions. Primary failures are UI/interaction
+model defects affecting: - Playback initiation - Metadata persistence discoverability - Queue state visibility -
+Approval gating locality - Action placement predictability - Multi-resolution operability
+Findings
+F1: Sidebar workspace buttons initially unresponsive
+
+F2: Library Roots functions work; folder picker UX requested
+
+F3: Import Audio returns FILE_READ_FAILED on valid WAV path
+
+F4: Settings presents KPI/status not configuration surface
+
+F5: Filtered track list lacks explicit Play Now / Add to Queue
+
+F6: Track Detail read-only; metadata editable in separate Authoring panel
+
+F7: QC panel Play unresponsive
+
+F8: Album Detail Play controls non-responsive
+
+F9: Add Album to Queue provides no feedback
+
+F10: Shared Player transport inactive
+
+F11: Layout not responsive to resizing (800x600–5120x1440)
+
+F12: Action placement inconsistent across views
+Interaction Model Defects
+Parallel playback domains exist across: - Track Detail - Album Detail - QC Panel - Shared Player Metadata
+editing separated from inspection surface. Queue visibility limited to Publisher Ops. Approval gating
+detached from listening surface. Result: Control fragmentation across vertical scroll distance.
+Required Architecture Changes
+Single global playback transport (bottom dock)
+
+Remove Play from QC, Album, Track headers
+
+Track Detail becomes editable with Save/Cancel Edit Mode
+
+Remove Authoring panel for base metadata
+
+Right-docked Queue visible in all workspaces
+
+Sticky view-header for object actions
+
+Inline row actions moved to context menu
+
+Horizontal Release Workflow Step Bar
+Layout Model
+LEFT NAV CENTER CONTENT RIGHT DOCK Library Tracks Queue Albums Track Detail Session
+State Publisher Ops Album Detail Settings BOTTOM: Global Transport (Prev | Play | Next
+| Seek)
+
+
+
+Acceptance Criteria
+Playback originates only from global transport
+
+Queue visible in all workspaces
+
+Track metadata editable in Track Detail
+
+Save persists after reload
+
+QC approval gated on playback session
+
+No horizontal overflow at 1024x768
+
+Primary actions reachable at 800x600
+

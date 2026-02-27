@@ -326,21 +326,20 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(screen.getByRole("button", { name: "Add Selection to Queue" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add Selection to Queue" }));
 
-    const dismissNoticeButton = await screen.findByRole("button", { name: "Dismiss notice" });
-    const noticeBanner = dismissNoticeButton.closest(".catalog-notice-banner");
-    expect(noticeBanner).not.toBeNull();
-    expect(within(noticeBanner as HTMLElement).getByText("Success")).toBeInTheDocument();
-    expect(within(noticeBanner as HTMLElement).getByText("Added 2 tracks to queue.")).toBeInTheDocument();
+    const queueNotice = await screen.findByText("Added 2 tracks to queue.");
+    const topNotification = queueNotice.closest(".app-notification");
+    expect(topNotification).not.toBeNull();
+    expect(within(topNotification as HTMLElement).getByText("Success")).toBeInTheDocument();
+    const dismissNoticeButton = within(topNotification as HTMLElement).getByRole("button", { name: /Dismiss/i });
     fireEvent.click(dismissNoticeButton);
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Dismiss notice" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Added 2 tracks to queue.")).not.toBeInTheDocument();
     });
 
-    const queueDock = screen.getByLabelText("Queue and session state");
-    expect(within(queueDock).getByText("2 item(s)")).toBeInTheDocument();
-    expect(within(queueDock).getByText("Added 2 tracks to queue.")).toBeInTheDocument();
-    expect(within(queueDock).getByText(baseTrackListItem.title)).toBeInTheDocument();
-    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
+    const queueList = screen.getByRole("list", { name: "Queue tracks" });
+    expect(within(queueList).getByText(baseTrackListItem.title)).toBeInTheDocument();
+    expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
   });
 
   it("keeps selected-track playback actions in Track Detail instead of duplicating them in the Tracks toolbar", async () => {
@@ -411,14 +410,17 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(within(batchActions).getByRole("button", { name: "Add Selection to Queue" })).toBeInTheDocument();
     expect(within(batchActions).getByRole("button", { name: "Play Selection Next" })).toBeInTheDocument();
 
-    const queueDock = screen.getByLabelText("Queue and session state");
     fireEvent.click(within(batchActions).getByRole("button", { name: "Add Selection to Queue" }));
-    expect(await within(queueDock).findByText("Added 2 tracks to queue.")).toBeInTheDocument();
-    expect(within(queueDock).getByText(baseTrackListItem.title)).toBeInTheDocument();
-    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+    expect(await screen.findByText("Added 2 tracks to queue.")).toBeInTheDocument();
 
     fireEvent.click(within(batchActions).getByRole("button", { name: "Play Selection Next" }));
-    expect(await within(queueDock).findByText("Queued 2 selected tracks to play next.")).toBeInTheDocument();
+    expect(await screen.findByText("Queued 2 selected tracks to play next.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
+    const queueList = screen.getByRole("list", { name: "Queue tracks" });
+    expect(within(queueList).getByText(baseTrackListItem.title)).toBeInTheDocument();
+    expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
   });
 
   it("switches between Listen and Publish modes and filters the sidebar workspaces", async () => {
@@ -494,20 +496,22 @@ describe("MusicWorkspaceApp metadata editor", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Play Selection" }));
 
-    const queueDock = screen.getByLabelText("Queue and session state");
-    expect(within(queueDock).getByRole("heading", { name: "Queue" })).toBeInTheDocument();
-    expect(within(queueDock).getByText("1 item(s)")).toBeInTheDocument();
-    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
+    let queueList = screen.getByRole("list", { name: "Queue tracks" });
+    expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
 
+    const queueDock = await screen.findByLabelText("Queue and session state");
     expect(await within(queueDock).findByRole("heading", { name: "Release Selection" })).toBeInTheDocument();
     expect(within(queueDock).getByText("0 draft(s)")).toBeInTheDocument();
     expect(within(queueDock).getByText(/No tracks prepared yet\./i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
-    expect(await within(queueDock).findByRole("heading", { name: "Queue" })).toBeInTheDocument();
-    expect(within(queueDock).getByText(secondTrackListItem.title)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
+    queueList = screen.getByRole("list", { name: "Queue tracks" });
+    expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
   });
 
   it("adds prepared tracks to the Publish release selection when opening Publisher Ops", async () => {
