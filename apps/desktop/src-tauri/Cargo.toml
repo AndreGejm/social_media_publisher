@@ -21,6 +21,9 @@ release-publisher-core = { path = "../../../crates/core" }
 release-publisher-db = { path = "../../../crates/db" }
 release-publisher-mock-connector = { path = "../../../crates/connectors/mock" }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_Media_Audio", "Win32_System_Com"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = ["isolation"] }
 

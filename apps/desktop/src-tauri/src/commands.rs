@@ -31,6 +31,15 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::OnceCell;
+#[cfg(target_os = "windows")]
+use windows::Win32::Media::Audio::{
+    eMultimedia, eRender, IAudioClient, IAudioRenderClient, IMMDeviceEnumerator,
+    AUDCLNT_SHAREMODE_EXCLUSIVE, MMDeviceEnumerator, WAVEFORMATEX, WAVE_FORMAT_PCM,
+};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1449,6 +1458,7 @@ struct TrackChangeRequest {
 #[derive(Debug)]
 struct PlaybackControlPlane {
     hardware_state: RwLock<Option<AudioHardwareState>>,
+    exclusive_engine: RwLock<Option<ExclusiveAudioEngine>>,
     volume_scalar_bits: AtomicU32,
     is_bit_perfect_bypassed: AtomicBool,
     active_queue_index: AtomicU32,
@@ -1463,6 +1473,7 @@ impl PlaybackControlPlane {
     fn new() -> Arc<Self> {
         let control = Arc::new(Self {
             hardware_state: RwLock::new(None),
+            exclusive_engine: RwLock::new(None),
             volume_scalar_bits: AtomicU32::new(UNITY_GAIN_LEVEL.to_bits()),
             is_bit_perfect_bypassed: AtomicBool::new(true),
             active_queue_index: AtomicU32::new(0),
@@ -1545,12 +1556,25 @@ impl PlaybackControlPlane {
 
         #[cfg(target_os = "windows")]
         {
-            // Phase 1: command surface + deterministic state machine.
-            // The full WASAPI exclusive render client is wired in the next phase.
+            let (engine, buffer_size_frames) =
+                start_wasapi_exclusive_engine(target_rate_hz, target_bit_depth)?;
+            let previous_engine = {
+                let mut guard = self.exclusive_engine.write().map_err(|_| {
+                    AppError::new(
+                        app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                        "failed to update exclusive playback engine state",
+                    )
+                })?;
+                guard.replace(engine)
+            };
+            if let Some(previous) = previous_engine {
+                previous.shutdown();
+            }
+
             let hardware = AudioHardwareState {
                 sample_rate_hz: target_rate_hz,
                 bit_depth: target_bit_depth,
-                buffer_size_frames: 256,
+                buffer_size_frames,
                 is_exclusive_lock: true,
             };
 
@@ -1622,6 +1646,243 @@ impl PlaybackControlPlane {
 fn shared_playback_control() -> Arc<PlaybackControlPlane> {
     static CONTROL: OnceLock<Arc<PlaybackControlPlane>> = OnceLock::new();
     Arc::clone(CONTROL.get_or_init(PlaybackControlPlane::new))
+}
+
+#[derive(Debug)]
+struct ExclusiveAudioEngine {
+    stop_requested: Arc<AtomicBool>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ExclusiveAudioEngine {
+    fn shutdown(mut self) {
+        self.stop_requested.store(true, Ordering::Release);
+        if let Some(handle) = self.join_handle.take() {
+            if let Err(error) = handle.join() {
+                tracing::warn!(
+                    target: "desktop.player",
+                    error = ?error,
+                    "exclusive audio thread join failed"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct CoInitGuard;
+
+#[cfg(target_os = "windows")]
+impl Drop for CoInitGuard {
+    fn drop(&mut self) {
+        // SAFETY: CoInitializeEx/CoUninitialize are paired on the same thread in this guard.
+        unsafe { CoUninitialize() };
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WasapiExclusiveThreadContext {
+    _co_init_guard: CoInitGuard,
+    audio_client: IAudioClient,
+    render_client: IAudioRenderClient,
+    buffer_size_frames: u32,
+    block_align_bytes: usize,
+}
+
+#[cfg(target_os = "windows")]
+fn start_wasapi_exclusive_engine(
+    target_rate_hz: u32,
+    target_bit_depth: u16,
+) -> Result<(ExclusiveAudioEngine, u32), AppError> {
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop_requested);
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel::<Result<u32, String>>(1);
+
+    let join_handle = std::thread::Builder::new()
+        .name("rp-wasapi-exclusive-render".to_string())
+        .spawn(move || match create_wasapi_exclusive_context(target_rate_hz, target_bit_depth) {
+            Ok(context) => {
+                let _ = startup_tx.send(Ok(context.buffer_size_frames));
+                run_wasapi_exclusive_render_loop(context, stop_for_thread);
+            }
+            Err(message) => {
+                let _ = startup_tx.send(Err(message));
+            }
+        })
+        .map_err(|error| {
+            AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                format!("failed to spawn WASAPI exclusive render thread: {error}"),
+            )
+        })?;
+
+    match startup_rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(buffer_size_frames)) => Ok((
+            ExclusiveAudioEngine {
+                stop_requested,
+                join_handle: Some(join_handle),
+            },
+            buffer_size_frames,
+        )),
+        Ok(Err(message)) => {
+            let _ = join_handle.join();
+            Err(AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                message,
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            stop_requested.store(true, Ordering::Release);
+            let _ = join_handle.join();
+            Err(AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                "timed out while initializing WASAPI exclusive output",
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = join_handle.join();
+            Err(AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                "WASAPI exclusive render thread exited unexpectedly during startup",
+            ))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_wasapi_exclusive_context(
+    target_rate_hz: u32,
+    target_bit_depth: u16,
+) -> Result<WasapiExclusiveThreadContext, String> {
+    // SAFETY: COM initialization is required before any WASAPI calls in this thread.
+    // SAFETY: COM initialization is required before any WASAPI calls in this thread.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+        .ok()
+        .map_err(|error| format!("CoInitializeEx failed: {error}"))?;
+    let co_init_guard = CoInitGuard;
+
+    // SAFETY: CoCreateInstance is called with a valid COM class on an initialized COM thread.
+    let enumerator: IMMDeviceEnumerator =
+        unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+            .map_err(|error| format!("IMMDeviceEnumerator init failed: {error}"))?;
+
+    // SAFETY: endpoint query is valid for default render endpoint role.
+    let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
+        .map_err(|error| format!("default render endpoint unavailable: {error}"))?;
+
+    // SAFETY: Activate obtains IAudioClient on a valid endpoint.
+    let audio_client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
+        .map_err(|error| format!("IAudioClient activation failed: {error}"))?;
+
+    let channels: u16 = 2;
+    let bytes_per_sample = target_bit_depth / 8;
+    let block_align = channels
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(|| "invalid block alignment".to_string())?;
+    let avg_bytes_per_sec = target_rate_hz
+        .checked_mul(u32::from(block_align))
+        .ok_or_else(|| "invalid average bytes per second".to_string())?;
+    let wave_format = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM as u16,
+        nChannels: channels,
+        nSamplesPerSec: target_rate_hz,
+        nAvgBytesPerSec: avg_bytes_per_sec,
+        nBlockAlign: block_align,
+        wBitsPerSample: target_bit_depth,
+        cbSize: 0,
+    };
+
+    // 50ms exclusive period/buffer. For exclusive mode, period must match buffer duration.
+    let hns_buffer_duration: i64 = 500_000;
+    // SAFETY: Parameters match WASAPI exclusive-mode requirements and valid WAVEFORMATEX data.
+    unsafe {
+        audio_client.Initialize(
+            AUDCLNT_SHAREMODE_EXCLUSIVE,
+            Default::default(),
+            hns_buffer_duration,
+            hns_buffer_duration,
+            &wave_format,
+            None,
+        )
+    }
+    .map_err(|error| format!("WASAPI exclusive Initialize failed: {error}"))?;
+
+    // SAFETY: queried after successful Initialize.
+    let buffer_size_frames = unsafe { audio_client.GetBufferSize() }
+        .map_err(|error| format!("GetBufferSize failed: {error}"))?;
+    if buffer_size_frames == 0 {
+        return Err("WASAPI exclusive buffer size is zero".to_string());
+    }
+
+    // SAFETY: render service available for render-mode IAudioClient.
+    let render_client: IAudioRenderClient = unsafe { audio_client.GetService() }
+        .map_err(|error| format!("IAudioRenderClient service unavailable: {error}"))?;
+
+    // SAFETY: Start called on initialized client.
+    unsafe { audio_client.Start() }.map_err(|error| format!("WASAPI Start failed: {error}"))?;
+
+    Ok(WasapiExclusiveThreadContext {
+        _co_init_guard: co_init_guard,
+        audio_client,
+        render_client,
+        buffer_size_frames,
+        block_align_bytes: usize::from(block_align),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn run_wasapi_exclusive_render_loop(
+    context: WasapiExclusiveThreadContext,
+    stop_requested: Arc<AtomicBool>,
+) {
+    while !stop_requested.load(Ordering::Acquire) {
+        // SAFETY: render loop operates on initialized and started WASAPI interfaces.
+        let step_result: windows::core::Result<()> = unsafe {
+            match context.audio_client.GetCurrentPadding() {
+                Ok(padding) => {
+                    let available_frames = context.buffer_size_frames.saturating_sub(padding);
+                    if available_frames > 0 {
+                        match context.render_client.GetBuffer(available_frames) {
+                            Ok(buffer) => {
+                                let bytes = available_frames as usize * context.block_align_bytes;
+                                std::ptr::write_bytes(buffer, 0, bytes);
+                                match context.render_client.ReleaseBuffer(available_frames, 0) {
+                                    Ok(_) => Ok(()),
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            Err(error) => Err(error),
+                        }
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        };
+
+        if let Err(error) = step_result {
+            tracing::warn!(
+                target: "desktop.player",
+                error = %error,
+                "WASAPI exclusive render loop error; stopping stream"
+            );
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // SAFETY: stopping a started client is valid during shutdown.
+    if let Err(error) = unsafe { context.audio_client.Stop() } {
+        tracing::warn!(
+            target: "desktop.player",
+            error = %error,
+            "WASAPI exclusive Stop failed during shutdown"
+        );
+    }
 }
 
 struct AnalyzedTrackPayload {
