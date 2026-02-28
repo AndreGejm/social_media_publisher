@@ -280,6 +280,7 @@ mod app_error_codes {
     pub const ORCHESTRATOR_INVALID_INPUT: &str = "ORCHESTRATOR_INVALID_INPUT";
     pub const ORCHESTRATOR_UNKNOWN_PUBLISHER: &str = "ORCHESTRATOR_UNKNOWN_PUBLISHER";
     pub const ORCHESTRATOR_DUPLICATE_PUBLISHER: &str = "ORCHESTRATOR_DUPLICATE_PUBLISHER";
+    pub const ORCHESTRATOR_PUBLISHER_FAILURE: &str = "ORCHESTRATOR_PUBLISHER_FAILURE";
     pub const CAP_EXCEEDED: &str = "CAP_EXCEEDED";
     pub const TEST_GUARDRAIL_VIOLATION: &str = "TEST_GUARDRAIL_VIOLATION";
     pub const INVALID_RELEASE_STATE: &str = "INVALID_RELEASE_STATE";
@@ -500,6 +501,17 @@ impl From<OrchestratorError> for AppError {
             OrchestratorError::InvalidReleaseState(message) => {
                 Self::new(app_error_codes::INVALID_RELEASE_STATE, message)
             }
+            OrchestratorError::PublisherFailure {
+                platform,
+                code,
+                retryable,
+                message,
+            } => Self::new(app_error_codes::ORCHESTRATOR_PUBLISHER_FAILURE, message)
+                .with_details(serde_json::json!({
+                    "platform": platform,
+                    "publisher_error_code": code,
+                    "retryable": retryable,
+                })),
             OrchestratorError::Db(error) => Self::from(error),
             OrchestratorError::Io(error) => Self::new(app_error_codes::IO_ERROR, error.to_string()),
             OrchestratorError::Serialization(error) => {

@@ -115,7 +115,7 @@ describe("Tauri security config", () => {
     expect(security?.dangerousDisableAssetCspModification).toBe(false);
     expect(security?.capabilities).toEqual(["default"]);
     expect(security?.assetProtocol?.enable).toBe(true);
-    expect(security?.assetProtocol?.scope).toContain("**");
+    expect(security?.assetProtocol?.scope).toEqual(["**"]);
     expect(security?.pattern?.use).toBe("isolation");
     if (security?.pattern?.use === "isolation") {
       expect(security.pattern.options.dir).toBe("isolation");
@@ -231,5 +231,12 @@ describe("Tauri security config", () => {
       "utf8"
     );
     expect(isolationIndex).toContain("__TAURI_ISOLATION_HOOK__");
+  });
+
+  it("configures at least one bundle icon path", () => {
+    const config = loadTauriConfig();
+    const bundle = readJsonFile<{ bundle?: { icon?: string[] } }>(desktopPath("src-tauri", "tauri.conf.json")).bundle;
+    expect(bundle?.icon?.length ?? 0).toBeGreaterThan(0);
+    expect(bundle?.icon).toContain("icons/icon.ico");
   });
 });

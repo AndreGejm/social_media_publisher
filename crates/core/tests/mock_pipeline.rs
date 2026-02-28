@@ -3,7 +3,8 @@ use release_publisher_core::idempotency::try_build_idempotency_keys;
 use release_publisher_core::orchestrator::{Orchestrator, OrchestratorError, RunReleaseInput};
 use release_publisher_core::pipeline::{
     ExecuteContext, ExecutionEnvironment, ExecutionResult, ExecutionStatus, PlanContext,
-    PlannedAction, PlannedActionType, Publisher, VerificationResult,
+    PlannedAction, PlannedActionType, Publisher, PublisherError, PublisherResult,
+    VerificationResult,
 };
 use release_publisher_core::spec::parse_release_spec_yaml;
 use release_publisher_db::{
@@ -348,7 +349,7 @@ impl Publisher for TestPublisher {
         self.name
     }
 
-    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+    async fn plan(&self, ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
         Counters::inc(&self.counters.plans);
         Ok(vec![PlannedAction {
             platform: self.name.to_string(),
@@ -362,10 +363,13 @@ impl Publisher for TestPublisher {
         &self,
         _ctx: &ExecuteContext,
         plan: &[PlannedAction],
-    ) -> anyhow::Result<Vec<ExecutionResult>> {
+    ) -> PublisherResult<Vec<ExecutionResult>> {
         Counters::inc(&self.counters.executes);
         if self.fail_first_execute && self.counters.executes() == 1 {
-            anyhow::bail!("injected execute failure");
+            return Err(PublisherError::non_retryable(
+                "EXECUTE_FAILED",
+                "injected execute failure",
+            ));
         }
         Ok(plan
             .iter()
@@ -378,7 +382,7 @@ impl Publisher for TestPublisher {
             .collect())
     }
 
-    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+    async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
         Counters::inc(&self.counters.verifies);
         Ok(vec![VerificationResult {
             platform: self.name.to_string(),
@@ -400,7 +404,7 @@ impl Publisher for ExecuteFailGatePublisher {
         "failgate"
     }
 
-    async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+    async fn plan(&self, _ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
         Ok(vec![PlannedAction {
             platform: "failgate".to_string(),
             action: "plan fail after gate".to_string(),
@@ -413,7 +417,7 @@ impl Publisher for ExecuteFailGatePublisher {
         &self,
         _ctx: &ExecuteContext,
         _plan: &[PlannedAction],
-    ) -> anyhow::Result<Vec<ExecutionResult>> {
+    ) -> PublisherResult<Vec<ExecutionResult>> {
         if let Some(sender) = self
             .execute_called_tx
             .lock()
@@ -432,10 +436,13 @@ impl Publisher for ExecuteFailGatePublisher {
             let _ = receiver.await;
         }
 
-        anyhow::bail!("injected execute failure after gate");
+        Err(PublisherError::non_retryable(
+            "EXECUTE_FAILED",
+            "injected execute failure after gate",
+        ))
     }
 
-    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+    async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
         unreachable!("verify should not run when execute fails")
     }
 }
@@ -452,7 +459,7 @@ impl Publisher for VerifyGatePublisher {
         "gate"
     }
 
-    async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+    async fn plan(&self, _ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
         Ok(vec![PlannedAction {
             platform: "gate".to_string(),
             action: "plan gated".to_string(),
@@ -465,7 +472,7 @@ impl Publisher for VerifyGatePublisher {
         &self,
         _ctx: &ExecuteContext,
         plan: &[PlannedAction],
-    ) -> anyhow::Result<Vec<ExecutionResult>> {
+    ) -> PublisherResult<Vec<ExecutionResult>> {
         Ok(plan
             .iter()
             .map(|p| ExecutionResult {
@@ -477,7 +484,7 @@ impl Publisher for VerifyGatePublisher {
             .collect())
     }
 
-    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+    async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
         if let Some(sender) = self
             .verify_called_tx
             .lock()
@@ -538,7 +545,8 @@ async fn partial_failure_resume_skips_completed_platform_and_retries_only_failed
         ))
         .await
         .expect_err("first run should fail on beta");
-    assert!(first_err.to_string().contains("execute failed"));
+    assert!(first_err.to_string().contains("publisher `beta` failed"));
+    assert!(first_err.to_string().contains("injected execute failure"));
 
     assert_eq!(alpha_counts.executes(), 1);
     assert_eq!(beta_counts.executes(), 1);
@@ -766,11 +774,15 @@ async fn orchestrator_retries_busy_locked_during_mark_platform_failed_transactio
     holder_task.await.expect("holder join");
 
     match err {
-        OrchestratorError::InvalidReleaseState(message) => {
-            assert!(
-                message.contains("publisher `failgate` execute failed"),
-                "unexpected message: {message}"
-            );
+        OrchestratorError::PublisherFailure {
+            platform,
+            code,
+            retryable,
+            message,
+        } => {
+            assert_eq!(platform, "failgate");
+            assert_eq!(code, "EXECUTE_FAILED");
+            assert!(!retryable);
             assert!(
                 message.contains("injected execute failure after gate"),
                 "unexpected message: {message}"
@@ -814,7 +826,7 @@ async fn per_run_cap_is_enforced_in_core_plan_phase() {
             "multi"
         }
 
-        async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+        async fn plan(&self, _ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
             Ok(vec![
                 PlannedAction {
                     platform: "multi".to_string(),
@@ -835,11 +847,11 @@ async fn per_run_cap_is_enforced_in_core_plan_phase() {
             &self,
             _ctx: &ExecuteContext,
             _plan: &[PlannedAction],
-        ) -> anyhow::Result<Vec<ExecutionResult>> {
+        ) -> PublisherResult<Vec<ExecutionResult>> {
             unreachable!("plan should fail before execute")
         }
 
-        async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+        async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
             unreachable!("plan should fail before verify")
         }
     }
@@ -876,7 +888,7 @@ async fn test_env_rejects_non_simulated_actions_in_core() {
             "unsafe"
         }
 
-        async fn plan(&self, _ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+        async fn plan(&self, _ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
             Ok(vec![PlannedAction {
                 platform: "unsafe".to_string(),
                 action: "would-publish-publicly".to_string(),
@@ -889,11 +901,11 @@ async fn test_env_rejects_non_simulated_actions_in_core() {
             &self,
             _ctx: &ExecuteContext,
             _plan: &[PlannedAction],
-        ) -> anyhow::Result<Vec<ExecutionResult>> {
+        ) -> PublisherResult<Vec<ExecutionResult>> {
             Ok(vec![])
         }
 
-        async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+        async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
             Ok(vec![])
         }
     }

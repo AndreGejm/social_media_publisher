@@ -42,7 +42,10 @@ type UsePlayListActionsArgs = {
   setPlayerError: Dispatch<SetStateAction<string | null>>;
   setAutoplayRequestSourceKey: Dispatch<SetStateAction<string | null>>;
   setPlayerTimeSec: Dispatch<SetStateAction<number>>;
-  setActiveWorkspace: Dispatch<SetStateAction<"Library" | "Albums" | "Tracks" | "Playlists" | "Publisher Ops" | "Settings">>;
+  setActiveWorkspace: Dispatch<
+    SetStateAction<"Library" | "Quality Control" | "Playlists" | "Publisher Ops" | "Settings" | "About">
+  >;
+  setQualityControlMode: Dispatch<SetStateAction<"track" | "album">>;
   setPlayListMode: Dispatch<SetStateAction<"library" | "queue">>;
   setBatchSelectedTrackIds: Dispatch<SetStateAction<string[]>>;
   setFavoriteTrackIds: Dispatch<SetStateAction<string[]>>;
@@ -71,7 +74,8 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
       args.setAutoplayRequestSourceKey(`catalog:${item.track_id}`);
     }
     if (openTracksWorkspace) {
-      args.setActiveWorkspace("Tracks");
+      args.setQualityControlMode("track");
+      args.setActiveWorkspace("Quality Control");
     }
   };
 
@@ -116,7 +120,8 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
     args.setPlayerTimeSec(0);
     args.setSelectedTrackId(trackId);
     if (openTracksWorkspace) {
-      args.setActiveWorkspace("Tracks");
+      args.setQualityControlMode("track");
+      args.setActiveWorkspace("Quality Control");
     }
   };
 
@@ -184,7 +189,8 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
         break;
       case "show_in_tracks":
         args.setSelectedTrackId(args.contextMenuTrack.track_id);
-        args.setActiveWorkspace("Tracks");
+        args.setQualityControlMode("track");
+        args.setActiveWorkspace("Quality Control");
         args.setPlayListMode("library");
         break;
       case "remove_queue":

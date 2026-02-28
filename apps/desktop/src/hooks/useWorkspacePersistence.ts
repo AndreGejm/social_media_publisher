@@ -5,6 +5,7 @@ import { writeStorage } from "../app/state/localStorage";
 type StorageKeys = {
   activeMode: string;
   activeWorkspace: string;
+  qualityControlMode: string;
   publishShellStep: string;
   libraryIngestTab: string;
   libraryIngestCollapsed: string;
@@ -27,6 +28,7 @@ type UseWorkspacePersistenceArgs = {
   storageKeys: StorageKeys;
   activeMode: string;
   activeWorkspace: string;
+  qualityControlMode: string;
   publishShellStep: string;
   libraryIngestTab: string;
   libraryIngestCollapsed: boolean;
@@ -53,6 +55,10 @@ export function useWorkspacePersistence(args: UseWorkspacePersistenceArgs) {
   useEffect(() => {
     writeStorage(args.storageKeys.activeWorkspace, args.activeWorkspace);
   }, [args.activeWorkspace, args.storageKeys.activeWorkspace]);
+
+  useEffect(() => {
+    writeStorage(args.storageKeys.qualityControlMode, args.qualityControlMode);
+  }, [args.qualityControlMode, args.storageKeys.qualityControlMode]);
 
   useEffect(() => {
     writeStorage(args.storageKeys.publishShellStep, args.publishShellStep);

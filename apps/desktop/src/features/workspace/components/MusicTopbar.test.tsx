@@ -17,7 +17,7 @@ describe("MusicTopbar", () => {
     render(
       <MusicTopbar
         activeMode="Listen"
-        activeWorkspace="Tracks"
+        activeWorkspace="Quality Control"
         appModes={["Listen", "Publish"]}
         onSwitchAppMode={onSwitchAppMode}
         tracksCount={228}
@@ -60,7 +60,7 @@ describe("MusicTopbar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
     expect(onSwitchAppMode).toHaveBeenCalledWith("Listen");
     expect(screen.getByText(/Use the release workflow steps/i)).toBeInTheDocument();
   });

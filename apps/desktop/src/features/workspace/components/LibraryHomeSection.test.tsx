@@ -30,8 +30,8 @@ describe("LibraryHomeSection", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Tracks Workspace" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open Albums Workspace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Track QC" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Album QC" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Publish Workflow" }));
 
     expect(screen.getByText("228")).toBeInTheDocument();

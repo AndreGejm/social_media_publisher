@@ -146,9 +146,9 @@ export default function PlayListPanel(props: PlayListPanelProps) {
                   {props.showFavoritesOnly ? "Favorites Only" : "All Tracks"}
                 </button>
               </HelpTooltip>
-              <HelpTooltip content="Opens the album grouping view for the current visible tracks.">
+              <HelpTooltip content="Switch Quality Control to Album QC mode for grouped, cross-track review.">
                 <button type="button" className="secondary-action compact" onClick={props.onOpenAlbumsView}>
-                  Albums View
+                  Album QC View
                 </button>
               </HelpTooltip>
             </>

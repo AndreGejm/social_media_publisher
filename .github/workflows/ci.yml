@@ -9,6 +9,26 @@ on:
     - cron: "0 5 * * *"
 
 jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Rust advisory scan
+        run: cargo install cargo-audit --locked && cargo audit
+      - name: JS advisory scan
+        run: pnpm audit --audit-level=high
+
   frontend:
     runs-on: ubuntu-latest
     steps:

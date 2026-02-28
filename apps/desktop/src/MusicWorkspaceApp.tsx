@@ -44,16 +44,18 @@ import {
 } from "./services/tauriClient";
 import { sanitizeUiText } from "./ui-sanitize";
 
-type Workspace = "Library" | "Albums" | "Tracks" | "Playlists" | "Publisher Ops" | "Settings";
+type Workspace = "Library" | "Quality Control" | "Playlists" | "Publisher Ops" | "Settings" | "About";
 type AppMode = "Listen" | "Publish";
 type LibraryIngestTab = "scan_folders" | "import_files";
 type TrackSortKey = "updated_desc" | "title_asc" | "artist_asc" | "duration_desc" | "loudness_desc";
 type ThemePreference = "system" | "light" | "dark";
 type PlayListMode = "library" | "queue";
+type QualityControlMode = "track" | "album";
 
-const workspaces: Workspace[] = ["Library", "Albums", "Tracks", "Playlists", "Publisher Ops", "Settings"];
-const listenModeWorkspaces: Workspace[] = ["Library", "Albums", "Tracks", "Playlists", "Settings"];
+const workspaces: Workspace[] = ["Library", "Quality Control", "Playlists", "Publisher Ops", "Settings", "About"];
+const listenModeWorkspaces: Workspace[] = ["Library", "Quality Control", "Playlists"];
 const publishModeWorkspaces: Workspace[] = ["Publisher Ops"];
+const globalWorkspaces: Workspace[] = ["Settings", "About"];
 const appModes: AppMode[] = ["Listen", "Publish"];
 const libraryIngestTabs: Array<{ value: LibraryIngestTab; label: string }> = [
   { value: "scan_folders", label: "Scan Folders" },
@@ -71,13 +73,13 @@ const trackSortOptions: Array<{ value: TrackSortKey; label: string }> = [
 const publishWorkflowSteps: PublisherOpsScreen[] = [
   "New Release",
   "Plan / Preview",
-  "Verify / QC",
   "Execute",
   "Report / History"
 ];
 const STORAGE_KEYS = {
   activeMode: "rp.music.activeMode.v1",
   activeWorkspace: "rp.music.activeWorkspace.v1",
+  qualityControlMode: "rp.music.qualityControlMode.v1",
   publishShellStep: "rp.publish.shellStep.v1",
   libraryIngestTab: "rp.music.libraryIngestTab.v1",
   libraryIngestCollapsed: "rp.music.libraryIngestCollapsed.v1",
@@ -165,6 +167,10 @@ function isLibraryIngestTab(value: unknown): value is LibraryIngestTab {
 
 function isPlayListMode(value: unknown): value is PlayListMode {
   return value === "library" || value === "queue";
+}
+
+function isQualityControlMode(value: unknown): value is QualityControlMode {
+  return value === "track" || value === "album";
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -273,8 +279,31 @@ export default function MusicWorkspaceApp() {
     readStorage<AppMode>(STORAGE_KEYS.activeMode, "Listen", isAppMode)
   );
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace>(() =>
-    readStorage<Workspace>(STORAGE_KEYS.activeWorkspace, "Library", isWorkspace)
+    (() => {
+      const stored = readStorage<string>(
+        STORAGE_KEYS.activeWorkspace,
+        "Library",
+        (value): value is string => typeof value === "string"
+      );
+      if (stored === "Tracks" || stored === "Albums") {
+        return "Quality Control";
+      }
+      return isWorkspace(stored) ? stored : "Library";
+    })()
   );
+  const [qualityControlMode, setQualityControlMode] = useState<QualityControlMode>(() => {
+    const legacyWorkspace = readStorage<string>(
+      STORAGE_KEYS.activeWorkspace,
+      "Library",
+      (value): value is string => typeof value === "string"
+    );
+    const fallbackMode: QualityControlMode = legacyWorkspace === "Albums" ? "album" : "track";
+    return readStorage<QualityControlMode>(
+      STORAGE_KEYS.qualityControlMode,
+      fallbackMode,
+      isQualityControlMode
+    );
+  });
   const [publishShellStep, setPublishShellStep] = useState<PublisherOpsScreen>(() =>
     readStorage<PublisherOpsScreen>(STORAGE_KEYS.publishShellStep, "New Release", isPublisherOpsScreen)
   );
@@ -366,7 +395,8 @@ export default function MusicWorkspaceApp() {
     setActiveWorkspace,
     setPublisherOpsBooted,
     listenModeWorkspaces,
-    publishModeWorkspaces
+    publishModeWorkspaces,
+    globalWorkspaces
   });
   const {
     catalogPage,
@@ -586,6 +616,7 @@ export default function MusicWorkspaceApp() {
     storageKeys: STORAGE_KEYS,
     activeMode,
     activeWorkspace,
+    qualityControlMode,
     publishShellStep,
     libraryIngestTab,
     libraryIngestCollapsed,
@@ -694,6 +725,7 @@ export default function MusicWorkspaceApp() {
     setAutoplayRequestSourceKey,
     setPlayerTimeSec,
     setActiveWorkspace,
+    setQualityControlMode,
     setPlayListMode,
     setBatchSelectedTrackIds,
     setFavoriteTrackIds,
@@ -745,8 +777,14 @@ export default function MusicWorkspaceApp() {
     onNotice: showNotice
   });
 
-  const openTracksWorkspace = () => setActiveWorkspace("Tracks");
-  const openAlbumsWorkspace = () => setActiveWorkspace("Albums");
+  const openTracksWorkspace = () => {
+    setQualityControlMode("track");
+    setActiveWorkspace("Quality Control");
+  };
+  const openAlbumsWorkspace = () => {
+    setQualityControlMode("album");
+    setActiveWorkspace("Quality Control");
+  };
   const openLibraryWorkspace = () => setActiveWorkspace("Library");
   const openWorkspace = (workspace: Workspace) => setActiveWorkspace(workspace);
   const showPublishMode = () => switchAppMode("Publish");
@@ -795,12 +833,14 @@ export default function MusicWorkspaceApp() {
   const handleShowFirstAlbumTrackInTracks = (group: AlbumGroup) => {
     if (group.trackIds[0]) {
       setSelectedTrackId(group.trackIds[0]);
-      setActiveWorkspace("Tracks");
+      setQualityControlMode("track");
+      setActiveWorkspace("Quality Control");
     }
   };
   const handleShowTrackInTracks = (trackId: string) => {
     setSelectedTrackId(trackId);
-    setActiveWorkspace("Tracks");
+    setQualityControlMode("track");
+    setActiveWorkspace("Quality Control");
   };
   const toggleSettingsPreferencesCollapsed = () => setSettingsPreferencesCollapsed((value) => !value);
   const toggleSettingsSummaryCollapsed = () => setSettingsSummaryCollapsed((value) => !value);
@@ -823,7 +863,49 @@ export default function MusicWorkspaceApp() {
     }
   };
   const closeTrackRowContextMenu = () => setTrackRowContextMenu(null);
-  const showListenMode = () => switchAppMode("Listen");
+  const showListenMode = () => {
+    switchAppMode("Listen");
+    setQualityControlMode("track");
+    setActiveWorkspace("Quality Control");
+  };
+  const playListPanelProps = {
+    trackSearch,
+    onTrackSearchChange: setTrackSearch,
+    trackSort,
+    trackSortOptions,
+    onTrackSortChange: handleTrackSortChange,
+    onRefreshList: handleRefreshTracks,
+    catalogLoading,
+    isQueueMode,
+    onSetMode: setPlayListMode,
+    queueUsesSessionOrder,
+    queueLength: queue.length,
+    onShuffleQueue: shuffleSessionQueue,
+    onClearQueue: clearSessionQueue,
+    showFavoritesOnly,
+    onToggleFavoritesOnly: toggleShowFavoritesOnly,
+    onOpenAlbumsView: openAlbumsWorkspace,
+    orderedBatchSelectionIds,
+    onPlaySelectionNow: playBatchSelectionNow,
+    onAddSelectionToQueue: appendTracksToSessionQueue,
+    onPlaySelectionNext: enqueueTracksNext,
+    onClearBatchSelection: clearBatchSelection,
+    activePlayListItems,
+    catalogItemsCount: catalogPage.items.length,
+    selectedTrackId,
+    batchSelectedTrackIdSet,
+    onToggleTrackBatchSelection: toggleTrackBatchSelection,
+    onArmTrackFromPlayList: armTrackFromPlayList,
+    onPlayTrackNow: playTrackNow,
+    favoriteTrackIdSet,
+    contextMenuTrackId: trackRowContextMenu?.trackId ?? null,
+    onTrackRowContextMenu: handleTrackRowContextMenu,
+    onTrackRowMenuButtonClick: handleTrackRowMenuButtonClick,
+    queueDragTrackId,
+    onQueueDragStart: setQueueDragTrackId,
+    onQueueReorderDrop: reorderQueueByDrop,
+    onQueueDragEnd: handleQueueDragEnd
+  };
 
   return (
     <div
@@ -833,18 +915,18 @@ export default function MusicWorkspaceApp() {
     >
       <aside className="music-sidebar">
         <div className="music-brand">
-          <p className="eyebrow">Rauversion-style</p>
-          <h1>Music Core</h1>
-          <p className="music-brand-subtitle">Offline-first library, player, and publisher ops.</p>
+          <p className="eyebrow">Skald QC</p>
+          <h1>Skald QC</h1>
+          <p className="music-brand-subtitle">Codec Preview, QC &amp; Multi-Platform Publishing</p>
         </div>
 
         <nav aria-label="Workspaces" className="workspace-nav">
-          {modeWorkspaces.map((workspace) => (
+          {[...modeWorkspaces, ...globalWorkspaces].map((workspace) => (
             <HelpTooltip
               key={workspace}
               content={
                 workspace === "Publisher Ops"
-                  ? "Existing deterministic release pipeline (Plan â†’ Verify/QC â†’ Execute â†’ Report) preserved."
+                  ? "Deterministic release pipeline (New Release -> Plan / Preview -> Execute -> Report / History)."
                   : `Open the ${workspace} workspace.`
               }
               side="bottom"
@@ -941,7 +1023,7 @@ export default function MusicWorkspaceApp() {
           />
 
           <LibraryHomeSection
-            hidden={activeWorkspace !== "Library"}
+            hidden={activeMode !== "Listen" || activeWorkspace !== "Library"}
             libraryOverviewCollapsed={libraryOverviewCollapsed}
             onToggleLibraryOverviewCollapsed={toggleLibraryOverviewCollapsed}
             tracksCount={catalogPage.total}
@@ -955,45 +1037,41 @@ export default function MusicWorkspaceApp() {
             onShowPublishMode={showPublishMode}
           />
 
-          <section hidden={activeWorkspace !== "Tracks"} className="workspace-section tracks-layout">
-            <PlayListPanel
-              trackSearch={trackSearch}
-              onTrackSearchChange={setTrackSearch}
-              trackSort={trackSort}
-              trackSortOptions={trackSortOptions}
-              onTrackSortChange={handleTrackSortChange}
-              onRefreshList={handleRefreshTracks}
-              catalogLoading={catalogLoading}
-              isQueueMode={isQueueMode}
-              onSetMode={setPlayListMode}
-              queueUsesSessionOrder={queueUsesSessionOrder}
-              queueLength={queue.length}
-              onShuffleQueue={shuffleSessionQueue}
-              onClearQueue={clearSessionQueue}
-              showFavoritesOnly={showFavoritesOnly}
-              onToggleFavoritesOnly={toggleShowFavoritesOnly}
-              onOpenAlbumsView={openAlbumsWorkspace}
-              orderedBatchSelectionIds={orderedBatchSelectionIds}
-              onPlaySelectionNow={playBatchSelectionNow}
-              onAddSelectionToQueue={appendTracksToSessionQueue}
-              onPlaySelectionNext={enqueueTracksNext}
-              onClearBatchSelection={clearBatchSelection}
-              activePlayListItems={activePlayListItems}
-              catalogItemsCount={catalogPage.items.length}
-              selectedTrackId={selectedTrackId}
-              batchSelectedTrackIdSet={batchSelectedTrackIdSet}
-              onToggleTrackBatchSelection={toggleTrackBatchSelection}
-              onArmTrackFromPlayList={armTrackFromPlayList}
-              onPlayTrackNow={playTrackNow}
-              favoriteTrackIdSet={favoriteTrackIdSet}
-              contextMenuTrackId={trackRowContextMenu?.trackId ?? null}
-              onTrackRowContextMenu={handleTrackRowContextMenu}
-              onTrackRowMenuButtonClick={handleTrackRowMenuButtonClick}
-              queueDragTrackId={queueDragTrackId}
-              onQueueDragStart={setQueueDragTrackId}
-              onQueueReorderDrop={reorderQueueByDrop}
-              onQueueDragEnd={handleQueueDragEnd}
-            />
+          <section hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control"} className="workspace-section qc-intent-shell">
+            <div className="qc-intent-head">
+              <p className="eyebrow">Quality Control</p>
+              <h3>Choose QC Intent</h3>
+              <p className="helper-text">
+                Track QC validates single-file absolute checks. Album QC validates cross-track sequence and relative consistency.
+              </p>
+            </div>
+            <div className="qc-intent-toggle" role="tablist" aria-label="Quality Control intent">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={qualityControlMode === "track"}
+                className={`qc-intent-tab${qualityControlMode === "track" ? " active" : ""}`}
+                onClick={() => setQualityControlMode("track")}
+              >
+                Track QC
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={qualityControlMode === "album"}
+                className={`qc-intent-tab${qualityControlMode === "album" ? " active" : ""}`}
+                onClick={() => setQualityControlMode("album")}
+              >
+                Album QC
+              </button>
+            </div>
+          </section>
+
+          <section
+            hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control" || qualityControlMode !== "track"}
+            className="workspace-section tracks-layout"
+          >
+            <PlayListPanel {...playListPanelProps} />
 
             <TrackDetailPanel
               selectedTrackLoading={selectedTrackLoading}
@@ -1038,7 +1116,7 @@ export default function MusicWorkspaceApp() {
           </section>
 
           <AlbumsPanel
-            hidden={activeWorkspace !== "Albums"}
+            hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control" || qualityControlMode !== "album"}
             albumGroups={albumGroups}
             selectedAlbumGroup={selectedAlbumGroup}
             onSelectAlbumGroup={setSelectedAlbumKey}
@@ -1061,9 +1139,8 @@ export default function MusicWorkspaceApp() {
             onAlbumTrackRowMenuButtonClick={handleAlbumTrackRowMenuButtonClick}
           />
 
-          <section hidden={activeWorkspace !== "Playlists"} className="workspace-section placeholder-workspace">
-            <h3>Playlists</h3>
-            <p>Playlist editor and ordered track collections are planned after the first Tracks + Player milestone.</p>
+          <section hidden={activeMode !== "Listen" || activeWorkspace !== "Playlists"} className="workspace-section">
+            <PlayListPanel {...playListPanelProps} />
           </section>
 
           <SettingsPanel
@@ -1091,37 +1168,44 @@ export default function MusicWorkspaceApp() {
             }}
           />
 
+          <section hidden={activeWorkspace !== "About"} className="workspace-section placeholder-workspace">
+            <h3>About</h3>
+          </section>
+
           {publisherOpsBooted || activeWorkspace === "Publisher Ops" ? (
-            <section hidden={activeWorkspace !== "Publisher Ops"} className="workspace-section publisher-ops-host">
+            <section hidden={activeMode !== "Publish" || activeWorkspace !== "Publisher Ops"} className="workspace-section publisher-ops-host">
               <PublisherOpsWorkspace
                 prefillMediaPath={publisherDraftPrefill?.media_path ?? null}
                 prefillSpecPath={publisherDraftPrefill?.spec_path ?? null}
                 sharedTransport={publisherOpsSharedTransportBridge}
                 externalRequestedScreen={publishShellStep}
                 onScreenChange={handlePublishShellStepChange}
+                showInternalWorkflowTabs={false}
               />
             </section>
           ) : null}
         </main>
 
-        <SharedPlayerBar
-          playerSource={playerSource}
-          playerIsPlaying={playerIsPlaying}
-          playerTimeSec={playerTimeSec}
-          queueIndex={queueIndex}
-          queueLength={queue.length}
-          onPrev={handlePlayerPrev}
-          onTogglePlay={togglePlay}
-          onNext={handlePlayerNext}
-          onSeekRatio={seekPlayer}
-          formatClock={formatClock}
-          audioRef={playerAudioRef}
-          audioSrc={playerAudioSrc}
-          onAudioTimeUpdate={handlePlayerAudioTimeUpdate}
-          onAudioPlay={handlePlayerAudioPlay}
-          onAudioPause={handlePlayerAudioPause}
-          onAudioEnded={handlePlayerAudioEnded}
-        />
+        {activeMode === "Listen" ? (
+          <SharedPlayerBar
+            playerSource={playerSource}
+            playerIsPlaying={playerIsPlaying}
+            playerTimeSec={playerTimeSec}
+            queueIndex={queueIndex}
+            queueLength={queue.length}
+            onPrev={handlePlayerPrev}
+            onTogglePlay={togglePlay}
+            onNext={handlePlayerNext}
+            onSeekRatio={seekPlayer}
+            formatClock={formatClock}
+            audioRef={playerAudioRef}
+            audioSrc={playerAudioSrc}
+            onAudioTimeUpdate={handlePlayerAudioTimeUpdate}
+            onAudioPlay={handlePlayerAudioPlay}
+            onAudioPause={handlePlayerAudioPause}
+            onAudioEnded={handlePlayerAudioEnded}
+          />
+        ) : null}
       </div>
 
       <PublishSelectionDock

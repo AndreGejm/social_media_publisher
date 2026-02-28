@@ -6,7 +6,8 @@ use crate::pipeline::{
 };
 use crate::spec::ReleaseSpec;
 use release_publisher_db::{
-    db_busy_retry_delay_ms, Db, DbBusyRetryPolicy, DbError, DbErrorCode, NewAuditLogEntry,
+    db_busy_retry_delay_ms, retry_busy_locked, Db, DbBusyRetryPolicy, DbError, DbErrorCode,
+    NewAuditLogEntry,
     NewReleaseRecord, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
 };
 use serde::{Deserialize, Serialize};
@@ -15,12 +16,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 /// Default per-platform action cap used to prevent accidental mass publishes in one run.
 pub const DEFAULT_MAX_ACTIONS_PER_PLATFORM_PER_RUN: u32 = 1;
 const RUN_LOCK_LEASE_TTL_MS: i64 = 5 * 60 * 1000;
+const RUN_LOCK_LEASE_RENEW_FAILURE_LIMIT: u8 = 3;
 
 /// Errors emitted by the orchestration state machine.
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +46,15 @@ pub enum OrchestratorError {
     TestGuardrailViolation { platform: String },
     #[error("release state does not allow execution: {0}")]
     InvalidReleaseState(String),
+    #[error(
+        "publisher `{platform}` failed (code={code}, retryable={retryable}): {message}"
+    )]
+    PublisherFailure {
+        platform: String,
+        code: String,
+        retryable: bool,
+        message: String,
+    },
     #[error("db error: {0}")]
     Db(#[from] DbError),
     #[error("I/O error: {0}")]
@@ -245,7 +259,13 @@ impl Orchestrator {
                 max_actions_per_platform_per_run: input.max_actions_per_platform_per_run,
             };
             let planned_actions = publisher.plan(&plan_ctx).await.map_err(|e| {
-                OrchestratorError::InvalidInput(format!("publisher `{platform}` plan failed: {e}"))
+                let message = e.to_string();
+                OrchestratorError::PublisherFailure {
+                    platform: platform.clone(),
+                    code: e.code,
+                    retryable: e.retryable,
+                    message,
+                }
             })?;
 
             enforce_cap(
@@ -365,7 +385,26 @@ impl Orchestrator {
             )));
         }
 
-        let result = self.execute_locked(&planned).await;
+        let lease_renewer = if matches!(planned.env, ExecutionEnvironment::Test) {
+            None
+        } else {
+            Some(start_run_lock_lease_renewer(
+                self.db.clone(),
+                planned.release_id.clone(),
+                lock_owner.clone(),
+                lock_owner_epoch,
+            ))
+        };
+        let lease_renewal_failed = lease_renewer
+            .as_ref()
+            .map(|renewer| renewer.failure_flag())
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        let result = self
+            .execute_locked(&planned, lease_renewal_failed)
+            .await;
+        if let Some(renewer) = lease_renewer {
+            renewer.stop().await;
+        }
         let release_lock_result = self
             .retry_busy_locked_orchestrator(|| async {
                 self.db
@@ -387,7 +426,9 @@ impl Orchestrator {
     async fn execute_locked(
         &self,
         planned: &PlannedRelease,
+        lease_renewal_failed: Arc<AtomicBool>,
     ) -> Result<RunReleaseOutput, OrchestratorError> {
+        ensure_lease_healthy(&lease_renewal_failed)?;
         let release = self
             .db
             .get_release(&planned.release_id)
@@ -487,6 +528,7 @@ impl Orchestrator {
         }
 
         for platform in pending_platforms {
+            ensure_lease_healthy(&lease_renewal_failed)?;
             let publisher = self.publisher(&platform)?;
             let plan = planned
                 .planned_actions
@@ -542,16 +584,20 @@ impl Orchestrator {
             let execution_results = match publisher.execute(&exec_ctx, &plan).await {
                 Ok(results) => results,
                 Err(error) => {
+                    let error_message = error.to_string();
                     self.mark_platform_failed(
                         &planned.release_id,
                         &planned.run_id,
                         &platform,
-                        format!("{error}"),
+                        error_message.clone(),
                     )
                     .await?;
-                    return Err(OrchestratorError::InvalidReleaseState(format!(
-                        "publisher `{platform}` execute failed: {error}"
-                    )));
+                    return Err(OrchestratorError::PublisherFailure {
+                        platform: platform.clone(),
+                        code: error.code,
+                        retryable: error.retryable,
+                        message: error_message,
+                    });
                 }
             };
 
@@ -576,16 +622,20 @@ impl Orchestrator {
             let verify_results = match publisher.verify(&exec_ctx).await {
                 Ok(results) => results,
                 Err(error) => {
+                    let error_message = error.to_string();
                     self.mark_platform_failed(
                         &planned.release_id,
                         &planned.run_id,
                         &platform,
-                        format!("{error}"),
+                        error_message.clone(),
                     )
                     .await?;
-                    return Err(OrchestratorError::InvalidReleaseState(format!(
-                        "publisher `{platform}` verify failed: {error}"
-                    )));
+                    return Err(OrchestratorError::PublisherFailure {
+                        platform: platform.clone(),
+                        code: error.code,
+                        retryable: error.retryable,
+                        message: error_message,
+                    });
                 }
             };
 
@@ -630,6 +680,7 @@ impl Orchestrator {
             .await?;
         }
 
+        ensure_lease_healthy(&lease_renewal_failed)?;
         self.retry_busy_locked_orchestrator(|| async {
             let mut tx = self.db.begin_tx().await.map_err(OrchestratorError::from)?;
             let transitioned = tx
@@ -871,6 +922,105 @@ impl Orchestrator {
             "orchestrator busy-locked retry loop exhausted",
         )))
     }
+}
+
+struct RunLockLeaseRenewer {
+    stop_tx: watch::Sender<bool>,
+    task: JoinHandle<()>,
+    failed: Arc<AtomicBool>,
+}
+
+impl RunLockLeaseRenewer {
+    fn failure_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.failed)
+    }
+
+    async fn stop(self) {
+        let _ = self.stop_tx.send(true);
+        let _ = self.task.await;
+    }
+}
+
+fn start_run_lock_lease_renewer(
+    db: Db,
+    release_id: String,
+    owner: String,
+    owner_epoch: i64,
+) -> RunLockLeaseRenewer {
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let failed = Arc::new(AtomicBool::new(false));
+    let failed_clone = Arc::clone(&failed);
+    let task = tokio::spawn(async move {
+        let policy = DbBusyRetryPolicy::default();
+        let renew_interval_ms = (RUN_LOCK_LEASE_TTL_MS / 3).max(1_000) as u64;
+        let mut consecutive_failures: u8 = 0;
+
+        loop {
+            if *stop_rx.borrow() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(renew_interval_ms)).await;
+            if *stop_rx.borrow() {
+                break;
+            }
+
+            let now_unix_ms = unix_time_ms_now();
+            let renew_result = retry_busy_locked(&policy, || async {
+                db.renew_run_lock_lease(
+                    &release_id,
+                    &owner,
+                    owner_epoch,
+                    now_unix_ms,
+                    RUN_LOCK_LEASE_TTL_MS,
+                )
+                .await
+            })
+            .await;
+
+            match renew_result {
+                Ok(true) => {
+                    consecutive_failures = 0;
+                }
+                Ok(false) | Err(_) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    tracing::warn!(
+                        target: "orchestrator",
+                        release_id = %release_id,
+                        owner = %owner,
+                        owner_epoch,
+                        consecutive_failures,
+                        "run-lock lease renewal failed"
+                    );
+                    if consecutive_failures >= RUN_LOCK_LEASE_RENEW_FAILURE_LIMIT {
+                        failed_clone.store(true, Ordering::Relaxed);
+                        tracing::error!(
+                            target: "orchestrator",
+                            release_id = %release_id,
+                            owner = %owner,
+                            owner_epoch,
+                            "run-lock lease renewal failure limit reached; execution will fail closed"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    RunLockLeaseRenewer {
+        stop_tx,
+        task,
+        failed,
+    }
+}
+
+fn ensure_lease_healthy(lease_renewal_failed: &Arc<AtomicBool>) -> Result<(), OrchestratorError> {
+    if lease_renewal_failed.load(Ordering::Relaxed) {
+        return Err(OrchestratorError::InvalidReleaseState(
+            "run lock lease renewal failed".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Returns `true` when the error is a DB busy/locked condition eligible for retry.

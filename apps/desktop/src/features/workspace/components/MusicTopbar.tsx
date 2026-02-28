@@ -1,4 +1,4 @@
-type Workspace = "Library" | "Albums" | "Tracks" | "Playlists" | "Publisher Ops" | "Settings";
+type Workspace = "Library" | "Quality Control" | "Playlists" | "Publisher Ops" | "Settings" | "About";
 type AppMode = "Listen" | "Publish";
 
 type MusicTopbarProps = {
@@ -17,6 +17,9 @@ type MusicTopbarProps = {
 };
 
 export default function MusicTopbar(props: MusicTopbarProps) {
+  const modeLabel = (mode: AppMode): string => (mode === "Listen" ? "Release Preview" : mode);
+  const isPublisherOpsWorkspace = props.activeWorkspace === "Publisher Ops";
+
   return (
     <header className="music-topbar">
       <div>
@@ -31,20 +34,24 @@ export default function MusicTopbar(props: MusicTopbarProps) {
               className={`music-mode-tab${props.activeMode === mode ? " active" : ""}`}
               onClick={() => props.onSwitchAppMode(mode)}
             >
-              {mode}
+              {modeLabel(mode)}
             </button>
           ))}
         </div>
-        <h2>{props.activeMode === "Publish" ? "Publish Workflow" : props.activeWorkspace}</h2>
+        <h2>{isPublisherOpsWorkspace ? "Publish Workflow" : props.activeWorkspace}</h2>
         <p className="music-topbar-subtitle">
-          {props.activeMode === "Publish"
-            ? "You are in Publish mode (release workflow). General library browsing is hidden; use prepared drafts from Listen mode."
+          {isPublisherOpsWorkspace
+            ? "You are in Publish mode (release workflow). General library browsing is hidden; use prepared drafts from Release Preview mode."
+            : props.activeWorkspace === "Quality Control"
+              ? "Run focused QC workflows: Track QC for single-file checks, Album QC for relational checks across tracks."
             : props.activeWorkspace === "Settings"
               ? "Configure local UI behavior, playback preferences, and path display settings."
+              : props.activeWorkspace === "About"
+                ? "Product information workspace."
               : "Library Summary"}
         </p>
       </div>
-      {props.activeMode === "Listen" ? (
+      {!isPublisherOpsWorkspace ? (
         <div className="topbar-stats" aria-label="Library summary quick links">
           <button type="button" className="topbar-pill button" onClick={props.onOpenTracksWorkspace}>
             {props.tracksCount.toLocaleString()} track(s)
@@ -70,7 +77,7 @@ export default function MusicTopbar(props: MusicTopbarProps) {
         <div className="publish-mode-banner" role="note" aria-label="Publish mode guidance">
           <span className="topbar-pill">Publish mode</span>
           <span className="publish-mode-banner-copy">
-            Use the release workflow steps. Track selection comes from "Prepare for Release..." in Listen mode.
+            Use the release workflow steps. Track selection comes from "Prepare for Release..." in Release Preview mode.
           </span>
         </div>
       )}

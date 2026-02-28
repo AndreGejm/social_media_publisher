@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -61,16 +62,65 @@ pub struct ExecuteContext {
     pub max_actions_per_platform_per_run: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublisherError {
+    pub code: String,
+    pub retryable: bool,
+    pub redacted_message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_context: Option<String>,
+}
+
+impl PublisherError {
+    pub fn new(
+        code: impl Into<String>,
+        retryable: bool,
+        redacted_message: impl Into<String>,
+        provider_context: Option<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            retryable,
+            redacted_message: redacted_message.into(),
+            provider_context,
+        }
+    }
+
+    pub fn non_retryable(code: impl Into<String>, redacted_message: impl Into<String>) -> Self {
+        Self::new(code, false, redacted_message, None)
+    }
+}
+
+impl fmt::Display for PublisherError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(context) = &self.provider_context {
+            write!(f, "{} [{}]: {}", self.code, context, self.redacted_message)
+        } else {
+            write!(f, "{}: {}", self.code, self.redacted_message)
+        }
+    }
+}
+
+impl std::error::Error for PublisherError {}
+
+impl From<anyhow::Error> for PublisherError {
+    fn from(value: anyhow::Error) -> Self {
+        Self::non_retryable("PUBLISHER_INTERNAL", value.to_string())
+    }
+}
+
+pub type PublisherResult<T> = Result<T, PublisherError>;
+
 #[async_trait]
 pub trait Publisher: Send + Sync {
     fn platform_name(&self) -> &'static str;
-    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>>;
+    async fn plan(&self, ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>>;
     async fn execute(
         &self,
         ctx: &ExecuteContext,
         plan: &[PlannedAction],
-    ) -> anyhow::Result<Vec<ExecutionResult>>;
-    async fn verify(&self, ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>>;
+    ) -> PublisherResult<Vec<ExecutionResult>>;
+    async fn verify(&self, ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>>;
 }
 
 #[cfg(test)]

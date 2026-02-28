@@ -4,7 +4,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { HelpTooltip } from "./HelpTooltip";
 import { QcPlayer, type QcPlayerAnalysis } from "./QcPlayer";
 
-export type PublisherOpsScreen = "New Release" | "Plan / Preview" | "Verify / QC" | "Execute" | "Report / History";
+export type PublisherOpsScreen = "New Release" | "Plan / Preview" | "Execute" | "Report / History";
 type Screen = PublisherOpsScreen;
 type AppEnv = "TEST" | "STAGING" | "PRODUCTION";
 
@@ -73,11 +73,10 @@ type QcAnalysisView = {
 type QcApprovalRecord = { approved_at: string };
 const MAX_QC_PEAK_BINS_UI = 8_192;
 
-const screens: Screen[] = ["New Release", "Plan / Preview", "Verify / QC", "Execute", "Report / History"];
+const screens: Screen[] = ["New Release", "Plan / Preview", "Execute", "Report / History"];
 const screenHelpText: Record<Screen, string> = {
   "New Release": "Enter file paths, choose environment, and prepare a release run.",
   "Plan / Preview": "Review normalized metadata and simulated platform actions before execution.",
-  "Verify / QC": "Inspect waveform and loudness, then manually approve the planned release.",
   Execute: "Review the most recent execute result and execution notes.",
   "Report / History": "Browse saved releases, reports, and resume previous runs."
 };
@@ -297,6 +296,7 @@ type AppProps = {
   sharedTransport?: SharedTransportBridgeForPublisherOps | null;
   externalRequestedScreen?: PublisherOpsScreen | null;
   onScreenChange?: ((screen: PublisherOpsScreen) => void) | null;
+  showInternalWorkflowTabs?: boolean;
 };
 
 export type SharedTransportSourceForPublisherOps = {
@@ -337,7 +337,8 @@ export default function App({
   prefillSpecPath = null,
   sharedTransport = null,
   externalRequestedScreen = null,
-  onScreenChange = null
+  onScreenChange = null,
+  showInternalWorkflowTabs = true
 }: AppProps) {
   const [activeScreen, setActiveScreen] = useState<Screen>("New Release");
   const [specPath, setSpecPath] = useState("");
@@ -371,6 +372,7 @@ export default function App({
   const reportRequestSeqRef = useRef(0);
   const qcRequestSeqRef = useRef(0);
   const qcAudioRef = useRef<HTMLAudioElement>(null);
+  const lastBroadcastScreenRef = useRef<Screen | null>(null);
 
   useEffect(() => {
     if (!externalRequestedScreen) return;
@@ -378,8 +380,13 @@ export default function App({
   }, [externalRequestedScreen]);
 
   useEffect(() => {
-    onScreenChange?.(activeScreen);
-  }, [activeScreen, onScreenChange]);
+    if (!onScreenChange) return;
+    // Avoid broadcasting stale screen state while an external screen request is still syncing.
+    if (externalRequestedScreen && activeScreen !== externalRequestedScreen) return;
+    if (lastBroadcastScreenRef.current === activeScreen) return;
+    lastBroadcastScreenRef.current = activeScreen;
+    onScreenChange(activeScreen);
+  }, [activeScreen, externalRequestedScreen, onScreenChange]);
 
   useEffect(() => {
     const nextMediaPath = prefillMediaPath?.trim();
@@ -526,7 +533,7 @@ export default function App({
       if (result) {
         setQcAnalysis(buildQcViewFromPersisted(result));
         resetQcPlayback();
-        setActiveScreen("Verify / QC");
+        setActiveScreen("Execute");
         if (!options?.preserveStatus) {
           setStatusMessage("Loaded persisted QC analysis.");
         }
@@ -606,10 +613,9 @@ export default function App({
       setExecuteResult(null);
       setQcAnalysis(null);
       resetQcPlayback();
-      setActiveScreen("Verify / QC");
-      setStatusMessage(`Planned ${response.planned_actions.length} action(s) in ${response.env}. Analyze and approve in QC before Execute.`);
+      setActiveScreen("Plan / Preview");
+      setStatusMessage(`Planned ${response.planned_actions.length} action(s) in ${response.env}. Review actions, then run Execute when ready.`);
       void refreshHistory().catch(() => undefined);
-      void loadQcForRelease(response.release_id, { preserveStatus: true }).catch(() => undefined);
     } catch (error) {
       setStructuredError(error, "Plan failed.");
     } finally {
@@ -639,7 +645,7 @@ export default function App({
       });
       setQcAnalysis(buildQcViewFromPersisted(persisted));
       resetQcPlayback();
-      setActiveScreen("Verify / QC");
+      setActiveScreen("Execute");
       setStatusMessage("QC waveform and loudness metrics are ready. Listen and approve for release.");
     } catch (error) {
       try {
@@ -647,7 +653,7 @@ export default function App({
         const analyzed = await invokeCommand<AnalyzeAudioFileResponse>("analyze_audio_file", { path: mediaPath });
         setQcAnalysis(buildQcViewFromAnalyzeFile(analyzed, loadedSpec?.spec ?? null, releaseId));
         resetQcPlayback();
-        setActiveScreen("Verify / QC");
+        setActiveScreen("Execute");
         setStatusMessage("QC waveform and loudness metrics are ready (session-only preview). Listen and approve for release.");
       } catch (fallbackError) {
         setQcAnalysis((current) => (current?.release.id === releaseId ? null : current));
@@ -754,16 +760,6 @@ export default function App({
       setBackendError({ code: "NOT_PLANNED", message: "Plan a release before executing." });
       return;
     }
-    if (!explicitReleaseId && planResult?.release_id === releaseId && !qcApprovedForCurrentPlan) {
-      setUiError("QC approval is required before executing the planned release.");
-      setActiveScreen("Verify / QC");
-      return;
-    }
-    if (!explicitReleaseId && planResult?.release_id === releaseId && !qcAnalysisValidForCurrentPlan) {
-      setUiError("A valid QC analysis is required before executing the planned release.");
-      setActiveScreen("Verify / QC");
-      return;
-    }
     setUiError(null);
     setBackendError(null);
     setExecuting(true);
@@ -831,24 +827,26 @@ export default function App({
         </p>
       </header>
 
-      <section className="panel" aria-labelledby="workflow-heading">
-        <h2 id="workflow-heading">Workflow Screens</h2>
-        <ul data-testid="screen-list" className="screen-list">
-          {screens.map((screen) => (
-            <li key={screen}>
-              <HelpTooltip content={screenHelpText[screen]} side="bottom">
-                <button
-                  type="button"
-                  className={`tab-button${activeScreen === screen ? " active" : ""}`}
-                  onClick={() => setActiveScreen(screen)}
-                >
-                  {screen}
-                </button>
-              </HelpTooltip>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {showInternalWorkflowTabs ? (
+        <section className="panel" aria-labelledby="workflow-heading">
+          <h2 id="workflow-heading">Workflow Screens</h2>
+          <ul data-testid="screen-list" className="screen-list">
+            {screens.map((screen) => (
+              <li key={screen}>
+                <HelpTooltip content={screenHelpText[screen]} side="bottom">
+                  <button
+                    type="button"
+                    className={`tab-button${activeScreen === screen ? " active" : ""}`}
+                    onClick={() => setActiveScreen(screen)}
+                  >
+                    {screen}
+                  </button>
+                </HelpTooltip>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section hidden={activeScreen !== "New Release"} className="panel grid" aria-labelledby="new-release-heading">
         <div>
@@ -976,7 +974,7 @@ export default function App({
                     type="button"
                     data-testid="execute-button"
                     onClick={() => void onExecute()}
-                    disabled={executing || !planResult?.release_id || !qcApprovedAndReadyForExecuteCurrentPlan}
+                    disabled={executing || !planResult?.release_id}
                   >
                     {executing ? "Executing..." : "Execute"}
                   </button>
@@ -1020,17 +1018,7 @@ export default function App({
           </div>
           <div className="helper-text" data-testid="execute-gate-hint">
             Execute gate:{" "}
-            {!planResult?.release_id
-              ? "Plan a release to enable Execute."
-              : loadingQcAnalysis
-                ? "QC analysis is running. Execute is temporarily locked."
-              : !qcAnalysis || qcAnalysis.release.id !== planResult.release_id
-                ? "Analyze the planned audio in Verify / QC."
-                : !isValidQcTrackForApproval(qcAnalysis.track)
-                  ? "QC analysis is invalid or incomplete. Re-run Verify / QC."
-                : !qcApprovedForCurrentPlan
-                  ? "Click Approve for Release in Verify / QC."
-                  : "QC approved. Execute is enabled."}
+            {!planResult?.release_id ? "Plan a release to enable Execute." : "Plan available. Execute is enabled."}
           </div>
         </div>
 
@@ -1040,7 +1028,7 @@ export default function App({
             <li>TEST mode is simulation-only in Rust core.</li>
             <li>Per-run caps are enforced in core and tested.</li>
             <li>Idempotent reruns reuse the same release_id.</li>
-            <li>Manual QC approval gates the current planned Execute action.</li>
+            <li>Execute reads the persisted release plan and writes report/history artifacts.</li>
           </ul>
           <div className="mini-card"><strong>Selected ENV:</strong> <span data-testid="env-display">{env}</span></div>
           <div className="mini-card"><strong>Selected platforms:</strong> <span data-testid="selected-platforms">{selectedPlatforms.join(", ") || "none"}</span></div>
@@ -1099,172 +1087,6 @@ export default function App({
         </div>
       </section>
 
-      <section hidden={activeScreen !== "Verify / QC"} className="panel" aria-labelledby="qc-heading">
-        <h2 id="qc-heading">Verify / QC</h2>
-        <div className="qc-layout">
-          <div className="qc-actions-card">
-            <div className="qc-header-row">
-              <div>
-                <h3>Audio Analysis</h3>
-                <p className="helper-text">
-                  Native Rust analysis precomputes waveform peaks and loudness so visual seeking stays responsive.
-                </p>
-              </div>
-              <div className="action-row qc-action-row">
-                <span className="help-action-group">
-                  <HelpTooltip content="Runs QC analysis on the current audio file and stores the results locally.">
-                    <button
-                      type="button"
-                      data-testid="analyze-qc-button"
-                      onClick={onAnalyzeQc}
-                      disabled={loadingQcAnalysis || planning || executing || !planResult?.release_id}
-                    >
-                      {loadingQcAnalysis ? "Analyzing..." : "Analyze & Persist QC"}
-                    </button>
-                  </HelpTooltip>
-                  <HelpTooltip
-                    variant="popover"
-                    iconLabel="How Verify / QC analysis works"
-                    title="Verify / QC"
-                    content={
-                      <>
-                        <p>
-                          Decodes the audio natively in Rust (symphonia), calculates integrated loudness (EBU R128 LUFS), and builds a
-                          downsampled dBFS waveform peak array for responsive visual seeking.
-                        </p>
-                        <p>
-                          The QC metrics are validated and stored against the planned release in SQLite so they can be reloaded later without
-                          reanalysis.
-                        </p>
-                      </>
-                    }
-                  />
-                </span>
-                <HelpTooltip content="Loads previously saved QC metrics for the selected release from local history.">
-                  <button
-                    type="button"
-                    data-testid="load-qc-history-button"
-                    onClick={onLoadQcFromSelectedHistory}
-                    disabled={loadingQcLookup || !selectedHistoryReleaseId}
-                  >
-                    {loadingQcLookup ? "Loading QC..." : "Load Saved QC"}
-                  </button>
-                </HelpTooltip>
-              </div>
-            </div>
-
-            {qcAnalysis ? (
-              <>
-                <div className="qc-meta-strip" data-testid="qc-analysis-summary">
-                  <div className="qc-meta-main">
-                    <div className="qc-meta-title">{qcAnalysis.release.title}</div>
-                    <div className="qc-meta-artist">{qcAnalysis.release.artist}</div>
-                    <div className="qc-chip-row">
-                      {(loadedSpec?.spec?.tags ?? []).map((tag) => (
-                        <span className="qc-chip" key={tag}>
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="qc-meta-side">
-                    <div>
-                      <strong>Track Path</strong>
-                      <div>{formatDiagnosticPath(qcAnalysis.track.file_path, revealFullDiagnosticPaths)}</div>
-                    </div>
-                    <div>
-                      <strong>Analysis Updated</strong>
-                      <div>{qcAnalysis.updated_at ?? "session-only"}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <QcPlayer
-                  analysis={toQcPlayerAnalysis(qcAnalysis)}
-                  currentTimeSec={qcPlayerCurrentTimeSec}
-                  isPlaying={qcPlayerIsPlaying}
-                  onTogglePlay={onToggleQcPlayback}
-                  onSeek={onSeekQc}
-                  onTimeUpdate={setQcCurrentTimeSec}
-                  onPlay={() => setQcIsPlaying(true)}
-                  onPause={() => setQcIsPlaying(false)}
-                  audioRef={qcAudioRef}
-                  renderAudioElement={!qcUsesSharedTransport}
-                  showPlayToggle={!qcUsesSharedTransport}
-                />
-
-                <div className="qc-approval-card">
-                  <div>
-                    <h3 className="qc-approval-title">Manual Approval Gate</h3>
-                    <p className="helper-text">
-                      Listen, inspect the waveform, then approve to unlock Execute for the currently planned release.
-                    </p>
-                  </div>
-                  <div className="action-row qc-approval-actions">
-                    <span className="help-action-group">
-                      <HelpTooltip content="Unlocks Execute for this planned release after manual QC review.">
-                        <button
-                          type="button"
-                          className={`approve-button${qcApprovedForCurrentPlan ? " approved" : ""}`}
-                          data-testid="approve-release-button"
-                          onClick={onApproveForRelease}
-                          disabled={
-                            !planResult?.release_id ||
-                            qcAnalysis.release.id !== planResult.release_id ||
-                            !isValidQcTrackForApproval(qcAnalysis.track) ||
-                            loadingQcAnalysis
-                          }
-                        >
-                          {qcApprovedForCurrentPlan ? "Approved for Release" : "Approve for Release"}
-                        </button>
-                      </HelpTooltip>
-                      <HelpTooltip
-                        variant="popover"
-                        iconLabel="How Approve for Release works"
-                        title="Approve for Release"
-                        content={
-                          <>
-                            <p>
-                              Records a local manual approval gate for the currently planned release after waveform inspection and listening.
-                            </p>
-                            <p>
-                              This action does not publish anything. It only enables the Execute button in the UI for the matching planned
-                              release_id.
-                            </p>
-                          </>
-                        }
-                      />
-                    </span>
-                    <HelpTooltip content="Removes the local QC approval and re-locks Execute for the current plan.">
-                      <button
-                        type="button"
-                        className="approve-button secondary"
-                        onClick={onClearQcApproval}
-                        disabled={!qcApprovedForCurrentPlan}
-                      >
-                        Clear Approval
-                      </button>
-                    </HelpTooltip>
-                  </div>
-                  {!isValidQcTrackForApproval(qcAnalysis.track) ? (
-                    <p className="error-text" role="alert" data-testid="qc-analysis-invalid">
-                      QC analysis is invalid or incomplete. Re-run audio analysis before approving.
-                    </p>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <div className="qc-empty" data-testid="qc-analysis-summary">
-                <p>No QC analysis loaded.</p>
-                <p className="helper-text">
-                  Plan a release and run audio analysis to display waveform peaks, LUFS, and playback controls.
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
       <section hidden={activeScreen !== "Execute"} className="panel" aria-labelledby="execute-heading">
         <h2 id="execute-heading">Execute</h2>
         <div className="grid">
@@ -1318,7 +1140,7 @@ export default function App({
                 historyRows.map((row) => (
                   <li key={row.release_id}>
                     <HelpTooltip
-                      content="Selects this release for Open Release Report, Load Saved QC, and Resume Release actions."
+                      content="Selects this release for Open Release Report and Resume Release actions."
                       side="bottom"
                     >
                       <label className="history-row">

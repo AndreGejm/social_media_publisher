@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use release_publisher_core::pipeline::{
     ExecuteContext, ExecutionResult, ExecutionStatus, PlanContext, PlannedAction,
-    PlannedActionType, Publisher, VerificationResult,
+    PlannedActionType, Publisher, PublisherResult, VerificationResult,
 };
 
 #[derive(Debug, Default)]
@@ -13,7 +13,7 @@ impl Publisher for MockPublisher {
         "mock"
     }
 
-    async fn plan(&self, ctx: &PlanContext) -> anyhow::Result<Vec<PlannedAction>> {
+    async fn plan(&self, ctx: &PlanContext) -> PublisherResult<Vec<PlannedAction>> {
         Ok(vec![PlannedAction {
             platform: self.platform_name().to_string(),
             action: format!("Simulate publish for {}", ctx.release_id),
@@ -26,7 +26,7 @@ impl Publisher for MockPublisher {
         &self,
         _ctx: &ExecuteContext,
         plan: &[PlannedAction],
-    ) -> anyhow::Result<Vec<ExecutionResult>> {
+    ) -> PublisherResult<Vec<ExecutionResult>> {
         Ok(plan
             .iter()
             .map(|action| ExecutionResult {
@@ -38,7 +38,7 @@ impl Publisher for MockPublisher {
             .collect())
     }
 
-    async fn verify(&self, _ctx: &ExecuteContext) -> anyhow::Result<Vec<VerificationResult>> {
+    async fn verify(&self, _ctx: &ExecuteContext) -> PublisherResult<Vec<VerificationResult>> {
         Ok(vec![VerificationResult {
             platform: self.platform_name().to_string(),
             verified: true,

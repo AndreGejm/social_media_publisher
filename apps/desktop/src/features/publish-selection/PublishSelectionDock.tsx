@@ -27,12 +27,12 @@ export default function PublishSelectionDock(props: PublishSelectionDockProps) {
       <div className="queue-card queue-card-docked">
         <div className="queue-head">
           <h3>Release Selection</h3>
-          <HelpTooltip content="Tracks prepared for the Publish workflow. This list is separate from the Listen playback queue.">
+          <HelpTooltip content="Tracks prepared for the Publish workflow. This list is separate from the Release Preview playback queue.">
             <span className="queue-help-badge">Publish mode</span>
           </HelpTooltip>
         </div>
         <div className="queue-card-controls">
-          <HelpTooltip content="Clears the current release selection list used to seed the publish workflow from Library/Tracks.">
+          <HelpTooltip content="Clears the current release selection list used to seed the publish workflow from Library/Quality Control.">
             <button
               type="button"
               className="secondary-action compact"
@@ -42,9 +42,9 @@ export default function PublishSelectionDock(props: PublishSelectionDockProps) {
               Clear Selection
             </button>
           </HelpTooltip>
-          <HelpTooltip content="Return to Tracks in Listen mode to prepare more tracks for publishing.">
+          <HelpTooltip content="Return to Track QC in Release Preview mode to prepare more tracks for publishing.">
             <button type="button" className="secondary-action compact" onClick={props.onShowInTracks}>
-              Show in Tracks
+              Open Track QC
             </button>
           </HelpTooltip>
         </div>
@@ -54,7 +54,7 @@ export default function PublishSelectionDock(props: PublishSelectionDockProps) {
         </div>
         <div className="queue-list">
           {props.publishSelectionItems.length === 0 ? (
-            <p className="empty-state">No tracks prepared yet. Use "Prepare for Release..." from Listen mode.</p>
+            <p className="empty-state">No tracks prepared yet. Use "Prepare for Release..." from Release Preview mode.</p>
           ) : (
             props.publishSelectionItems.map((item, index) => (
               <div

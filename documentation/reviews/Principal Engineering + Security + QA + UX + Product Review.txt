@@ -1,0 +1,256 @@
+# Principal Engineering + Security + QA + UX + Product Review
+
+Date: 2026-02-27  
+Scope: Tauri v2 desktop shell, Rust core orchestration/DB, React/TS UI workflow
+
+## 1) Executive summary
+
+- The architecture intent is strong: explicit `Plan -> Execute -> Verify -> Commit`, deterministic IDs, and SQLite-backed state transitions are all in place in the core orchestrator (`Orchestrator::plan_release`, `execute_locked`).
+- Test-mode guardrails are enforced in both planning and execution (`TestGuardrailViolation` checks in `orchestrator.rs`), which is a good anti-footgun base before real connectors.
+- The app is currently bottlenecked by **very large “god files”** (`commands.rs` ~4k LOC, `App.tsx` ~1.3k LOC, `MusicWorkspaceApp.tsx` ~1.1k LOC), which will materially reduce velocity and increase connector integration risk.
+- Run-lock leasing is implemented in DB (`renew_run_lock_lease`) but not renewed by the orchestrator while executing; long-running future connectors can race after TTL expiration.
+- Error model quality is mixed: DB has stable typed error codes (`DbErrorCode`), but publisher trait still returns `anyhow::Result`, and orchestrator maps many failures into `InvalidReleaseState(String)` (stringly and lossy).
+- The Tauri security baseline is reasonable (isolation pattern, scoped permissions list, strict CSP), but `assetProtocol.scope = ["**"]` is overly broad for a desktop app that processes untrusted file paths.
+- Secret handling is not production-ready yet: only in-memory secret storage exists (`InMemorySecretStore`), with no OS keychain integration path in runtime flows.
+- Background ingest jobs are detached (`tokio::spawn`) and not cancellable/pauseable; this is acceptable now but will become operational debt with large media libraries.
+- Logging is present and mostly structured, but correlation context is inconsistent across long flows; connector onboarding will need a first-class run correlation ID propagated end-to-end.
+- QA foundation is good for core determinism/state-machine behavior (property tests + state transition tests), but there are major gaps in cancellation, resume, connector contracts, and “unsafe publish prevention” scenarios.
+- UX communicates pipeline stages, but there is ambiguity around action finality and safety confirmations for STAGING/PRODUCTION paths.
+- There is at least one visible text encoding regression in UI copy (`Plan â†’ Verify/QC...`), which undermines trust in a safety-critical workflow.
+
+## 2) Stop-the-line issues (before enabling real connectors)
+
+1. **Lease renewal gap for long executions (High / Stability):**
+   - DB supports lock renewal (`Db::renew_run_lock_lease`) but orchestrator acquires once and never renews during execute/verify loops.
+   - Risk: duplicate execution attempts if lock expires mid-run.
+   - Fix now: add heartbeat task in `execute_planned_release` or `execute_locked` to renew lease every `TTL/3`, fail closed if renewal misses N times.
+
+2. **Over-broad asset protocol scope in Tauri config (High / Security):**
+   - `tauri.conf.json` sets `assetProtocol.scope` to `"**"`.
+   - Risk: renderer access surface is broader than needed for local artifacts/media.
+   - Fix now: scope to explicit app data/artifact roots and validated media subpaths.
+
+3. **Lossy error typing across publisher boundary (High / Maintainability/Reliability):**
+   - `Publisher` trait uses `anyhow::Result`, orchestrator maps failures into string messages in `InvalidReleaseState`.
+   - Risk: unstable IPC semantics, brittle retries/remediation once connectors have provider-specific errors.
+   - Fix now: introduce typed `PublisherError { code, retryable, redacted_message, provider_context }` and preserve through UI.
+
+4. **Backend command monolith (High / Maintainability):**
+   - `apps/desktop/src-tauri/src/commands.rs` combines IPC DTOs, validation, domain flows, background jobs, and tests.
+   - Risk: merge conflicts, accidental regressions, difficult threat review.
+   - Fix now: split into command modules by bounded context (release, catalog, ingest, reporting, security/input).
+
+## 3) Engineering review (readability/maintainability/stability)
+
+### Core orchestrator (`crates/core/src/orchestrator.rs`)
+
+- **What is good:**
+  - Clear phase structure and explicit state transitions.
+  - Cap enforcement and TEST simulated-only checks are applied in both plan and execute phases.
+  - Final artifact includes per-platform summaries and reused-result flag.
+
+- **Issues / risks:**
+  - `OrchestratorError` conflates many domains via freeform strings (`InvalidReleaseState(String)`, `InvalidInput(String)`), making automation and UX mapping harder.
+  - Orchestrator defines its own busy/locked retry loop while DB already has one; duplicated policy logic increases drift risk.
+  - Lock lease acquired/released centrally, but no renewal path during long per-platform execution loops.
+
+- **Refactor now (pre-connectors):**
+  - Introduce typed sub-errors: `InvariantViolation`, `PublisherFailure`, `VerificationFailure`, `GuardrailViolation`.
+  - Move retry behavior to DB adapter boundary so orchestration code does not duplicate lock/backoff logic.
+  - Add lock lease renewer + cancellation token integration in execution loop.
+
+### DB layer (`crates/db/src/lib.rs` + migrations)
+
+- **What is good:**
+  - Good structured error codes (`DbErrorCode`) and SQLx mapping.
+  - Transition APIs encode state-machine constraints.
+  - Lease lock APIs are more advanced than basic mutex lock.
+
+- **Issues / risks:**
+  - `run_locks` supports both lease and non-lease lock APIs (`acquire_run_lock` + `acquire_run_lock_lease`)—dual semantics can cause accidental misuse.
+  - JSON blobs for plan/result are practical, but schema evolution strategy is implicit; only parts are validated on read.
+
+- **Refactor now:**
+  - Deprecate non-lease lock methods or mark internal-only.
+  - Introduce explicit JSON schema version fields for `plan_json`/`result_json` payloads.
+
+### Desktop backend commands (`apps/desktop/src-tauri/src/commands.rs`)
+
+- **What is good:**
+  - Input boundaries have length limits and canonicalization helpers.
+  - Error serialization and partial message truncation/redaction signals good intent.
+  - Command logging includes timing in several handlers.
+
+- **Issues / risks:**
+  - Single-file command/service implementation is too large; difficult to reason about invariants and security.
+  - Background ingest scans are fire-and-forget (`tokio::spawn`) and cannot be canceled/resumed from UI.
+  - Mixed sync/async filesystem operations are wrapped via `spawn_blocking` in some places, but cancellation semantics remain coarse.
+
+- **Refactor now:**
+  - Split `CommandService` into modules + service traits (`ReleaseService`, `CatalogService`, `IngestService`).
+  - Persist ingest cursor/checkpoint every N files; add `cancel_ingest_job(job_id)`.
+  - Standardize per-command correlation metadata (`run_id`, `job_id`, `release_id`).
+
+### Frontend workflow (`apps/desktop/src/App.tsx`, `MusicWorkspaceApp.tsx`)
+
+- **What is good:**
+  - Pipeline screens and state transitions are explicit in UI model.
+  - Some stale request protection exists (`historyRequestSeqRef` pattern).
+
+- **Issues / risks:**
+  - Two large UI orchestrator files create hidden coupling between modes/workspaces/publish states.
+  - Product copy and state messaging are inconsistent; safety-critical states can be missed.
+  - Encoding artifact in visible copy (`Plan â†’ Verify/QC...`) reduces confidence.
+
+- **Refactor now:**
+  - Move stateful flows into domain hooks/reducers per feature area.
+  - Add typed finite-state machine for Publisher Ops (e.g., xstate/reducer model) to make invalid UI transitions impossible.
+  - Centralize UX copy with reviewed safety wording constants.
+
+## 4) Security review (findings, mitigations, severity)
+
+### High
+
+- **Tauri asset protocol scope too broad**
+  - Evidence: `assetProtocol.scope: ["**"]` in `tauri.conf.json`.
+  - Risk: expanded local file exposure surface.
+  - Mitigation: constrain scope to app-owned artifact/media roots, enforce canonical path allowlist checks before generating asset URLs.
+
+- **No production-grade secret storage path**
+  - Evidence: only `InMemorySecretStore` implementation in `crates/core/src/secrets.rs`.
+  - Risk: connector tokens cannot be safely persisted/recovered for real usage.
+  - Mitigation: implement OS credential backend abstraction (Windows Credential Manager, macOS Keychain, libsecret) and make it default.
+
+### Medium
+
+- **Publisher error typing is opaque at security boundary**
+  - Evidence: `Publisher` trait methods return `anyhow::Result`.
+  - Risk: accidental secret leakage in nested error chains, inconsistent UI handling.
+  - Mitigation: typed connector errors with explicit redacted/public fields.
+
+- **Detached background jobs without policy controls**
+  - Evidence: `tokio::spawn` in `catalog_scan_root` dispatch.
+  - Risk: denial-of-service style local resource exhaustion (large roots, repeated scans).
+  - Mitigation: single-flight per root, queue depth limits, cancel endpoint, scan rate limiting.
+
+### Low
+
+- **Dependency security checks missing from CI**
+  - Evidence: CI runs fmt/clippy/tests/playwright but no `cargo audit` / npm audit policy gate.
+  - Mitigation: add scheduled + PR advisory scans (allowlist known non-exploitable advisories).
+
+## 5) QA review
+
+### Current strengths
+
+- Property tests validate idempotency behavior in core (`idempotency_properties.rs`).
+- Stateful transition tests are present for DB locks/transitions (`state_machine.rs`).
+- End-to-end mock pipeline tests exist (`mock_pipeline.rs`).
+
+### Gaps to close (priority)
+
+1. **Lock lease expiry while execute still running** (must-have): simulate TTL expiry and confirm renewer prevents takeover.
+2. **Cancellation/resume ingest jobs**: kill app mid-scan; verify resume correctness and dedupe guarantees.
+3. **Connector contract tests**: define reusable suite every connector must pass (idempotency keys, retryable errors, verify semantics).
+4. **IPC fuzz/property tests**: path normalization, long payload limits, malformed DTOs, Unicode edge cases.
+5. **Safety E2E**: ensure PRODUCTION execute requires explicit confirmation with release fingerprint echo.
+
+### Flake controls
+
+- Use deterministic clocks/seeds where possible (already used in retry jitter seed patterns).
+- Add bounded polling helpers with explicit timeout diagnostics.
+- Isolate filesystem test fixtures per test and avoid shared temp roots.
+
+## 6) UX review
+
+### Top issues
+
+- Safety posture is mostly implied by text/status; it should be made explicit with irreversible-action confirmation patterns.
+- Multi-step publish workflow lacks “at-a-glance readiness” panel (spec valid, media analyzed, QC approved, guardrails passed).
+- History/report surfaces appear present but could do better at diffing runs and showing why a rerun reused prior verified results.
+
+### Improvements
+
+- Add **Release Readiness Card** with hard gates and explainers.
+- Add **environment-colored banners** (TEST green, STAGING amber, PRODUCTION red) and sticky mode indicator.
+- Add pre-execute modal with phrase confirmation for PRODUCTION.
+- Improve error copy to include: what failed, why, what user can do now.
+- Fix encoding regression in workflow subtitle string.
+
+### Copy improvements for safety
+
+- Replace generic “Execute” with “Execute Publish Plan”.
+- Replace “QC approved. Execute is now enabled...” with “QC approved for this exact plan hash. Any spec/media change requires re-plan.”
+- In history, show “Reused prior verified result” as a visible badge with tooltip explanation.
+
+## 7) Product roadmap (prioritized)
+
+### P0 (next 1–2 releases)
+
+1. **Release templates/presets**
+   - Value: reduces setup time + fewer metadata mistakes.
+   - Cost/Risk: Medium.
+   - Dependencies: metadata schema + preset storage.
+   - MVP: local named templates; Later: team-shared templates.
+
+2. **Dry-run diff between runs**
+   - Value: confidence before execute; avoids accidental drift.
+   - Cost/Risk: Medium.
+   - Dependencies: stable normalized plan serialization.
+   - MVP: JSON diff summary; Later: visual side-by-side with semantic sections.
+
+3. **Safety checklist before execute**
+   - Value: prevents “oops publish publicly”.
+   - Cost/Risk: Low.
+   - Dependencies: existing plan/QC state.
+   - MVP: required checkbox set + typed confirmation in PROD.
+
+### P1
+
+4. **Per-platform override editor**
+   - Value: supports future connector differences without spec duplication.
+   - Cost/Risk: Medium-High.
+   - Dependencies: connector capability descriptors.
+   - MVP: key/value overrides with validation; Later: dynamic typed forms.
+
+5. **Metadata editor with validation hints**
+   - Value: catches compliance issues early.
+   - Cost/Risk: Medium.
+   - Dependencies: rule engine per platform.
+   - MVP: local lint rules; Later: provider-specific warnings.
+
+6. **Link resolver + preview**
+   - Value: better review before publish.
+   - Cost/Risk: Medium.
+   - Dependencies: connector output schemas.
+   - MVP: mock/known link preview; Later: cross-platform deep-link verification.
+
+### P2
+
+7. **Scheduling calendar view**
+8. **Plugin SDK for connectors**
+9. **Sandbox onboarding wizard (guided first release)**
+
+## 8) Next 2 sprints plan (concrete)
+
+### Sprint 1 (hardening + architecture)
+
+1. **Implement lease renewal in orchestrator**
+   - Acceptance: long-run integration test demonstrates no duplicate executor after TTL.
+2. **Split `commands.rs` into bounded modules**
+   - Acceptance: no module >800 LOC; command registration remains identical behavior.
+3. **Introduce typed publisher error contract**
+   - Acceptance: IPC errors always include stable code + retryability; no raw provider errors reach UI.
+4. **Constrain Tauri asset scope**
+   - Acceptance: app still renders required media/artifacts; unauthorized paths blocked.
+
+### Sprint 2 (quality + UX safety)
+
+1. **Add cancel/resume ingest jobs + UI controls**
+   - Acceptance: user can cancel within 1s; resume continues from checkpoint without duplicates.
+2. **Add safety checklist + PROD typed confirmation**
+   - Acceptance: execute button disabled until checklist complete; audited event recorded.
+3. **Add run diff and reused-result explanation in history/report**
+   - Acceptance: user can compare selected run to prior run; reused outcomes clearly labeled.
+4. **Add connector contract test harness in `testkit`**
+   - Acceptance: new connectors must pass shared suite before merge.

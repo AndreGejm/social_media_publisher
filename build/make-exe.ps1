@@ -54,6 +54,12 @@ $start = Get-Date
 
 Push-Location $projectRoot
 try {
+    $priorCargoOffline = $env:CARGO_NET_OFFLINE
+    if ($priorCargoOffline) {
+        Remove-Item Env:CARGO_NET_OFFLINE -ErrorAction SilentlyContinue
+        "[$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")] INFO cleared CARGO_NET_OFFLINE for build" | Out-File -FilePath $logFile -Append -Encoding utf8
+    }
+
     $buildCommand = if ($Mode -eq "release") {
         "pnpm --filter @release-publisher/desktop tauri build"
     } else {
@@ -71,17 +77,45 @@ try {
         exit 1
     }
 
-    $targetDir = if ($Mode -eq "release") {
-        Join-Path $projectRoot "apps/desktop/src-tauri/target/release"
+    $targetDirs = if ($Mode -eq "release") {
+        @(
+            (Join-Path $projectRoot "target/release/bundle/nsis"),
+            (Join-Path $projectRoot "apps/desktop/src-tauri/target/release/bundle/nsis"),
+            (Join-Path $projectRoot "target/release"),
+            (Join-Path $projectRoot "apps/desktop/src-tauri/target/release")
+        )
     } else {
-        Join-Path $projectRoot "apps/desktop/src-tauri/target/debug"
+        @(
+            (Join-Path $projectRoot "target/debug"),
+            (Join-Path $projectRoot "apps/desktop/src-tauri/target/debug")
+        )
     }
 
-    $exe = Get-ChildItem -Path $targetDir -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue |
+    $exeCandidates = @()
+    foreach ($dir in $targetDirs) {
+        if (Test-Path $dir) {
+            $exeCandidates += Get-ChildItem -Path $dir -Filter "*.exe" -Recurse -File -ErrorAction SilentlyContinue
+        }
+    }
+
+    $installer = $exeCandidates |
+        Where-Object {
+            $_.FullName -match "\\bundle\\nsis\\" -and
+            (
+                $_.Name -match "(?i)(setup|installer)" -or
+                $_.DirectoryName -match "(?i)nsis"
+            )
+        } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
-    if (-not $exe) {
+    $artifact = if ($installer) {
+        $installer
+    } else {
+        $exeCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
+
+    if (-not $artifact) {
         "[$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")] BUILD FAIL mode=$Mode reason=no_exe_found" | Out-File -FilePath $logFile -Append -Encoding utf8
         Write-Output "BUILD FAILED. Tail of log:"
         Get-Content -Path $logFile -Tail 15 | ForEach-Object { Write-Output $_ }
@@ -89,10 +123,13 @@ try {
     }
 
     $duration = [math]::Round(((Get-Date) - $start).TotalSeconds, 2)
-    "[$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")] BUILD SUCCESS mode=$Mode exe=$($exe.FullName) duration_s=$duration" | Out-File -FilePath $logFile -Append -Encoding utf8
-    Write-Output ("BUILD SUCCESS: {0} | Time: {1}s" -f $exe.FullName, $duration)
+    "[$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")] BUILD SUCCESS mode=$Mode exe=$($artifact.FullName) duration_s=$duration" | Out-File -FilePath $logFile -Append -Encoding utf8
+    Write-Output ("BUILD SUCCESS: {0} | Time: {1}s" -f $artifact.FullName, $duration)
     exit 0
 }
 finally {
+    if ($null -ne $priorCargoOffline) {
+        $env:CARGO_NET_OFFLINE = $priorCargoOffline
+    }
     Pop-Location
 }

@@ -8,6 +8,7 @@ type UseWorkspaceModeStateArgs<Workspace extends string> = {
   setPublisherOpsBooted: Dispatch<SetStateAction<boolean>>;
   listenModeWorkspaces: Workspace[];
   publishModeWorkspaces: Workspace[];
+  globalWorkspaces: Workspace[];
 };
 
 export function useWorkspaceModeState<Workspace extends string>(args: UseWorkspaceModeStateArgs<Workspace>) {
@@ -18,17 +19,19 @@ export function useWorkspaceModeState<Workspace extends string>(args: UseWorkspa
     setActiveWorkspace,
     setPublisherOpsBooted,
     listenModeWorkspaces,
-    publishModeWorkspaces
+    publishModeWorkspaces,
+    globalWorkspaces
   } = args;
 
   const modeWorkspaces = activeMode === "Listen" ? listenModeWorkspaces : publishModeWorkspaces;
   const showLibraryIngestSidebar = activeMode === "Listen" && activeWorkspace === "Library";
 
   useEffect(() => {
-    const allowed = activeMode === "Listen" ? listenModeWorkspaces : publishModeWorkspaces;
+    const modeAllowed = activeMode === "Listen" ? listenModeWorkspaces : publishModeWorkspaces;
+    const allowed = [...modeAllowed, ...globalWorkspaces];
     if (allowed.includes(activeWorkspace)) return;
     setActiveWorkspace((activeMode === "Listen" ? "Library" : "Publisher Ops") as Workspace);
-  }, [activeMode, activeWorkspace, listenModeWorkspaces, publishModeWorkspaces, setActiveWorkspace]);
+  }, [activeMode, activeWorkspace, listenModeWorkspaces, publishModeWorkspaces, globalWorkspaces, setActiveWorkspace]);
 
   useEffect(() => {
     if (activeWorkspace === "Publisher Ops") {
@@ -37,16 +40,19 @@ export function useWorkspaceModeState<Workspace extends string>(args: UseWorkspa
   }, [activeWorkspace, setPublisherOpsBooted]);
 
   const switchAppMode = useCallback((mode: "Listen" | "Publish") => {
+    const isGlobalWorkspace = globalWorkspaces.includes(activeWorkspace);
     setActiveMode(mode);
     if (mode === "Publish") {
       setPublisherOpsBooted(true);
-      setActiveWorkspace("Publisher Ops" as Workspace);
+      if (!isGlobalWorkspace) {
+        setActiveWorkspace("Publisher Ops" as Workspace);
+      }
       return;
     }
-    if (!listenModeWorkspaces.includes(activeWorkspace)) {
+    if (!listenModeWorkspaces.includes(activeWorkspace) && !isGlobalWorkspace) {
       setActiveWorkspace("Library" as Workspace);
     }
-  }, [activeWorkspace, listenModeWorkspaces, setActiveMode, setActiveWorkspace, setPublisherOpsBooted]);
+  }, [activeWorkspace, globalWorkspaces, listenModeWorkspaces, setActiveMode, setActiveWorkspace, setPublisherOpsBooted]);
 
   return {
     modeWorkspaces,

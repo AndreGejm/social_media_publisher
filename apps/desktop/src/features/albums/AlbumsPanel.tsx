@@ -43,8 +43,8 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
       <div className="albums-column albums-list-column">
         <div className="albums-head">
           <div>
-            <p className="eyebrow">Albums</p>
-            <h3>Grouped from Local Catalog Tracks</h3>
+            <p className="eyebrow">Album QC</p>
+            <h3>Grouped, Cross-Track Review</h3>
           </div>
           <HelpTooltip content="Album groups are generated from track metadata in the local catalog. Unassigned tracks appear under Singles / Unassigned.">
             <span className="queue-help-badge">{props.albumGroups.length} groups</span>
@@ -106,14 +106,14 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
                     Add Album to Queue
                   </button>
                 </HelpTooltip>
-                <HelpTooltip content="Open Tracks workspace and focus the first track in this album group.">
+                <HelpTooltip content="Switch to Track QC mode and focus the first track in this album group.">
                   <button
                     type="button"
                     className="secondary-action"
                     onClick={() => props.onShowFirstAlbumTrackInTracks(props.selectedAlbumGroup!)}
                     disabled={props.selectedAlbumGroup.trackIds.length === 0}
                   >
-                    Show in Tracks
+                    Show in Track QC
                   </button>
                 </HelpTooltip>
               </div>
@@ -207,7 +207,7 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
                     </span>
                   </button>
                   <div className="album-track-actions">
-                    <HelpTooltip content="Open row actions (play, queue, favorite, or show in Tracks) for this album track.">
+                    <HelpTooltip content="Open row actions (play, queue, favorite, or show in Track QC) for this album track.">
                       <button
                         type="button"
                         className="track-row-menu-button"

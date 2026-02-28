@@ -53,7 +53,7 @@ export default function TrackRowContextMenu(props: TrackRowContextMenuProps) {
           {props.isFavorite ? "Remove Favorite" : "Add Favorite"}
         </button>
         <button type="button" role="menuitem" onClick={() => props.onAction("show_in_tracks")}>
-          Show in Tracks
+          Show in Track QC
         </button>
         <button
           type="button"

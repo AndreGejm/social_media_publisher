@@ -1,0 +1,38 @@
+Summary of Open-Source Repositories for Multi‑Codec QC Player
+
+The following open‑source projects provide building blocks for a real‑time QC player that can preview different streaming codecs and export multiple formats. Each repository solves a specific part of the pipeline (loudness/true‑peak measurement, FFT computation, codec processing, BPM detection, lock‑free buffering) and is worth reviewing before implementing your own version. Citations from each project’s README are provided as evidence.
+
+Loudness / True‑Peak Measurement
+Repository	Highlights	Key Evidence
+jiixyj/libebur128 (ANSI‑C)	Implements the EBU R128 broadcast loudness standard and loudness range measurement; provides Momentary, Short‑term, Integrated LUFS readings and True Peak scanning; portable C code with MIT licence	README notes that the library implements M/S/I modes, loudness range, true‑peak scanning and is portable ANSI‑C
+sdroege/ebur128 (Rust port)	Rust crate compatible with the C version; passes all tests defined in EBU Tech 3341/3342; offers the same APIs as libebur128 and even exposes a C API	The README states that it is a Rust port of the C implementation, providing momentary, short‑term, integrated loudness and loudness range, true peak scanning and supporting all sample rates
+FFT Computation (for Real‑Time Spectral Display)
+Repository	Highlights	Key Evidence
+ejmahler/RustFFT	High‑performance, SIMD‑accelerated Fast Fourier Transform library in pure Rust; handles arbitrary sizes with O(N log N) time complexity; supports AVX/SSE/NEON for high performance across platforms	The README emphasises that RustFFT is a high‑performance FFT library providing high throughput and can compute FFTs of any size in O(n log n) time
+Codec Implementations
+Repository	Highlights	Key Evidence
+xiph/opus	Reference implementation of the Opus codec (RFC 6716); handles interactive speech and high‑fidelity stereo music; scales from low‑bit‑rate speech to high‑quality audio; suitable for real‑time or stored‑file applications; royalty‑free	The README explains that Opus is designed for a wide range of audio applications, from low bitrate speech to high quality stereo music, and is suitable for real‑time communication or stored files
+xiph/vorbis	Reference implementation of the Ogg Vorbis codec; the Vorbis specification is in the public domain and free of royalties; the package contains libvorbis (codec library), libvorbisfile (convenience library), libvorbisenc (encoding API), and example programs	README states that Vorbis is a general‑purpose audio format belonging to the public domain; the package includes libraries for encoding and decoding plus example code
+BPM / Beat / Onset Detection
+Repository	Highlights	Key Evidence
+aubio/aubio	C library for audio/music analysis; can detect note onsets, compute pitches, track tempo and beat, compute MFCC coefficients, perform FFT/phase vocoder, up/down‑sampling and filtering; provides Python bindings; GPL licence	README notes that aubio listens to audio signals and detects events such as drum hits or pitch frequencies, and includes onset detection, pitch detection, tempo tracking, MFCC, FFT, filters, transient/steady‑state separation and sound‑file I/O
+Lock‑Free Ring Buffer
+Repository	Highlights	Key Evidence
+ain1084/direct_ring_buffer	Lock‑free ring buffer implementation in Rust; designed for single‑producer/single‑consumer scenarios; uses atomic operations and no heap allocation during runtime; provides full capacity utilisation and slice‑based read/write API for contiguous block transfers—ideal for audio streaming	README describes a high‑performance, lock‑free ring buffer with full‑capacity utilisation, predictable wrap‑around alignment, and slice‑based API; it uses atomic operations and performs no heap allocations after creation
+Additional Considerations
+
+FFmpeg/libav – Although not included above due to licensing complexity, FFmpeg provides a wide variety of codecs (AAC, MP3, etc.). If licensing is acceptable, linking to FFmpeg’s libraries (libavcodec, libavformat) could give you access to additional streaming codec profiles.
+
+cpal – Cross‑platform audio I/O library in Rust. Useful if you build your own playback engine rather than using JUCE.
+
+These projects demonstrate architectures and patterns relevant to your QC player:
+
+libebur128/ebur128 show how to implement the ITU‑R BS.1770 loudness algorithm and true‑peak scanning.
+
+RustFFT demonstrates a pure‑Rust, highly optimised FFT suitable for real‑time spectra.
+
+xiph/opus and xiph/vorbis illustrate how to encode/decode audio for preview; their APIs can serve as a guide for integrating streaming codecs with delay compensation.
+
+aubio provides algorithms for BPM/tempo detection, onset detection and other music analysis tasks.
+
+direct_ring_buffer reveals how to design a lock‑free, single‑producer/single‑consumer buffer for bridging DSP and GUI threads without blocking or allocations.

@@ -27,8 +27,8 @@ vi.mock("./App", () => ({
       <span data-testid="publisher-ops-prefill-media">{props.prefillMediaPath ?? ""}</span>
       <span data-testid="publisher-ops-prefill-spec">{props.prefillSpecPath ?? ""}</span>
       <span data-testid="publisher-ops-requested-screen">{props.externalRequestedScreen ?? ""}</span>
-      <button type="button" onClick={() => props.onScreenChange?.("Verify / QC")}>
-        Mock Sync Verify
+      <button type="button" onClick={() => props.onScreenChange?.("Execute")}>
+        Mock Sync Execute
       </button>
     </div>
   )
@@ -206,10 +206,15 @@ function installTwoTrackSingleAlbumCatalog() {
 }
 
 async function openTracksAndSelectFirstTrack() {
-  fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+  fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
   const trackRow = await screen.findByRole("button", { name: /^Authoring Track/i });
   fireEvent.click(trackRow);
   await screen.findByRole("heading", { name: "Authoring Track" });
+}
+
+async function openAlbumQcMode() {
+  fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Album QC" }));
 }
 
 describe("MusicWorkspaceApp metadata editor", () => {
@@ -318,7 +323,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
   it("supports multi-select batch actions in Tracks", async () => {
     installTwoTrackCatalog();
     render(<MusicWorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
 
     fireEvent.click(await screen.findByRole("checkbox", { name: `Select ${baseTrackListItem.title} for batch actions` }));
     fireEvent.click(screen.getByRole("checkbox", { name: `Select ${secondTrackListItem.title} for batch actions` }));
@@ -356,7 +361,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
   it("opens a row context menu and runs Play Now", async () => {
     installTwoTrackCatalog();
     render(<MusicWorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
 
     const targetRowButton = await screen.findByRole("button", { name: /^Queue Candidate/i });
     fireEvent.contextMenu(targetRowButton);
@@ -374,14 +379,14 @@ describe("MusicWorkspaceApp metadata editor", () => {
   it("opens an album-track row context menu and shows the track in Tracks", async () => {
     installTwoTrackCatalog();
     render(<MusicWorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Albums" }));
+    await openAlbumQcMode();
 
     const albumRowMenuButton = await screen.findByRole("button", { name: "Open actions for Queue Candidate" });
     fireEvent.click(albumRowMenuButton);
 
     const menu = await screen.findByRole("menu", { name: /Actions for Queue Candidate/i });
-    expect(within(menu).getByRole("menuitem", { name: "Show in Tracks" })).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Show in Tracks" }));
+    expect(within(menu).getByRole("menuitem", { name: "Show in Track QC" })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Show in Track QC" }));
 
     await waitFor(() => {
       expect(screen.queryByRole("menu", { name: /Actions for Queue Candidate/i })).not.toBeInTheDocument();
@@ -392,7 +397,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
   it("supports album multi-select batch queue actions in Albums detail", async () => {
     installTwoTrackSingleAlbumCatalog();
     render(<MusicWorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Albums" }));
+    await openAlbumQcMode();
 
     fireEvent.click(
       await screen.findByRole("checkbox", {
@@ -416,7 +421,8 @@ describe("MusicWorkspaceApp metadata editor", () => {
     fireEvent.click(within(batchActions).getByRole("button", { name: "Play Selection Next" }));
     expect(await screen.findByText("Queued 2 selected tracks to play next.")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Track QC" }));
     fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
     const queueList = screen.getByRole("list", { name: "Queue tracks" });
     expect(within(queueList).getByText(baseTrackListItem.title)).toBeInTheDocument();
@@ -435,7 +441,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(screen.queryByRole("button", { name: "Library" })).not.toBeInTheDocument();
     expect(screen.getByTestId("publisher-ops-mock")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
 
     expect(await screen.findByRole("button", { name: "Library" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Publisher Ops" })).not.toBeInTheDocument();
@@ -452,8 +458,8 @@ describe("MusicWorkspaceApp metadata editor", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Execute" }));
     expect(screen.getByTestId("publisher-ops-requested-screen")).toHaveTextContent("Execute");
 
-    fireEvent.click(screen.getByRole("button", { name: "Mock Sync Verify" }));
-    expect(await screen.findByTestId("publisher-ops-requested-screen")).toHaveTextContent("Verify / QC");
+    fireEvent.click(screen.getByRole("button", { name: "Mock Sync Execute" }));
+    expect(await screen.findByTestId("publisher-ops-requested-screen")).toHaveTextContent("Execute");
   });
 
   it("splits Library ingest tools into Scan Folders and Import Files tabs with clearer labels", async () => {
@@ -480,14 +486,14 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(screen.getByRole("button", { name: "Import Files" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add Folder" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
     expect(screen.queryByRole("tablist", { name: "Library ingest sections" })).not.toBeInTheDocument();
   });
 
   it("keeps the Listen queue separate from the Publish release selection dock", async () => {
     installTwoTrackCatalog();
     render(<MusicWorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
 
     fireEvent.click(
       await screen.findByRole("checkbox", {
@@ -507,8 +513,8 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(within(queueDock).getByText("0 draft(s)")).toBeInTheDocument();
     expect(within(queueDock).getByText(/No tracks prepared yet\./i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Listen" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Tracks" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Quality Control" }));
     fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
     queueList = screen.getByRole("list", { name: "Queue tracks" });
     expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
@@ -537,19 +543,33 @@ describe("MusicWorkspaceApp metadata editor", () => {
     expect(within(queueDock).getByText(baseTrackListItem.artist_name)).toBeInTheDocument();
   });
 
-  it("keeps the shared transport mounted across workspace navigation", async () => {
+  it("shows shared transport only in Release Preview mode", async () => {
     render(<MusicWorkspaceApp />);
 
     const transport = screen.getByRole("region", { name: "Shared transport" });
     expect(transport).toBeInTheDocument();
     expect(within(transport).getByRole("button", { name: "Play" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Albums" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
     expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
     fireEvent.click(await screen.findByRole("button", { name: "Publisher Ops" }));
-    expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Shared transport" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
+    expect(await screen.findByRole("region", { name: "Shared transport" })).toBeInTheDocument();
+  });
+
+  it("shows searchable list and queue controls inside the Playlists workspace", async () => {
+    installTwoTrackCatalog();
+    render(<MusicWorkspaceApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
+
+    expect(await screen.findByRole("searchbox", { name: "Search tracks" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Play list mode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh List" })).toBeInTheDocument();
   });
 
   it("persists collapsed Library and Settings sections across remounts", async () => {

@@ -81,14 +81,14 @@ export default function LibraryHomeSection(props: LibraryHomeSectionProps) {
         </div>
         <div id="library-quick-actions-panel" hidden={props.libraryQuickActionsCollapsed} className="collapsible-panel-body">
           <div className="library-quick-links">
-            <HelpTooltip content="Open the detailed tracks browser with list + player detail panel.">
+            <HelpTooltip content="Open Quality Control in Track QC mode (single-track absolute checks).">
               <button type="button" className="secondary-action" onClick={props.onOpenTracksWorkspace}>
-                Open Tracks Workspace
+                Open Track QC
               </button>
             </HelpTooltip>
-            <HelpTooltip content="Open the grouped album browser generated from imported catalog tracks.">
+            <HelpTooltip content="Open Quality Control in Album QC mode (cross-track relational checks).">
               <button type="button" className="secondary-action" onClick={props.onOpenAlbumsWorkspace}>
-                Open Albums Workspace
+                Open Album QC
               </button>
             </HelpTooltip>
             <HelpTooltip content="Open the existing publisher pipeline workflow (plan/verify/execute/report).">
