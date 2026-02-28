@@ -3291,6 +3291,7 @@ dependencies = [
 name = "release-publisher-desktop"
 version = "0.2.0"
 dependencies = [
+ "crossbeam-queue",
  "release-publisher-core",
  "release-publisher-db",
  "release-publisher-mock-connector",

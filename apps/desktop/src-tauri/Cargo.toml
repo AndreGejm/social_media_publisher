@@ -16,6 +16,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tauri = { version = "2", features = ["isolation", "protocol-asset"] }
 tauri-plugin-dialog = "2"
+crossbeam-queue = "0.3"
 release-publisher-core = { path = "../../../crates/core" }
 release-publisher-db = { path = "../../../crates/db" }
 release-publisher-mock-connector = { path = "../../../crates/connectors/mock" }

@@ -1,3 +1,4 @@
+use crossbeam_queue::ArrayQueue;
 use release_publisher_core::audio_processor::{
     analyze_track as analyze_audio_track_file, AudioError as CoreAudioError,
 };
@@ -25,10 +26,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc, OnceLock,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    Arc, OnceLock, RwLock,
 };
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::OnceCell;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -227,6 +228,23 @@ pub struct CatalogIngestJobResponse {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioHardwareState {
+    pub sample_rate_hz: u32,
+    pub bit_depth: u16,
+    pub buffer_size_frames: u32,
+    pub is_exclusive_lock: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackContextState {
+    pub volume_scalar: f32,
+    pub is_bit_perfect_bypassed: bool,
+    pub active_queue_index: u32,
+    pub is_queue_ui_expanded: bool,
+    pub queued_track_change_requests: usize,
+}
+
 const PLANNED_RELEASE_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 const PLANNED_RELEASE_DESCRIPTOR_FILE_NAME: &str = "planned_release_descriptor.json";
 const MAX_IPC_PATH_CHARS: usize = 4_096;
@@ -240,6 +258,9 @@ const MAX_PLAN_RELEASE_PLATFORMS: usize = 32;
 const MAX_PLATFORM_LABEL_CHARS: usize = 64;
 const MAX_RELEASE_SPEC_TAGS_FROM_CATALOG: usize = 10;
 const MAX_RELEASE_SPEC_TAG_LEN_CHARS: usize = 32;
+const PLAYBACK_COMMAND_QUEUE_CAPACITY: usize = 1_024;
+const PLAYBACK_COMMAND_THREAD_IDLE_MS: u64 = 2;
+const UNITY_GAIN_LEVEL: f32 = 1.0;
 const PUBLISHER_CATALOG_DRAFTS_DIR: &str = "publisher_catalog_drafts";
 const PUBLISHER_CATALOG_DRAFT_SPEC_FILE_NAME: &str = "release_spec.yaml";
 const ALLOWED_CATALOG_VISIBILITY_POLICIES: &[&str] = &["LOCAL", "PRIVATE", "SHARE_EXPORT_READY"];
@@ -284,6 +305,9 @@ mod app_error_codes {
     pub const CAP_EXCEEDED: &str = "CAP_EXCEEDED";
     pub const TEST_GUARDRAIL_VIOLATION: &str = "TEST_GUARDRAIL_VIOLATION";
     pub const INVALID_RELEASE_STATE: &str = "INVALID_RELEASE_STATE";
+    pub const EXCLUSIVE_AUDIO_UNAVAILABLE: &str = "EXCLUSIVE_AUDIO_UNAVAILABLE";
+    pub const PLAYBACK_INVALID_VOLUME: &str = "PLAYBACK_INVALID_VOLUME";
+    pub const PLAYBACK_QUEUE_REQUEST_REJECTED: &str = "PLAYBACK_QUEUE_REQUEST_REJECTED";
 
     #[cfg(test)]
     pub const TEST_REDACTION_PROBE: &str = "TEST_REDACTION_PROBE";
@@ -1416,6 +1440,190 @@ async fn shared_service() -> Result<Arc<CommandService>, AppError> {
     service.map(Arc::clone)
 }
 
+#[derive(Debug, Clone)]
+struct TrackChangeRequest {
+    request_id: u64,
+    new_index: u32,
+}
+
+#[derive(Debug)]
+struct PlaybackControlPlane {
+    hardware_state: RwLock<Option<AudioHardwareState>>,
+    volume_scalar_bits: AtomicU32,
+    is_bit_perfect_bypassed: AtomicBool,
+    active_queue_index: AtomicU32,
+    is_queue_ui_expanded: AtomicBool,
+    worker_running: AtomicBool,
+    next_track_change_request_id: AtomicU64,
+    last_applied_track_change_request_id: AtomicU64,
+    track_change_queue: ArrayQueue<TrackChangeRequest>,
+}
+
+impl PlaybackControlPlane {
+    fn new() -> Arc<Self> {
+        let control = Arc::new(Self {
+            hardware_state: RwLock::new(None),
+            volume_scalar_bits: AtomicU32::new(UNITY_GAIN_LEVEL.to_bits()),
+            is_bit_perfect_bypassed: AtomicBool::new(true),
+            active_queue_index: AtomicU32::new(0),
+            is_queue_ui_expanded: AtomicBool::new(false),
+            worker_running: AtomicBool::new(false),
+            next_track_change_request_id: AtomicU64::new(0),
+            last_applied_track_change_request_id: AtomicU64::new(0),
+            track_change_queue: ArrayQueue::new(PLAYBACK_COMMAND_QUEUE_CAPACITY),
+        });
+        Self::spawn_track_change_worker(&control);
+        control
+    }
+
+    fn spawn_track_change_worker(control: &Arc<Self>) {
+        let worker = Arc::clone(control);
+        control.worker_running.store(true, Ordering::Release);
+        match std::thread::Builder::new()
+            .name("rp-playback-track-change-worker".to_string())
+            .spawn(move || {
+                loop {
+                    let mut drained_any = false;
+                    while let Some(request) = worker.track_change_queue.pop() {
+                        drained_any = true;
+                        worker
+                            .active_queue_index
+                            .store(request.new_index, Ordering::Release);
+                        worker
+                            .last_applied_track_change_request_id
+                            .store(request.request_id, Ordering::Release);
+                    }
+
+                    if !drained_any {
+                        std::thread::sleep(Duration::from_millis(
+                            PLAYBACK_COMMAND_THREAD_IDLE_MS,
+                        ));
+                    }
+                }
+            }) {
+            Ok(_) => {}
+            Err(error) => {
+                control.worker_running.store(false, Ordering::Release);
+                tracing::error!(
+                    target: "desktop.player",
+                    error = %error,
+                    "failed to start playback track-change worker"
+                );
+            }
+        }
+    }
+
+    fn init_exclusive_device(
+        &self,
+        target_rate_hz: u32,
+        target_bit_depth: u16,
+    ) -> Result<AudioHardwareState, AppError> {
+        if target_rate_hz == 0 {
+            return Err(AppError::invalid_argument(
+                "target_rate_hz must be greater than zero",
+            ));
+        }
+        if !matches!(target_bit_depth, 16 | 24 | 32) {
+            return Err(AppError::invalid_argument(
+                "target_bit_depth must be one of: 16, 24, 32",
+            ));
+        }
+        if !self.worker_running.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                "playback control plane worker is not running",
+            ));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err(AppError::new(
+                app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                "exclusive output initialization is currently supported only on Windows",
+            ));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Phase 1: command surface + deterministic state machine.
+            // The full WASAPI exclusive render client is wired in the next phase.
+            let hardware = AudioHardwareState {
+                sample_rate_hz: target_rate_hz,
+                bit_depth: target_bit_depth,
+                buffer_size_frames: 256,
+                is_exclusive_lock: true,
+            };
+
+            let mut guard = self.hardware_state.write().map_err(|_| {
+                AppError::new(
+                    app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                    "failed to update playback hardware state",
+                )
+            })?;
+            *guard = Some(hardware.clone());
+
+            Ok(hardware)
+        }
+    }
+
+    fn set_volume(&self, level: f32) -> Result<(), AppError> {
+        if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+            return Err(AppError::new(
+                app_error_codes::PLAYBACK_INVALID_VOLUME,
+                "volume level must be a finite float between 0.0 and 1.0",
+            ));
+        }
+
+        self.volume_scalar_bits.store(level.to_bits(), Ordering::Release);
+        self.is_bit_perfect_bypassed
+            .store(level == UNITY_GAIN_LEVEL, Ordering::Release);
+        Ok(())
+    }
+
+    fn push_track_change_request(&self, new_index: u32) -> Result<bool, AppError> {
+        if !self.worker_running.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED,
+                "track-change queue worker is unavailable",
+            ));
+        }
+
+        let request_id = self
+            .next_track_change_request_id
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
+        let request = TrackChangeRequest {
+            request_id,
+            new_index,
+        };
+
+        Ok(self.track_change_queue.push(request).is_ok())
+    }
+
+    fn toggle_queue_visibility(&self) {
+        let previous = self.is_queue_ui_expanded.load(Ordering::Acquire);
+        self.is_queue_ui_expanded
+            .store(!previous, Ordering::Release);
+    }
+
+    fn context_state(&self) -> PlaybackContextState {
+        PlaybackContextState {
+            volume_scalar: f32::from_bits(self.volume_scalar_bits.load(Ordering::Acquire)),
+            is_bit_perfect_bypassed: self
+                .is_bit_perfect_bypassed
+                .load(Ordering::Acquire),
+            active_queue_index: self.active_queue_index.load(Ordering::Acquire),
+            is_queue_ui_expanded: self.is_queue_ui_expanded.load(Ordering::Acquire),
+            queued_track_change_requests: self.track_change_queue.len(),
+        }
+    }
+}
+
+fn shared_playback_control() -> Arc<PlaybackControlPlane> {
+    static CONTROL: OnceLock<Arc<PlaybackControlPlane>> = OnceLock::new();
+    Arc::clone(CONTROL.get_or_init(PlaybackControlPlane::new))
+}
+
 struct AnalyzedTrackPayload {
     track: CoreTrackModel,
     media_fingerprint: String,
@@ -2319,6 +2527,35 @@ pub async fn get_release_track_analysis(
 }
 
 #[tauri::command]
+pub async fn init_exclusive_device(
+    target_rate_hz: u32,
+    target_bit_depth: u16,
+) -> Result<AudioHardwareState, AppError> {
+    shared_playback_control().init_exclusive_device(target_rate_hz, target_bit_depth)
+}
+
+#[tauri::command]
+pub async fn set_volume(level: f32) -> Result<(), AppError> {
+    shared_playback_control().set_volume(level)
+}
+
+#[tauri::command]
+pub async fn push_track_change_request(new_index: u32) -> Result<bool, AppError> {
+    shared_playback_control().push_track_change_request(new_index)
+}
+
+#[tauri::command]
+pub async fn toggle_queue_visibility() -> Result<(), AppError> {
+    shared_playback_control().toggle_queue_visibility();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_playback_context() -> Result<PlaybackContextState, AppError> {
+    Ok(shared_playback_control().context_state())
+}
+
+#[tauri::command]
 pub async fn catalog_import_files(
     paths: Vec<String>,
 ) -> Result<CatalogImportFilesResponse, AppError> {
@@ -2585,6 +2822,61 @@ tags: ["mock"]"#,
             spec_path.to_string_lossy().to_string(),
             media_path.to_string_lossy().to_string(),
         )
+    }
+
+    #[test]
+    fn playback_control_volume_unity_enables_bit_perfect_bypass() {
+        let control = PlaybackControlPlane::new();
+        control.set_volume(UNITY_GAIN_LEVEL).expect("set unity gain");
+        let state = control.context_state();
+        assert_eq!(state.volume_scalar, UNITY_GAIN_LEVEL);
+        assert!(state.is_bit_perfect_bypassed);
+    }
+
+    #[test]
+    fn playback_control_volume_attenuation_disables_bit_perfect_bypass() {
+        let control = PlaybackControlPlane::new();
+        control.set_volume(0.5).expect("set attenuated volume");
+        let state = control.context_state();
+        assert_eq!(state.volume_scalar, 0.5);
+        assert!(!state.is_bit_perfect_bypassed);
+    }
+
+    #[test]
+    fn playback_control_rejects_invalid_volume_values() {
+        let control = PlaybackControlPlane::new();
+        let err = control
+            .set_volume(f32::NAN)
+            .expect_err("NaN volume must be rejected");
+        assert_eq!(err.code, app_error_codes::PLAYBACK_INVALID_VOLUME);
+    }
+
+    #[test]
+    fn playback_control_applies_track_change_requests_on_worker_thread() {
+        let control = PlaybackControlPlane::new();
+        assert!(
+            control
+                .push_track_change_request(4)
+                .expect("queue request should be accepted"),
+            "track-change queue should accept request"
+        );
+
+        for _ in 0..100 {
+            if control.context_state().active_queue_index == 4 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        panic!("worker did not apply track-change request in time");
+    }
+
+    #[test]
+    fn playback_control_toggle_queue_visibility_flips_ui_state() {
+        let control = PlaybackControlPlane::new();
+        assert!(!control.context_state().is_queue_ui_expanded);
+        control.toggle_queue_visibility();
+        assert!(control.context_state().is_queue_ui_expanded);
     }
 
     fn decode_plan_release_input_from_ipc_value_for_test(
