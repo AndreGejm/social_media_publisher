@@ -23,7 +23,14 @@ use release_publisher_db::{
 use release_publisher_mock_connector::MockPublisher;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -254,6 +261,11 @@ pub struct PlaybackContextState {
     pub queued_track_change_requests: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackQueueState {
+    pub total_tracks: usize,
+}
+
 const PLANNED_RELEASE_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 const PLANNED_RELEASE_DESCRIPTOR_FILE_NAME: &str = "planned_release_descriptor.json";
 const MAX_IPC_PATH_CHARS: usize = 4_096;
@@ -269,6 +281,7 @@ const MAX_RELEASE_SPEC_TAGS_FROM_CATALOG: usize = 10;
 const MAX_RELEASE_SPEC_TAG_LEN_CHARS: usize = 32;
 const PLAYBACK_COMMAND_QUEUE_CAPACITY: usize = 1_024;
 const PLAYBACK_COMMAND_THREAD_IDLE_MS: u64 = 2;
+const MAX_PLAYBACK_QUEUE_TRACKS: usize = 10_000;
 const UNITY_GAIN_LEVEL: f32 = 1.0;
 const PUBLISHER_CATALOG_DRAFTS_DIR: &str = "publisher_catalog_drafts";
 const PUBLISHER_CATALOG_DRAFT_SPEC_FILE_NAME: &str = "release_spec.yaml";
@@ -1463,6 +1476,10 @@ struct PlaybackControlPlane {
     is_bit_perfect_bypassed: AtomicBool,
     active_queue_index: AtomicU32,
     is_queue_ui_expanded: AtomicBool,
+    playback_queue_paths: RwLock<Vec<String>>,
+    decoded_track: RwLock<Option<DecodedPcmTrack>>,
+    playback_frame_cursor: AtomicU64,
+    decode_error: RwLock<Option<String>>,
     worker_running: AtomicBool,
     next_track_change_request_id: AtomicU64,
     last_applied_track_change_request_id: AtomicU64,
@@ -1478,6 +1495,10 @@ impl PlaybackControlPlane {
             is_bit_perfect_bypassed: AtomicBool::new(true),
             active_queue_index: AtomicU32::new(0),
             is_queue_ui_expanded: AtomicBool::new(false),
+            playback_queue_paths: RwLock::new(Vec::new()),
+            decoded_track: RwLock::new(None),
+            playback_frame_cursor: AtomicU64::new(0),
+            decode_error: RwLock::new(None),
             worker_running: AtomicBool::new(false),
             next_track_change_request_id: AtomicU64::new(0),
             last_applied_track_change_request_id: AtomicU64::new(0),
@@ -1497,6 +1518,7 @@ impl PlaybackControlPlane {
                     let mut drained_any = false;
                     while let Some(request) = worker.track_change_queue.pop() {
                         drained_any = true;
+                        worker.try_prepare_track_for_queue_index(request.new_index);
                         worker
                             .active_queue_index
                             .store(request.new_index, Ordering::Release);
@@ -1604,6 +1626,43 @@ impl PlaybackControlPlane {
         Ok(())
     }
 
+    fn set_playback_queue(&self, paths: Vec<String>) -> Result<PlaybackQueueState, AppError> {
+        if paths.len() > MAX_PLAYBACK_QUEUE_TRACKS {
+            return Err(AppError::invalid_argument(format!(
+                "playback queue accepts at most {MAX_PLAYBACK_QUEUE_TRACKS} tracks"
+            )));
+        }
+
+        let normalized: Vec<String> = paths
+            .into_iter()
+            .map(|item| strip_single_layer_matching_quotes(item.trim()).to_string())
+            .filter(|item| !item.trim().is_empty())
+            .collect();
+
+        {
+            let mut queue_guard = self.playback_queue_paths.write().map_err(|_| {
+                AppError::new(
+                    app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED,
+                    "failed to update playback queue",
+                )
+            })?;
+            *queue_guard = normalized.clone();
+        }
+
+        if normalized.is_empty() {
+            if let Ok(mut decoded_guard) = self.decoded_track.write() {
+                *decoded_guard = None;
+            }
+            self.playback_frame_cursor.store(0, Ordering::Release);
+            self.set_decode_error(Some("playback queue is empty".to_string()));
+            self.active_queue_index.store(0, Ordering::Release);
+        }
+
+        Ok(PlaybackQueueState {
+            total_tracks: normalized.len(),
+        })
+    }
+
     fn push_track_change_request(&self, new_index: u32) -> Result<bool, AppError> {
         if !self.worker_running.load(Ordering::Acquire) {
             return Err(AppError::new(
@@ -1641,6 +1700,87 @@ impl PlaybackControlPlane {
             queued_track_change_requests: self.track_change_queue.len(),
         }
     }
+
+    fn decode_error(&self) -> Option<String> {
+        self.decode_error
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn current_decoded_track(&self) -> Option<DecodedPcmTrack> {
+        self.decoded_track
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn set_decode_error(&self, message: Option<String>) {
+        if let Ok(mut guard) = self.decode_error.write() {
+            *guard = message;
+        }
+    }
+
+    fn try_prepare_track_for_queue_index(&self, queue_index: u32) {
+        let path = {
+            let queue_guard = match self.playback_queue_paths.read() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    self.set_decode_error(Some(
+                        "failed to read playback queue for track-change request".to_string(),
+                    ));
+                    return;
+                }
+            };
+            match queue_guard.get(queue_index as usize) {
+                Some(item) => item.clone(),
+                None => {
+                    self.set_decode_error(Some(format!(
+                        "requested queue index {queue_index} is out of range"
+                    )));
+                    return;
+                }
+            }
+        };
+
+        let hardware = match self.hardware_state.read() {
+            Ok(guard) => guard.clone(),
+            Err(_) => {
+                self.set_decode_error(Some(
+                    "failed to read playback hardware state for decode".to_string(),
+                ));
+                return;
+            }
+        };
+
+        let Some(hardware) = hardware else {
+            self.set_decode_error(Some(
+                "exclusive device is not initialized; cannot decode queue track".to_string(),
+            ));
+            return;
+        };
+
+        match decode_track_to_stereo_i16_pcm(
+            Path::new(&path),
+            hardware.sample_rate_hz,
+            hardware.bit_depth,
+        ) {
+            Ok(track) => {
+                if let Ok(mut decoded_guard) = self.decoded_track.write() {
+                    *decoded_guard = Some(track);
+                    self.playback_frame_cursor.store(0, Ordering::Release);
+                    self.set_decode_error(None);
+                } else {
+                    self.set_decode_error(Some(
+                        "failed to update decoded playback track state".to_string(),
+                    ));
+                }
+            }
+            Err(message) => {
+                self.set_decode_error(Some(message));
+            }
+        }
+    }
 }
 
 fn shared_playback_control() -> Arc<PlaybackControlPlane> {
@@ -1648,10 +1788,147 @@ fn shared_playback_control() -> Arc<PlaybackControlPlane> {
     Arc::clone(CONTROL.get_or_init(PlaybackControlPlane::new))
 }
 
+fn decode_track_to_stereo_i16_pcm(
+    path: &Path,
+    expected_sample_rate_hz: u32,
+    bit_depth: u16,
+) -> Result<DecodedPcmTrack, String> {
+    if bit_depth != 16 {
+        return Err(
+            "playback decode currently supports only 16-bit output while bit-perfect mode is enabled"
+                .to_string(),
+        );
+    }
+
+    let file = File::open(path)
+        .map_err(|error| format!("failed to open playback track `{}`: {error}", path.display()))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+        hint.with_extension(extension);
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| format!("failed to probe playback track format: {error}"))?;
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .ok_or_else(|| "no default audio track found for playback".to_string())?;
+
+    let sample_rate_hz = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| "playback track is missing sample-rate metadata".to_string())?;
+    if sample_rate_hz != expected_sample_rate_hz {
+        return Err(format!(
+            "bit-perfect playback requires sample-rate match: track={sample_rate_hz}Hz device={expected_sample_rate_hz}Hz"
+        ));
+    }
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|error| format!("failed to initialize playback decoder: {error}"))?;
+
+    let mut interleaved_stereo_i16 = Vec::<i16>::new();
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(symphonia::core::errors::Error::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break;
+            }
+            Err(symphonia::core::errors::Error::ResetRequired) => {
+                return Err("playback decode reset required; unsupported stream transition".to_string());
+            }
+            Err(error) => {
+                return Err(format!("failed reading playback packet stream: {error}"));
+            }
+        };
+
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            Err(symphonia::core::errors::Error::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break;
+            }
+            Err(symphonia::core::errors::Error::DecodeError(_)) => {
+                continue;
+            }
+            Err(error) => {
+                return Err(format!("failed decoding playback packet: {error}"));
+            }
+        };
+
+        let channel_count = decoded.spec().channels.count();
+        let mut sample_buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+        sample_buffer.copy_interleaved_ref(decoded);
+        append_interleaved_to_stereo_i16(
+            sample_buffer.samples(),
+            channel_count,
+            &mut interleaved_stereo_i16,
+        );
+    }
+
+    if interleaved_stereo_i16.is_empty() {
+        return Err("decoded playback track has no PCM frames".to_string());
+    }
+    let total_frames = interleaved_stereo_i16.len() / 2;
+    Ok(DecodedPcmTrack {
+        samples_stereo_i16: Arc::new(interleaved_stereo_i16),
+        total_frames,
+    })
+}
+
+fn append_interleaved_to_stereo_i16(
+    interleaved: &[f32],
+    channel_count: usize,
+    out: &mut Vec<i16>,
+) {
+    if channel_count == 0 {
+        return;
+    }
+
+    if channel_count == 1 {
+        for &mono in interleaved {
+            let sample = float_sample_to_i16(mono);
+            out.push(sample);
+            out.push(sample);
+        }
+        return;
+    }
+
+    for frame in interleaved.chunks(channel_count) {
+        if frame.len() < 2 {
+            continue;
+        }
+        out.push(float_sample_to_i16(frame[0]));
+        out.push(float_sample_to_i16(frame[1]));
+    }
+}
+
+fn float_sample_to_i16(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * i16::MAX as f32).round() as i16
+}
+
 #[derive(Debug)]
 struct ExclusiveAudioEngine {
     stop_requested: Arc<AtomicBool>,
     join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone)]
+struct DecodedPcmTrack {
+    samples_stereo_i16: Arc<Vec<i16>>,
+    total_frames: usize,
 }
 
 impl ExclusiveAudioEngine {
@@ -1689,6 +1966,7 @@ struct WasapiExclusiveThreadContext {
     render_client: IAudioRenderClient,
     buffer_size_frames: u32,
     block_align_bytes: usize,
+    bit_depth: u16,
 }
 
 #[cfg(target_os = "windows")]
@@ -1829,6 +2107,7 @@ fn create_wasapi_exclusive_context(
         render_client,
         buffer_size_frames,
         block_align_bytes: usize::from(block_align),
+        bit_depth: target_bit_depth,
     })
 }
 
@@ -1837,6 +2116,7 @@ fn run_wasapi_exclusive_render_loop(
     context: WasapiExclusiveThreadContext,
     stop_requested: Arc<AtomicBool>,
 ) {
+    let control = shared_playback_control();
     while !stop_requested.load(Ordering::Acquire) {
         // SAFETY: render loop operates on initialized and started WASAPI interfaces.
         let step_result: windows::core::Result<()> = unsafe {
@@ -1847,7 +2127,13 @@ fn run_wasapi_exclusive_render_loop(
                         match context.render_client.GetBuffer(available_frames) {
                             Ok(buffer) => {
                                 let bytes = available_frames as usize * context.block_align_bytes;
-                                std::ptr::write_bytes(buffer, 0, bytes);
+                                fill_wasapi_output_buffer(
+                                    buffer,
+                                    bytes,
+                                    available_frames as usize,
+                                    context.bit_depth,
+                                    &control,
+                                );
                                 match context.render_client.ReleaseBuffer(available_frames, 0) {
                                     Ok(_) => Ok(()),
                                     Err(error) => Err(error),
@@ -1883,6 +2169,93 @@ fn run_wasapi_exclusive_render_loop(
             "WASAPI exclusive Stop failed during shutdown"
         );
     }
+}
+
+#[cfg(target_os = "windows")]
+fn fill_wasapi_output_buffer(
+    buffer_ptr: *mut u8,
+    bytes: usize,
+    frame_count: usize,
+    bit_depth: u16,
+    control: &PlaybackControlPlane,
+) {
+    // SAFETY: buffer_ptr points to a valid WASAPI render buffer with `bytes` writable bytes.
+    let output = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, bytes) };
+    output.fill(0);
+
+    let track = match control.current_decoded_track() {
+        Some(track) => track,
+        None => return,
+    };
+    if track.total_frames == 0 {
+        return;
+    }
+
+    let mut cursor = control.playback_frame_cursor.load(Ordering::Acquire) as usize;
+    let volume_scalar = f32::from_bits(control.volume_scalar_bits.load(Ordering::Acquire));
+    let bypass_volume = control.is_bit_perfect_bypassed.load(Ordering::Acquire);
+
+    for frame_idx in 0..frame_count {
+        if cursor >= track.total_frames {
+            break;
+        }
+
+        let left = track.samples_stereo_i16[cursor * 2];
+        let right = track.samples_stereo_i16[cursor * 2 + 1];
+        let (left, right) = if bypass_volume {
+            (left, right)
+        } else {
+            (
+                apply_volume_scalar_to_i16(left, volume_scalar),
+                apply_volume_scalar_to_i16(right, volume_scalar),
+            )
+        };
+
+        match bit_depth {
+            16 => {
+                let base = frame_idx * 4;
+                if base + 4 > output.len() {
+                    break;
+                }
+                output[base..base + 2].copy_from_slice(&left.to_le_bytes());
+                output[base + 2..base + 4].copy_from_slice(&right.to_le_bytes());
+            }
+            24 => {
+                let base = frame_idx * 6;
+                if base + 6 > output.len() {
+                    break;
+                }
+                let left24 = (left as i32) << 8;
+                let right24 = (right as i32) << 8;
+                let left_bytes = left24.to_le_bytes();
+                let right_bytes = right24.to_le_bytes();
+                output[base..base + 3].copy_from_slice(&left_bytes[..3]);
+                output[base + 3..base + 6].copy_from_slice(&right_bytes[..3]);
+            }
+            32 => {
+                let base = frame_idx * 8;
+                if base + 8 > output.len() {
+                    break;
+                }
+                let left32 = (left as i32) << 16;
+                let right32 = (right as i32) << 16;
+                output[base..base + 4].copy_from_slice(&left32.to_le_bytes());
+                output[base + 4..base + 8].copy_from_slice(&right32.to_le_bytes());
+            }
+            _ => {}
+        }
+
+        cursor += 1;
+    }
+
+    control
+        .playback_frame_cursor
+        .store(cursor as u64, Ordering::Release);
+}
+
+fn apply_volume_scalar_to_i16(sample: i16, scalar: f32) -> i16 {
+    let next = (sample as f32) * scalar;
+    next.clamp(i16::MIN as f32, i16::MAX as f32).round() as i16
 }
 
 struct AnalyzedTrackPayload {
@@ -2801,6 +3174,11 @@ pub async fn set_volume(level: f32) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+pub async fn set_playback_queue(paths: Vec<String>) -> Result<PlaybackQueueState, AppError> {
+    shared_playback_control().set_playback_queue(paths)
+}
+
+#[tauri::command]
 pub async fn push_track_change_request(new_index: u32) -> Result<bool, AppError> {
     shared_playback_control().push_track_change_request(new_index)
 }
@@ -2814,6 +3192,11 @@ pub async fn toggle_queue_visibility() -> Result<(), AppError> {
 #[tauri::command]
 pub async fn get_playback_context() -> Result<PlaybackContextState, AppError> {
     Ok(shared_playback_control().context_state())
+}
+
+#[tauri::command]
+pub async fn get_playback_decode_error() -> Result<Option<String>, AppError> {
+    Ok(shared_playback_control().decode_error())
 }
 
 #[tauri::command]
@@ -3138,6 +3521,31 @@ tags: ["mock"]"#,
         assert!(!control.context_state().is_queue_ui_expanded);
         control.toggle_queue_visibility();
         assert!(control.context_state().is_queue_ui_expanded);
+    }
+
+    #[test]
+    fn playback_control_set_playback_queue_stores_non_empty_paths() {
+        let control = PlaybackControlPlane::new();
+        let state = control
+            .set_playback_queue(vec![
+                "\"C:\\\\audio\\\\one.wav\"".to_string(),
+                "C:\\audio\\two.wav".to_string(),
+                "   ".to_string(),
+            ])
+            .expect("queue set should succeed");
+        assert_eq!(state.total_tracks, 2);
+    }
+
+    #[test]
+    fn playback_control_set_playback_queue_rejects_oversized_queue() {
+        let control = PlaybackControlPlane::new();
+        let oversized = (0..(MAX_PLAYBACK_QUEUE_TRACKS + 1))
+            .map(|idx| format!("C:\\audio\\track-{idx}.wav"))
+            .collect::<Vec<_>>();
+        let error = control
+            .set_playback_queue(oversized)
+            .expect_err("oversized queue should fail");
+        assert_eq!(error.code, app_error_codes::INVALID_ARGUMENT);
     }
 
     fn decode_plan_release_input_from_ipc_value_for_test(

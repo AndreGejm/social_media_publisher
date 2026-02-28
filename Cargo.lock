@@ -3299,6 +3299,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sqlx",
+ "symphonia",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
