@@ -29,6 +29,7 @@ type LibraryIngestSidebarProps = {
   showFullPaths: boolean;
   formatDisplayPath: (path: string, options: { showFullPaths: boolean }) => string;
   onScanLibraryRoot: (rootId: string) => void;
+  onCancelIngestJob: (jobId: string) => void;
   onRemoveLibraryRoot: (rootId: string) => void;
   importPathsInput: string;
   onChangeImportPathsInput: (value: string) => void;
@@ -99,7 +100,7 @@ export default function LibraryIngestSidebar(props: LibraryIngestSidebarProps) {
         {props.libraryIngestTab === "scan_folders" ? (
           <div className="library-ingest-panel" role="tabpanel" aria-label="Scan folders">
             <p className="sidebar-inline-note">Indexes files in-place. Does not copy audio files.</p>
-            <HelpTooltip content="Local directory path to scan recursively for audio files. UNC/network paths are blocked by the Rust IPC boundary.">
+            <HelpTooltip content="Directory path to scan recursively for audio files. Local and UNC/network share paths are supported.">
               <input
                 className="tracks-search"
                 type="text"
@@ -148,6 +149,7 @@ export default function LibraryIngestSidebar(props: LibraryIngestSidebarProps) {
               ) : (
                 props.libraryRoots.map((root) => {
                   const latestJob = props.rootScanJobs.find((job) => job.scope === `SCAN_ROOT:${root.root_id}`);
+                  const canCancelJob = latestJob ? ["PENDING", "RUNNING"].includes(latestJob.status) : false;
                   const progress =
                     latestJob && latestJob.total_items > 0
                       ? `${latestJob.processed_items}/${latestJob.total_items}`
@@ -173,7 +175,20 @@ export default function LibraryIngestSidebar(props: LibraryIngestSidebarProps) {
                             Scan Folder
                           </button>
                         </HelpTooltip>
-                        <HelpTooltip content="Removes the saved library root configuration (does not delete local files or imported tracks).">
+                        <HelpTooltip content="Requests cancellation for the currently running scan job for this folder.">
+                          <button
+                            type="button"
+                            className="secondary-action"
+                            onClick={() => {
+                              if (!latestJob) return;
+                              props.onCancelIngestJob(latestJob.job_id);
+                            }}
+                            disabled={props.libraryRootMutating || !canCancelJob}
+                          >
+                            Cancel Scan
+                          </button>
+                        </HelpTooltip>
+                        <HelpTooltip content="Removes the saved library root and prunes imported catalog tracks from that root (local files on disk are untouched).">
                           <button
                             type="button"
                             className="secondary-action"

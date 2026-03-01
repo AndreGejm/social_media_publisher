@@ -460,6 +460,7 @@ body {
 :root[data-theme="dark"] .mini-card,
 :root[data-theme="dark"] .code-block,
 :root[data-theme="dark"] .history-row,
+:root[data-theme="dark"] .qc-actions-card,
 :root[data-theme="dark"] .qc-meta-strip,
 :root[data-theme="dark"] .qc-pill,
 :root[data-theme="dark"] .qc-wave-panel,
@@ -540,6 +541,57 @@ body {
 
 .qc-action-row {
   margin-top: 0;
+}
+
+.qc-codec-preview-card {
+  margin-top: 0.25rem;
+}
+
+.qc-codec-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.qc-preview-blindx-toggle {
+  margin-top: 0.1rem;
+}
+
+.qc-variant-row {
+  margin-top: 0.1rem;
+}
+
+.qc-preview-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.qc-batch-export-card {
+  margin-top: 0.25rem;
+}
+
+.qc-batch-profile-list {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.qc-batch-profile-list legend {
+  padding: 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+@media (max-width: 860px) {
+  .qc-codec-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .qc-meta-strip {
@@ -747,6 +799,12 @@ body {
   color: #0f585a;
 }
 
+.media-button.ghost.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(46, 160, 67, 0.12);
+}
+
 .media-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -882,7 +940,7 @@ body {
   padding: 1rem 0.9rem;
   padding-bottom: calc(1rem + var(--shared-player-height) + env(safe-area-inset-bottom, 0px));
   position: relative;
-  z-index: 30;
+  z-index: 20;
   overflow: auto;
   display: grid;
   gap: 0.9rem;
@@ -1487,6 +1545,7 @@ body {
   grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
   gap: 0.9rem;
   align-items: start;
+  min-width: 0;
 }
 
 .qc-intent-shell {
@@ -1540,6 +1599,7 @@ body {
   display: grid;
   align-content: start;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .tracks-view-head {
@@ -1683,11 +1743,12 @@ body {
 }
 
 .tracks-toolbar > .help-tooltip-root:nth-child(2),
-.tracks-toolbar > .help-tooltip-root:nth-child(3) {
+.tracks-toolbar > .help-tooltip-root:nth-child(3),
+.tracks-toolbar > .help-tooltip-root:nth-child(4) {
   flex: 1 1 9.5rem;
 }
 
-.tracks-toolbar > .help-tooltip-root:nth-child(3) > .secondary-action {
+.tracks-toolbar > .help-tooltip-root:nth-child(4) > .secondary-action {
   width: 100%;
 }
 
@@ -1700,6 +1761,24 @@ body {
   gap: 0.35rem;
   max-height: 70vh;
   overflow: auto;
+}
+
+.track-album-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.25rem 0.45rem;
+  border-radius: 8px;
+  background: rgba(17, 100, 102, 0.08);
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.track-album-group-header strong {
+  color: var(--text);
+  font-size: 0.8rem;
 }
 
 .track-row-shell {
@@ -1733,6 +1812,11 @@ body {
 
 .queue-row-shell.queue-dragging {
   opacity: 0.62;
+}
+
+.queue-row-shell.queue-drop-target {
+  border-color: rgba(17, 100, 102, 0.42);
+  background: rgba(17, 100, 102, 0.08);
 }
 
 .track-row-batch-checkbox {
@@ -1820,6 +1904,11 @@ body {
 .track-row-menu-button:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgba(17, 100, 102, 0.18);
+}
+
+.load-more-button {
+  justify-self: center;
+  margin: 0.3rem 0.2rem 0.1rem;
 }
 
 .track-row-context-backdrop {
@@ -2536,6 +2625,20 @@ body {
   border-color: rgba(255, 182, 93, 0.18);
 }
 
+:root[data-theme="dark"] .queue-row-shell.queue-drop-target {
+  background: rgba(94, 199, 201, 0.14);
+  border-color: rgba(94, 199, 201, 0.3);
+}
+
+:root[data-theme="dark"] .track-album-group-header {
+  background: rgba(94, 199, 201, 0.12);
+  color: #c8d4de;
+}
+
+:root[data-theme="dark"] .track-album-group-header strong {
+  color: #eaf4fb;
+}
+
 :root[data-theme="dark"] .collapsible-card,
 :root[data-theme="dark"] .section-collapse-toggle {
   background: rgba(20, 26, 32, 0.92);
@@ -2606,6 +2709,79 @@ body {
   gap: 0.5rem;
 }
 
+.settings-shortcuts-section {
+  margin-top: 0.8rem;
+  border-top: 1px solid rgba(17, 100, 102, 0.12);
+  padding-top: 0.8rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.settings-shortcuts-head h4 {
+  margin: 0;
+}
+
+.settings-shortcuts-head .helper-text {
+  margin: 0.15rem 0 0;
+}
+
+.settings-shortcuts-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.settings-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(130px, 180px) auto;
+  gap: 0.45rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.settings-shortcut-row.conflict {
+  border-color: rgba(170, 76, 47, 0.32);
+  background: rgba(170, 76, 47, 0.06);
+}
+
+.settings-shortcut-meta {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.settings-shortcut-meta strong {
+  font-size: 0.84rem;
+}
+
+.settings-shortcut-meta span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.settings-shortcut-input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+  text-align: center;
+}
+
+.settings-shortcut-input:focus-visible {
+  outline: 2px solid rgba(17, 100, 102, 0.4);
+  outline-offset: 1px;
+}
+
+.settings-shortcut-warning {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #8a3c26;
+}
+
 .settings-summary-list {
   margin: 0;
   padding-left: 1.1rem;
@@ -2616,8 +2792,9 @@ body {
   left: var(--shell-sidebar-width, 300px);
   right: 0;
   bottom: 0;
-  z-index: 50;
+  z-index: 160;
   grid-column: 1 / -1;
+  max-width: calc(100vw - var(--shell-sidebar-width, 300px));
   border-top: 1px solid rgba(17, 100, 102, 0.14);
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(12px);
@@ -2625,6 +2802,13 @@ body {
   padding: 0.7rem 1rem 0.85rem;
   display: grid;
   gap: 0.55rem;
+}
+
+.music-shell.with-right-dock .persistent-player-bar {
+  right: var(--shell-right-dock-width, 320px);
+  max-width: calc(
+    100vw - var(--shell-sidebar-width, 300px) - var(--shell-right-dock-width, 320px)
+  );
 }
 
 .player-error-inline {
@@ -2827,6 +3011,30 @@ body {
   color: var(--text-primary);
 }
 
+:root[data-theme="dark"] .settings-shortcuts-section {
+  border-color: rgba(94, 199, 201, 0.14);
+}
+
+:root[data-theme="dark"] .settings-shortcut-row {
+  background: rgba(20, 27, 34, 0.7);
+  border-color: rgba(94, 199, 201, 0.16);
+}
+
+:root[data-theme="dark"] .settings-shortcut-row.conflict {
+  background: rgba(90, 42, 22, 0.28);
+  border-color: rgba(216, 123, 81, 0.44);
+}
+
+:root[data-theme="dark"] .settings-shortcut-input {
+  background: #162028;
+  color: var(--text-primary);
+  border-color: rgba(94, 199, 201, 0.16);
+}
+
+:root[data-theme="dark"] .settings-shortcut-input:focus-visible {
+  outline-color: rgba(94, 199, 201, 0.42);
+}
+
 :root[data-theme="dark"] .track-chip {
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -2839,10 +3047,12 @@ body {
 }
 
 :root[data-theme="dark"] .qc-player-card,
+:root[data-theme="dark"] .qc-actions-card,
 :root[data-theme="dark"] .qc-wave-panel,
 :root[data-theme="dark"] .waveform-shell,
 :root[data-theme="dark"] .qc-metric-card,
 :root[data-theme="dark"] .qc-pill,
+:root[data-theme="dark"] .qc-batch-profile-list,
 :root[data-theme="dark"] .album-track-row-main,
 :root[data-theme="dark"] .import-failures,
 :root[data-theme="dark"] .track-editor-notice {
@@ -2893,6 +3103,12 @@ body {
   color: var(--text-secondary);
 }
 
+:root[data-theme="dark"] .media-button.ghost.active {
+  border-color: var(--accent);
+  background: rgba(46, 160, 67, 0.2);
+  color: var(--text-primary);
+}
+
 :root[data-theme="dark"] .primary-action:disabled,
 :root[data-theme="dark"] .secondary-action:disabled {
   opacity: 1;
@@ -2940,6 +3156,29 @@ body {
 .persistent-player-actions {
   display: flex;
   gap: 0.35rem;
+}
+
+.persistent-player-utility {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 180px) auto auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.persistent-player-utility label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.persistent-player-utility input[type="range"] {
+  width: 100%;
+}
+
+.persistent-player-utility span {
+  min-width: 3ch;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .persistent-player-timeline {
@@ -3094,6 +3333,13 @@ body {
 
   .persistent-player-bar {
     left: 0;
+    right: 0;
+    max-width: none;
+  }
+
+  .music-shell.with-right-dock .persistent-player-bar {
+    right: 0;
+    max-width: none;
   }
 
   .music-sidebar {
@@ -3131,6 +3377,14 @@ body {
 
   .track-detail-inline-editor-head {
     flex-direction: column;
+  }
+
+  .settings-shortcut-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-shortcut-input {
+    text-align: left;
   }
 
   .tracks-selection-actions,

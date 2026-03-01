@@ -14,17 +14,24 @@ type SharedPlayerBarProps = {
   playerTimeSec: number;
   queueIndex: number;
   queueLength: number;
+  queueVisible: boolean;
+  volumePercent: number;
+  isMuted: boolean;
   onPrev: () => void;
   onTogglePlay: () => void;
   onNext: () => void;
+  onToggleQueueVisibility: () => void;
+  onToggleMute: () => void;
+  onVolumePercentChange: (value: number) => void;
   onSeekRatio: (ratio: number) => void;
   formatClock: (seconds: number) => string;
-  audioRef: RefObject<HTMLAudioElement>;
+  renderAudioElement?: boolean;
+  audioRef?: RefObject<HTMLAudioElement>;
   audioSrc?: string;
-  onAudioTimeUpdate: () => void;
-  onAudioPlay: () => void;
-  onAudioPause: () => void;
-  onAudioEnded: () => void;
+  onAudioTimeUpdate?: () => void;
+  onAudioPlay?: () => void;
+  onAudioPause?: () => void;
+  onAudioEnded?: () => void;
 };
 
 export default function SharedPlayerBar(props: SharedPlayerBarProps) {
@@ -39,6 +46,15 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
           </p>
         </div>
         <div className="persistent-player-actions">
+          <HelpTooltip content={props.queueVisible ? "Show playlist results." : "Show queue order."}>
+            <button
+              type="button"
+              className={`media-button ghost${props.queueVisible ? " active" : ""}`}
+              onClick={props.onToggleQueueVisibility}
+            >
+              {props.queueVisible ? "Playlist" : "Queue"}
+            </button>
+          </HelpTooltip>
           <HelpTooltip content="Play the previous track in the current queue order.">
             <button
               type="button"
@@ -72,6 +88,23 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
         </div>
       </div>
 
+      <div className="persistent-player-utility">
+        <label htmlFor="shared-player-volume">Volume</label>
+        <input
+          id="shared-player-volume"
+          type="range"
+          min={0}
+          max={100}
+          value={Math.max(0, Math.min(100, Math.round(props.volumePercent)))}
+          onChange={(event) => props.onVolumePercentChange(Number(event.target.value))}
+          aria-label="Playback volume"
+        />
+        <button type="button" className="media-button ghost" onClick={props.onToggleMute}>
+          {props.isMuted ? "Unmute" : "Mute"}
+        </button>
+        <span>{Math.max(0, Math.min(100, Math.round(props.volumePercent)))}%</span>
+      </div>
+
       <div className="persistent-player-timeline">
         <span>{props.formatClock(props.playerTimeSec)}</span>
         <input
@@ -90,15 +123,17 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
         <span>{props.formatClock((props.playerSource?.durationMs ?? 0) / 1000)}</span>
       </div>
 
-      <audio
-        ref={props.audioRef}
-        src={props.audioSrc}
-        preload="metadata"
-        onTimeUpdate={props.onAudioTimeUpdate}
-        onPlay={props.onAudioPlay}
-        onPause={props.onAudioPause}
-        onEnded={props.onAudioEnded}
-      />
+      {props.renderAudioElement !== false && props.audioRef ? (
+        <audio
+          ref={props.audioRef}
+          src={props.audioSrc}
+          preload="metadata"
+          onTimeUpdate={props.onAudioTimeUpdate}
+          onPlay={props.onAudioPlay}
+          onPause={props.onAudioPause}
+          onEnded={props.onAudioEnded}
+        />
+      ) : null}
     </div>
   );
 }

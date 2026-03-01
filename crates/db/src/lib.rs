@@ -13,7 +13,13 @@ use sqlx::{
 };
 use std::{collections::BTreeSet, future::Future, str::FromStr, time::Duration};
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = {
+    let mut migrator = sqlx::migrate!("./migrations");
+    // Allow startup across builds where a historical migration version may not
+    // be present in the currently resolved migration source.
+    migrator.ignore_missing = true;
+    migrator
+};
 
 pub type DbResult<T> = Result<T, DbError>;
 
@@ -605,6 +611,7 @@ pub enum IngestJobStatus {
     Pending,
     Running,
     Completed,
+    Canceled,
     Failed,
 }
 
@@ -615,6 +622,7 @@ impl IngestJobStatus {
             Self::Pending => "PENDING",
             Self::Running => "RUNNING",
             Self::Completed => "COMPLETED",
+            Self::Canceled => "CANCELED",
             Self::Failed => "FAILED",
         }
     }
@@ -628,6 +636,7 @@ impl FromStr for IngestJobStatus {
             "PENDING" => Ok(Self::Pending),
             "RUNNING" => Ok(Self::Running),
             "COMPLETED" => Ok(Self::Completed),
+            "CANCELED" => Ok(Self::Canceled),
             "FAILED" => Ok(Self::Failed),
             _ => Err(DbError::new(
                 DbErrorCode::RowDecode,
@@ -1065,71 +1074,97 @@ impl Db {
     ) -> DbResult<CatalogTrackListPage> {
         validate_catalog_list_tracks_query(query)?;
 
-        let search = query.search.as_ref().map(|s| normalize_catalog_text(s));
-        let search_like = search
+        let search_terms = query
+            .search
             .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("%{s}%"));
+            .map(|value| normalize_catalog_search_terms(value))
+            .unwrap_or_default();
+        let match_query = build_catalog_fts_match_query(&search_terms);
 
-        let total_i64: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM catalog_tracks t
-            JOIN catalog_artists a ON a.artist_id = t.artist_id
-            LEFT JOIN catalog_albums al ON al.album_id = t.album_id
-            WHERE (? IS NULL)
-               OR (lower(t.title) LIKE ?)
-               OR (lower(a.name) LIKE ?)
-               OR (lower(COALESCE(al.title, '')) LIKE ?)
-            "#,
-        )
-        .bind(search_like.as_ref().map(|_| 1_i64))
-        .bind(search_like.as_deref())
-        .bind(search_like.as_deref())
-        .bind(search_like.as_deref())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| DbError::map_sqlx(e, "count catalog tracks"))?;
+        let total_i64: i64 = if let Some(match_query) = match_query.as_deref() {
+            sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)
+                FROM catalog_tracks t
+                JOIN catalog_track_search ON catalog_track_search.track_id = t.track_id
+                WHERE catalog_track_search MATCH ?
+                "#,
+            )
+            .bind(match_query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "count catalog tracks with search"))?
+        } else {
+            sqlx::query_scalar("SELECT COUNT(*) FROM catalog_tracks")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| DbError::map_sqlx(e, "count catalog tracks"))?
+        };
         let total = u64::try_from(total_i64).map_err(|_| {
             DbError::new(
                 DbErrorCode::RowDecode,
                 format!("count catalog tracks: out of range ({total_i64})"),
             )
         })?;
-
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                t.track_id,
-                t.title,
-                a.name AS artist_name,
-                al.title AS album_title,
-                t.duration_ms,
-                t.loudness_lufs,
-                m.primary_file_path AS file_path,
-                m.content_fingerprint AS media_fingerprint,
-                t.updated_at
-            FROM catalog_tracks t
-            JOIN catalog_artists a ON a.artist_id = t.artist_id
-            LEFT JOIN catalog_albums al ON al.album_id = t.album_id
-            JOIN catalog_media_assets m ON m.media_asset_id = t.media_asset_id
-            WHERE (? IS NULL)
-               OR (lower(t.title) LIKE ?)
-               OR (lower(a.name) LIKE ?)
-               OR (lower(COALESCE(al.title, '')) LIKE ?)
-            ORDER BY t.updated_at DESC, t.track_id ASC
-            LIMIT ? OFFSET ?
-            "#,
-        )
-        .bind(search_like.as_ref().map(|_| 1_i64))
-        .bind(search_like.as_deref())
-        .bind(search_like.as_deref())
-        .bind(search_like.as_deref())
-        .bind(i64::from(query.limit))
-        .bind(i64::from(query.offset))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::map_sqlx(e, "list catalog tracks"))?;
+        let rows = if let Some(match_query) = match_query.as_deref() {
+            sqlx::query(
+                r#"
+                SELECT
+                    t.track_id,
+                    t.title,
+                    a.name AS artist_name,
+                    al.title AS album_title,
+                    t.duration_ms,
+                    t.loudness_lufs,
+                    m.primary_file_path AS file_path,
+                    m.content_fingerprint AS media_fingerprint,
+                    t.updated_at
+                FROM catalog_track_search
+                JOIN catalog_tracks t ON t.track_id = catalog_track_search.track_id
+                JOIN catalog_artists a ON a.artist_id = t.artist_id
+                LEFT JOIN catalog_albums al ON al.album_id = t.album_id
+                JOIN catalog_media_assets m ON m.media_asset_id = t.media_asset_id
+                WHERE catalog_track_search MATCH ?
+                ORDER BY
+                    bm25(catalog_track_search, 10.0, 7.0, 4.0, 1.5) ASC,
+                    t.updated_at DESC,
+                    t.track_id ASC
+                LIMIT ? OFFSET ?
+                "#,
+            )
+            .bind(match_query)
+            .bind(i64::from(query.limit))
+            .bind(i64::from(query.offset))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "list catalog tracks with search"))?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    t.track_id,
+                    t.title,
+                    a.name AS artist_name,
+                    al.title AS album_title,
+                    t.duration_ms,
+                    t.loudness_lufs,
+                    m.primary_file_path AS file_path,
+                    m.content_fingerprint AS media_fingerprint,
+                    t.updated_at
+                FROM catalog_tracks t
+                JOIN catalog_artists a ON a.artist_id = t.artist_id
+                LEFT JOIN catalog_albums al ON al.album_id = t.album_id
+                JOIN catalog_media_assets m ON m.media_asset_id = t.media_asset_id
+                ORDER BY t.updated_at DESC, t.track_id ASC
+                LIMIT ? OFFSET ?
+                "#,
+            )
+            .bind(i64::from(query.limit))
+            .bind(i64::from(query.offset))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "list catalog tracks"))?
+        };
 
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
@@ -1328,14 +1363,177 @@ impl Db {
     }
 
     /// Deletes a library root by `root_id`. Returns `true` when a row was removed.
+    ///
+    /// Removing a root also prunes catalog media locations that live under that root path and
+    /// deletes orphaned media assets (which cascade-delete dependent tracks/analysis rows).
     pub async fn delete_library_root(&self, root_id: &str) -> DbResult<bool> {
         validate_hexish_id(root_id, "library root_id")?;
+        let mut tx = self.begin_tx().await?;
+        let root_path =
+            sqlx::query_scalar::<_, String>("SELECT path FROM library_roots WHERE root_id = ?")
+                .bind(root_id)
+                .fetch_optional(tx.inner.as_mut())
+                .await
+                .map_err(|e| DbError::map_sqlx(e, "fetch library root path for delete"))?;
+
+        let Some(root_path) = root_path else {
+            return Ok(false);
+        };
+
+        let normalized_root_prefix = normalize_library_root_path_for_catalog_match(&root_path);
+        if !normalized_root_prefix.is_empty() {
+            let matched_media_asset_rows = sqlx::query(
+                r#"
+                SELECT DISTINCT media_asset_id
+                FROM catalog_media_asset_locations
+                WHERE
+                    substr(lower(replace(file_path, '//?/', '')), 1, length(?)) = ?
+                    AND (
+                        length(lower(replace(file_path, '//?/', ''))) = length(?)
+                        OR substr(lower(replace(file_path, '//?/', '')), length(?) + 1, 1) = '/'
+                    )
+                "#,
+            )
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .fetch_all(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "list catalog media assets for root prune"))?;
+
+            let mut matched_media_asset_ids = Vec::with_capacity(matched_media_asset_rows.len());
+            for row in matched_media_asset_rows {
+                matched_media_asset_ids.push(row.try_get::<String, _>("media_asset_id").map_err(
+                    |e| DbError::map_sqlx(e, "decode catalog media asset id for root prune"),
+                )?);
+            }
+
+            sqlx::query(
+                r#"
+                DELETE FROM catalog_media_asset_locations
+                WHERE
+                    substr(lower(replace(file_path, '//?/', '')), 1, length(?)) = ?
+                    AND (
+                        length(lower(replace(file_path, '//?/', ''))) = length(?)
+                        OR substr(lower(replace(file_path, '//?/', '')), length(?) + 1, 1) = '/'
+                    )
+                "#,
+            )
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .bind(&normalized_root_prefix)
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "delete catalog media locations for root prune"))?;
+
+            for media_asset_id in matched_media_asset_ids {
+                sqlx::query(
+                    r#"
+                    DELETE FROM catalog_media_assets
+                    WHERE media_asset_id = ?
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM catalog_media_asset_locations l
+                          WHERE l.media_asset_id = catalog_media_assets.media_asset_id
+                      )
+                    "#,
+                )
+                .bind(&media_asset_id)
+                .execute(tx.inner.as_mut())
+                .await
+                .map_err(|e| DbError::map_sqlx(e, "delete orphan catalog media asset"))?;
+            }
+        }
+
         let result = sqlx::query("DELETE FROM library_roots WHERE root_id = ?")
             .bind(root_id)
-            .execute(&self.pool)
+            .execute(tx.inner.as_mut())
             .await
             .map_err(|e| DbError::map_sqlx(e, "delete library root"))?;
+        tx.inner
+            .commit()
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "commit delete library root transaction"))?;
         Ok(result.rows_affected() == 1)
+    }
+
+    /// Clears persisted local catalog/library state without touching release pipeline history tables.
+    pub async fn reset_catalog_library_data(&self) -> DbResult<()> {
+        let mut tx = self.begin_tx().await?;
+
+        sqlx::query("DELETE FROM ingest_events")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog ingest_events"))?;
+        sqlx::query("DELETE FROM ingest_jobs")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog ingest_jobs"))?;
+        sqlx::query("DELETE FROM library_roots")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog library_roots"))?;
+
+        sqlx::query("DELETE FROM playlist_items")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog playlist_items"))?;
+        sqlx::query("DELETE FROM playlists")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog playlists"))?;
+        sqlx::query("DELETE FROM track_analysis_cache")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog track_analysis_cache"))?;
+        sqlx::query("DELETE FROM track_tags")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog track_tags"))?;
+        sqlx::query("DELETE FROM album_tags")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog album_tags"))?;
+        sqlx::query("DELETE FROM album_tracks")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog album_tracks"))?;
+        sqlx::query("DELETE FROM catalog_tracks")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog catalog_tracks"))?;
+        sqlx::query("DELETE FROM catalog_albums")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog catalog_albums"))?;
+        sqlx::query("DELETE FROM catalog_artists")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog catalog_artists"))?;
+        sqlx::query("DELETE FROM artwork_assets")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog artwork_assets"))?;
+        sqlx::query("DELETE FROM catalog_media_asset_locations")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog catalog_media_asset_locations"))?;
+        sqlx::query("DELETE FROM catalog_media_assets")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog catalog_media_assets"))?;
+        sqlx::query("DELETE FROM tags")
+            .execute(tx.inner.as_mut())
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "reset catalog tags"))?;
+
+        tx.inner
+            .commit()
+            .await
+            .map_err(|e| DbError::map_sqlx(e, "commit reset catalog library data transaction"))?;
+        Ok(())
     }
 
     /// Inserts a new ingest job row for async import/scan tracking.
@@ -2369,6 +2567,17 @@ fn validate_library_root_input(input: &UpsertLibraryRoot) -> DbResult<()> {
     Ok(())
 }
 
+fn normalize_library_root_path_for_catalog_match(raw: &str) -> String {
+    let mut normalized = raw.trim().replace('\\', "/");
+    if normalized.starts_with("//?/") {
+        normalized = normalized.trim_start_matches("//?/").to_string();
+    }
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
+}
+
 fn validate_new_ingest_job(input: &NewIngestJob) -> DbResult<()> {
     validate_hexish_id(&input.job_id, "ingest job_id")?;
     if input.scope.trim().is_empty() {
@@ -2442,6 +2651,40 @@ fn normalize_catalog_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+fn normalize_catalog_search_terms(value: &str) -> Vec<String> {
+    normalize_catalog_text(value)
+        .split(' ')
+        .filter(|term| !term.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn build_catalog_fts_match_query(terms: &[String]) -> Option<String> {
+    let mut sanitized_terms = Vec::new();
+    for term in terms {
+        let normalized = term
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+            .collect::<String>();
+        sanitized_terms.extend(
+            normalized
+                .split_whitespace()
+                .filter(|token| !token.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+    if sanitized_terms.is_empty() {
+        return None;
+    }
+    Some(
+        sanitized_terms
+            .iter()
+            .map(|term| format!("{term}*"))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+    )
 }
 
 fn decode_u32_from_i64(value: i64, label: &str) -> DbResult<u32> {

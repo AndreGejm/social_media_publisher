@@ -2,7 +2,13 @@ import type { RefObject } from "react";
 
 import { HelpTooltip } from "../../HelpTooltip";
 import { QcPlayer, type QcPlayerAnalysis } from "../../QcPlayer";
-import type { CatalogTrackDetailResponse, UiAppError } from "../../services/tauriClient";
+import type {
+  CatalogTrackDetailResponse,
+  QcCodecProfileResponse,
+  QcPreviewSessionStateResponse,
+  QcPreviewVariant,
+  UiAppError
+} from "../../services/tauriClient";
 
 type TrackEditorState = {
   trackId: string;
@@ -50,6 +56,28 @@ type TrackDetailPanelProps = {
   onQcPause: () => void;
   playerAudioRef: RefObject<HTMLAudioElement>;
   playerAudioSrc?: string;
+  qcCodecPreviewEnabled: boolean;
+  qcCodecPreviewLoading: boolean;
+  qcCodecProfiles: QcCodecProfileResponse[];
+  qcPreviewProfileAId: string;
+  qcPreviewProfileBId: string;
+  qcPreviewBlindXEnabled: boolean;
+  qcPreviewSession: QcPreviewSessionStateResponse | null;
+  onQcPreviewProfileAChange: (profileId: string) => void;
+  onQcPreviewProfileBChange: (profileId: string) => void;
+  onQcPreviewBlindXEnabledChange: (enabled: boolean) => void;
+  onQcPreviewSetVariant: (variant: QcPreviewVariant) => void;
+  onQcPreviewRevealBlindX: () => void;
+  qcBatchExportEnabled: boolean;
+  qcBatchExportSubmitting: boolean;
+  qcBatchExportOutputDir: string;
+  qcBatchExportTargetLufs: string;
+  qcBatchExportSelectedProfileIds: string[];
+  qcBatchExportStatusMessage: string | null;
+  onQcBatchExportOutputDirChange: (value: string) => void;
+  onQcBatchExportTargetLufsChange: (value: string) => void;
+  onQcBatchExportToggleProfile: (profileId: string) => void;
+  onQcStartBatchExport: () => void;
 };
 
 export default function TrackDetailPanel(props: TrackDetailPanelProps) {
@@ -349,6 +377,219 @@ export default function TrackDetailPanel(props: TrackDetailPanelProps) {
             audioSrc={props.playerAudioSrc}
             showPlayToggle={false}
           />
+
+          <div className="qc-actions-card qc-codec-preview-card" aria-label="Codec preview controls">
+            <div className="qc-header-row">
+              <div>
+                <p className="eyebrow">Codec Preview</p>
+                <h4 className="qc-approval-title">A/B and Blind-X Session</h4>
+                <p className="helper-text">
+                  Configure comparison profiles and switch preview variants while keeping shared transport playback.
+                </p>
+              </div>
+            </div>
+            {!props.qcCodecPreviewEnabled ? (
+              <p className="helper-text">
+                Codec preview is disabled in this build. Enable backend flag <code>RELEASE_PUBLISHER_QC_CODEC_PREVIEW_V1</code> to use this panel.
+              </p>
+            ) : (
+              <>
+                <div className="qc-codec-grid">
+                  <label className="track-editor-field">
+                    <span>Profile A</span>
+                    <select
+                      aria-label="Codec profile A"
+                      value={props.qcPreviewProfileAId}
+                      onChange={(event) => props.onQcPreviewProfileAChange(event.target.value)}
+                      disabled={props.qcCodecPreviewLoading || props.qcCodecProfiles.length === 0}
+                    >
+                      {props.qcCodecProfiles.map((profile) => (
+                        <option key={profile.profile_id} value={profile.profile_id} disabled={!profile.available}>
+                          {profile.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="track-editor-field">
+                    <span>Profile B</span>
+                    <select
+                      aria-label="Codec profile B"
+                      value={props.qcPreviewProfileBId}
+                      onChange={(event) => props.onQcPreviewProfileBChange(event.target.value)}
+                      disabled={props.qcCodecPreviewLoading || props.qcCodecProfiles.length === 0}
+                    >
+                      {props.qcCodecProfiles.map((profile) => (
+                        <option key={profile.profile_id} value={profile.profile_id} disabled={!profile.available}>
+                          {profile.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="track-editor-checkbox inline qc-preview-blindx-toggle">
+                  <input
+                    type="checkbox"
+                    checked={props.qcPreviewBlindXEnabled}
+                    onChange={(event) => props.onQcPreviewBlindXEnabledChange(event.target.checked)}
+                    disabled={props.qcCodecPreviewLoading}
+                  />
+                  <span>Enable Blind-X mode (identity hidden until reveal)</span>
+                </label>
+                <div className="qc-controls qc-variant-row">
+                  <button
+                    type="button"
+                    className={`media-button ghost${props.qcPreviewSession?.active_variant === "bypass" ? " active" : ""}`}
+                    onClick={() => props.onQcPreviewSetVariant("bypass")}
+                    disabled={props.qcCodecPreviewLoading || !props.qcPreviewSession}
+                  >
+                    Bypass
+                  </button>
+                  <button
+                    type="button"
+                    className={`media-button ghost${props.qcPreviewSession?.active_variant === "codec_a" ? " active" : ""}`}
+                    onClick={() => props.onQcPreviewSetVariant("codec_a")}
+                    disabled={props.qcCodecPreviewLoading || !props.qcPreviewSession}
+                  >
+                    Codec A
+                  </button>
+                  <button
+                    type="button"
+                    className={`media-button ghost${props.qcPreviewSession?.active_variant === "codec_b" ? " active" : ""}`}
+                    onClick={() => props.onQcPreviewSetVariant("codec_b")}
+                    disabled={props.qcCodecPreviewLoading || !props.qcPreviewSession}
+                  >
+                    Codec B
+                  </button>
+                  <button
+                    type="button"
+                    className={`media-button ghost${props.qcPreviewSession?.active_variant === "blind_x" ? " active" : ""}`}
+                    onClick={() => props.onQcPreviewSetVariant("blind_x")}
+                    disabled={
+                      props.qcCodecPreviewLoading ||
+                      !props.qcPreviewSession ||
+                      !props.qcPreviewSession.blind_x_enabled
+                    }
+                  >
+                    Blind-X
+                  </button>
+                  <button
+                    type="button"
+                    className="media-button ghost"
+                    onClick={props.onQcPreviewRevealBlindX}
+                    disabled={
+                      props.qcCodecPreviewLoading ||
+                      !props.qcPreviewSession?.blind_x_enabled ||
+                      Boolean(props.qcPreviewSession?.blind_x_revealed)
+                    }
+                  >
+                    Reveal
+                  </button>
+                </div>
+                <div className="qc-preview-status" role="status" aria-live="polite">
+                  {props.qcCodecPreviewLoading ? (
+                    <span>Preparing codec preview session...</span>
+                  ) : props.qcPreviewSession ? (
+                    <>
+                      <span>Active variant: {props.qcPreviewSession.active_variant}</span>
+                      <span>Profile A: {props.qcPreviewSession.profile_a_id}</span>
+                      <span>Profile B: {props.qcPreviewSession.profile_b_id}</span>
+                      <span>
+                        Blind-X:{" "}
+                        {props.qcPreviewSession.blind_x_enabled
+                          ? props.qcPreviewSession.blind_x_revealed
+                            ? "revealed"
+                            : "hidden"
+                          : "off"}
+                      </span>
+                    </>
+                  ) : (
+                    <span>Select distinct profiles to initialize codec preview.</span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="qc-actions-card qc-batch-export-card" aria-label="Batch export controls">
+            <div className="qc-header-row">
+              <div>
+                <p className="eyebrow">Batch Export</p>
+                <h4 className="qc-approval-title">Multi-Profile Export Queue</h4>
+                <p className="helper-text">
+                  Export the selected source track through multiple codec profiles in a single job request.
+                </p>
+              </div>
+            </div>
+            {!props.qcBatchExportEnabled ? (
+              <p className="helper-text">
+                Batch export is disabled in this build. Enable backend flag <code>RELEASE_PUBLISHER_QC_BATCH_EXPORT_V1</code> to use this panel.
+              </p>
+            ) : (
+              <>
+                <fieldset className="qc-batch-profile-list">
+                  <legend>Profiles</legend>
+                  {props.qcCodecProfiles.length > 0 ? (
+                    props.qcCodecProfiles.map((profile) => (
+                      <label key={profile.profile_id} className="track-editor-checkbox inline">
+                        <input
+                          type="checkbox"
+                          checked={props.qcBatchExportSelectedProfileIds.includes(profile.profile_id)}
+                          onChange={() => props.onQcBatchExportToggleProfile(profile.profile_id)}
+                          disabled={props.qcBatchExportSubmitting || !profile.available}
+                        />
+                        <span>
+                          {profile.label}
+                          {!profile.available ? " (unavailable)" : ""}
+                        </span>
+                      </label>
+                    ))
+                  ) : (
+                    <p className="helper-text">No codec profiles available for batch export.</p>
+                  )}
+                </fieldset>
+
+                <div className="qc-codec-grid">
+                  <label className="track-editor-field">
+                    <span>Output Directory</span>
+                    <input
+                      aria-label="Batch export output directory"
+                      value={props.qcBatchExportOutputDir}
+                      onChange={(event) => props.onQcBatchExportOutputDirChange(event.target.value)}
+                      placeholder="C:/Exports"
+                      disabled={props.qcBatchExportSubmitting}
+                    />
+                  </label>
+                  <label className="track-editor-field">
+                    <span>Target Integrated LUFS (optional)</span>
+                    <input
+                      aria-label="Batch export target LUFS"
+                      value={props.qcBatchExportTargetLufs}
+                      onChange={(event) => props.onQcBatchExportTargetLufsChange(event.target.value)}
+                      placeholder="-14.0"
+                      disabled={props.qcBatchExportSubmitting}
+                    />
+                  </label>
+                </div>
+
+                <div className="qc-controls">
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={props.onQcStartBatchExport}
+                    disabled={props.qcBatchExportSubmitting}
+                  >
+                    {props.qcBatchExportSubmitting ? "Starting Batch Export..." : "Start Batch Export"}
+                  </button>
+                </div>
+
+                {props.qcBatchExportStatusMessage ? (
+                  <div className="qc-preview-status" role="status" aria-live="polite">
+                    <span>{props.qcBatchExportStatusMessage}</span>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
       ) : null}
     </div>

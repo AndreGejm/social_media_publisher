@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-get-active-preview-media"
+description = "Enables the qc_get_active_preview_media command without any pre-configured scope."
+commands.allow = ["qc_get_active_preview_media"]
+
+[[permission]]
+identifier = "deny-qc-get-active-preview-media"
+description = "Denies the qc_get_active_preview_media command without any pre-configured scope."
+commands.deny = ["qc_get_active_preview_media"]

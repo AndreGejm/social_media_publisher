@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-get-feature-flags"
+description = "Enables the qc_get_feature_flags command without any pre-configured scope."
+commands.allow = ["qc_get_feature_flags"]
+
+[[permission]]
+identifier = "deny-qc-get-feature-flags"
+description = "Denies the qc_get_feature_flags command without any pre-configured scope."
+commands.deny = ["qc_get_feature_flags"]

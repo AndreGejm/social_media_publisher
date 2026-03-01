@@ -4,6 +4,7 @@
 
 | Version | Date | Author | Description of Changes |
 | --- | --- | --- | --- |
+| v1.1.0 | 2026-03-01 | Platform Engineering (Codex) | Added stability-first QC operating contract: real codec-preview truth layer requirements, strict batch-export failure semantics, lifecycle pruning expectations for library roots, and release quality gates tied to automated tests. |
 | v1.0.2 | 2026-02-28 | Platform Engineering (Codex) | Documented deterministic Git wrapper operations (`git-toolkit`) and token-optimized Windows build wrapper (`build/make-exe.ps1`) with log-first output policy. |
 | v1.0.1 | 2026-02-27 | Platform Engineering (Codex) | Clarified pipeline semantics as `Plan -> QC -> Execute -> Audit/Remote Verify`; added Catalog Subsystem definition; documented shared-transport I/O handoff rules; clarified backend-authoritative spec parsing/validation path. |
 | v1.0.0 | 2026-02-26 | Platform Engineering (Codex) | Initial Theory of Operation covering frontend, IPC boundary, Rust backend, SQLite WAL persistence, audio analysis circuitry, idempotency, state machine, and error strategy. |
@@ -49,7 +50,7 @@ Core design intent:
 Primary shell:
 
 - Top mode switch: `Listen` and `Publish`.
-- Listen workspaces: `Library`, `Tracks`, `Albums`, `Playlists`, `Settings`.
+- Listen workspaces: `Library`, `Quality Control`, `Playlists`, `Settings`, `About`.
 - Publish workspace host: `Publisher Ops` with shell-level step tabs.
 - Persistent global transport dock at the bottom.
 - Persistent right dock switching context:
@@ -861,6 +862,31 @@ Operational expectation:
 
 - If playback is active and a user starts QC analysis, UI should prioritize analysis safety by pausing transport and surfacing deterministic status feedback.
 
+## 5.6 Stability-First QC and Playback Contracts
+
+Codec preview truth contract:
+
+- Preview session state is not sufficient by itself; selected variant must map to a real playback source path.
+- Variant changes (`bypass`, `codec_a`, `codec_b`, `blind_x`) are valid only when backend render outcomes succeed.
+- Blind-X mapping must be deterministic per session and revealable without remapping drift.
+
+Batch export truth contract:
+
+- Export status must represent real encoder outcomes.
+- Missing/unavailable encoder paths must return explicit failed states.
+- The system must not mark passthrough copy output as codec-export success.
+
+Catalog lifecycle consistency contract:
+
+- Removing a library root must prune root-matched tracks and stale references in queue/favorites/selection state.
+- Drag-drop ingest completion handlers must be idempotent and one-shot per terminal ingest job.
+
+React effect stability contract:
+
+- Async completion effects must use stable dependencies and duplicate-run guards.
+- State updates inside effect loops must be change-guarded (`no-op when unchanged`).
+- Render-depth warnings (`Maximum update depth exceeded`) are treated as release-blocking regressions.
+
 ## 6. Error Classification Strategy
 
 ## 6.1 Philosophy
@@ -1202,7 +1228,7 @@ Applies precise one-bit mutations to byte payloads for corruption and immutabili
 
 **Why this exists**
 
-- Supports deterministic “minimal corruption” and mutation-sensitivity testing.
+- Supports deterministic "minimal corruption" and mutation-sensitivity testing.
 
 #### Test Helper Contract: `assert_decode_fails_without_panic(...)`
 
@@ -1325,7 +1351,7 @@ The following test functions validate behavior and fault tolerance of production
 
 - Real external publish connectors are not enabled in this release path.
 - Marketplace/events/social/multi-user domains are out of scope.
-- QC true-peak may be optional in some response paths depending on persisted source.
+- Legacy catalog rows may still contain older QC metric fidelity; new ingest/analysis paths target strict true-peak and loudness correctness.
 
 ## 11. Maintaining This Document
 

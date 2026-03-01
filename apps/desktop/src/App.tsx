@@ -2,7 +2,6 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { HelpTooltip } from "./HelpTooltip";
-import { QcPlayer, type QcPlayerAnalysis } from "./QcPlayer";
 
 export type PublisherOpsScreen = "New Release" | "Plan / Preview" | "Execute" | "Report / History";
 type Screen = PublisherOpsScreen;
@@ -46,21 +45,6 @@ type HistoryRow = { release_id: string; state: string; title: string; updated_at
 type ReleaseReport = { release_id: string; summary: string; actions: PlannedAction[]; raw?: unknown };
 type TrackModel = { file_path: string; duration_ms: number; peak_data: number[]; loudness_lufs: number };
 type ReleaseModel = { id: string; title: string; artist: string; tracks: TrackModel[] };
-type AnalyzeAudioFileResponse = {
-  canonical_path: string;
-  media_fingerprint: string;
-  track: TrackModel;
-  sample_rate_hz: number;
-  channels: number;
-};
-type ReleaseTrackAnalysisResponse = {
-  release: ReleaseModel;
-  media_fingerprint: string;
-  sample_rate_hz: number;
-  channels: number;
-  created_at: string;
-  updated_at: string;
-};
 type QcAnalysisView = {
   release: ReleaseModel;
   track: TrackModel;
@@ -71,7 +55,6 @@ type QcAnalysisView = {
   updated_at?: string;
 };
 type QcApprovalRecord = { approved_at: string };
-const MAX_QC_PEAK_BINS_UI = 8_192;
 
 const screens: Screen[] = ["New Release", "Plan / Preview", "Execute", "Report / History"];
 const screenHelpText: Record<Screen, string> = {
@@ -152,20 +135,6 @@ function normalizeAppError(error: unknown): UiAppError {
   return { code: "UNEXPECTED_UI_ERROR", message: error instanceof Error ? error.message : "Unknown UI error" };
 }
 
-function mergeQcAnalysisAttemptErrors(primaryError: unknown, fallbackError: unknown): UiAppError {
-  const primary = normalizeAppError(primaryError);
-  const fallback = normalizeAppError(fallbackError);
-  return {
-    code: fallback.code,
-    message: fallback.message,
-    details: {
-      strategy: "persist_then_fallback",
-      persisted_attempt: primary,
-      fallback_attempt: fallback
-    }
-  };
-}
-
 function shouldLogBackendErrorDetails(): boolean {
   return window.__RELEASE_PUBLISHER_DEBUG_ERROR_DETAILS__ === true;
 }
@@ -203,91 +172,6 @@ function formatSpecErrors(errors: SpecError[]): string {
   return errors
     .map((e) => `${e.code}${e.field ? ` (${e.field})` : ""}: ${e.message}`)
     .join(" | ");
-}
-
-function buildQcViewFromPersisted(payload: ReleaseTrackAnalysisResponse): QcAnalysisView {
-  const track = payload.release.tracks[0];
-  const view = {
-    release: payload.release,
-    track,
-    media_fingerprint: payload.media_fingerprint,
-    sample_rate_hz: payload.sample_rate_hz,
-    channels: payload.channels,
-    created_at: payload.created_at,
-    updated_at: payload.updated_at
-  };
-  assertValidQcAnalysisView(view, "get_release_track_analysis");
-  return view;
-}
-
-function buildQcViewFromAnalyzeFile(payload: AnalyzeAudioFileResponse, spec: ReleaseSpec | null, releaseId: string): QcAnalysisView {
-  const view = {
-    release: {
-      id: releaseId,
-      title: spec?.title ?? "Unlabeled Track",
-      artist: spec?.artist ?? "Unknown Artist",
-      tracks: [payload.track]
-    },
-    track: payload.track,
-    media_fingerprint: payload.media_fingerprint,
-    sample_rate_hz: payload.sample_rate_hz,
-    channels: payload.channels
-  };
-  assertValidQcAnalysisView(view, "analyze_audio_file");
-  return view;
-}
-
-function toQcPlayerAnalysis(analysis: QcAnalysisView): QcPlayerAnalysis {
-  return {
-    releaseTitle: analysis.release.title,
-    releaseArtist: analysis.release.artist,
-    trackFilePath: analysis.track.file_path,
-    durationMs: analysis.track.duration_ms,
-    peakData: analysis.track.peak_data,
-    loudnessLufs: analysis.track.loudness_lufs,
-    sampleRateHz: analysis.sample_rate_hz,
-    channels: analysis.channels,
-    mediaFingerprint: analysis.media_fingerprint
-  };
-}
-
-function invalidQcPayloadError(message: string, source: string): UiAppError {
-  return { code: "INVALID_QC_PAYLOAD", message, details: { source } };
-}
-
-function isFiniteNonPositiveNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value <= 0;
-}
-
-function isPositiveFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function isValidQcTrackForApproval(track: TrackModel | null | undefined): track is TrackModel {
-  if (!track) return false;
-  if (!isPositiveFiniteNumber(track.duration_ms)) return false;
-  if (!Array.isArray(track.peak_data) || track.peak_data.length === 0 || track.peak_data.length > MAX_QC_PEAK_BINS_UI) {
-    return false;
-  }
-  if (!track.peak_data.every((peak) => isFiniteNonPositiveNumber(peak))) return false;
-  if (!isFiniteNonPositiveNumber(track.loudness_lufs)) return false;
-  return true;
-}
-
-function assertValidQcAnalysisView(analysis: QcAnalysisView, source: string): void {
-  const release = analysis.release;
-  if (!release || typeof release.id !== "string" || !release.id.trim()) {
-    throw invalidQcPayloadError("QC payload is missing a valid release id.", source);
-  }
-  if (typeof analysis.media_fingerprint !== "string" || analysis.media_fingerprint.length < 16) {
-    throw invalidQcPayloadError("QC payload is missing a valid media fingerprint.", source);
-  }
-  if (!isPositiveFiniteNumber(analysis.sample_rate_hz) || !isPositiveFiniteNumber(analysis.channels)) {
-    throw invalidQcPayloadError("QC payload has invalid sample rate or channel count.", source);
-  }
-  if (!isValidQcTrackForApproval(analysis.track)) {
-    throw invalidQcPayloadError("QC payload track metrics are invalid or incomplete.", source);
-  }
 }
 
 type AppProps = {
@@ -357,20 +241,17 @@ export default function App({
   const [selectedHistoryReleaseId, setSelectedHistoryReleaseId] = useState("");
   const [report, setReport] = useState<ReleaseReport | null>(null);
   const [qcAnalysis, setQcAnalysis] = useState<QcAnalysisView | null>(null);
-  const [qcApprovedByReleaseId, setQcApprovedByReleaseId] = useState<Record<string, QcApprovalRecord>>({});
-  const [qcCurrentTimeSec, setQcCurrentTimeSec] = useState(0);
-  const [qcIsPlaying, setQcIsPlaying] = useState(false);
+  const [qcApprovedByReleaseId] = useState<Record<string, QcApprovalRecord>>({});
+  const [, setQcCurrentTimeSec] = useState(0);
+  const [, setQcIsPlaying] = useState(false);
 
   const [loadingSpec, setLoadingSpec] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [refreshingHistory, setRefreshingHistory] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
-  const [loadingQcAnalysis, setLoadingQcAnalysis] = useState(false);
-  const [loadingQcLookup, setLoadingQcLookup] = useState(false);
   const historyRequestSeqRef = useRef(0);
   const reportRequestSeqRef = useRef(0);
-  const qcRequestSeqRef = useRef(0);
   const qcAudioRef = useRef<HTMLAudioElement>(null);
   const lastBroadcastScreenRef = useRef<Screen | null>(null);
 
@@ -414,24 +295,10 @@ export default function App({
   const revealFullDiagnosticPaths = shouldRevealFullDiagnosticPaths(env);
   const currentPlannedReleaseId = planResult?.release_id ?? "";
   const qcApprovalForCurrentPlan = currentPlannedReleaseId ? qcApprovedByReleaseId[currentPlannedReleaseId] : undefined;
-  const qcApprovedForCurrentPlan = Boolean(qcApprovalForCurrentPlan);
-  const qcAnalysisMatchesCurrentPlan = Boolean(
-    currentPlannedReleaseId && qcAnalysis && qcAnalysis.release.id === currentPlannedReleaseId
-  );
-  const qcAnalysisValidForCurrentPlan = qcAnalysisMatchesCurrentPlan && isValidQcTrackForApproval(qcAnalysis?.track);
   const qcSharedTransportSource = useMemo(
     () => (qcAnalysis ? toPublisherOpsSharedTransportSource(qcAnalysis) : null),
     [qcAnalysis]
   );
-  const qcUsesSharedTransport = Boolean(sharedTransport && qcSharedTransportSource);
-  const qcSharedTransportMatches =
-    Boolean(sharedTransport && qcSharedTransportSource) &&
-    sharedTransport?.state.sourceKey === qcSharedTransportSource?.sourceKey;
-  const qcPlayerCurrentTimeSec =
-    qcSharedTransportMatches && sharedTransport ? sharedTransport.state.currentTimeSec : qcCurrentTimeSec;
-  const qcPlayerIsPlaying = qcSharedTransportMatches && sharedTransport ? sharedTransport.state.isPlaying : qcIsPlaying;
-  const qcApprovedAndReadyForExecuteCurrentPlan =
-    qcApprovedForCurrentPlan && qcAnalysisValidForCurrentPlan && !loadingQcAnalysis;
 
   const setStructuredError = (error: unknown, fallbackStatus: string) => {
     const appError = normalizeAppError(error);
@@ -490,16 +357,6 @@ export default function App({
     sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: false });
   }, [sharedTransport, qcSharedTransportSource]);
 
-  const clearQcApprovalForRelease = (releaseId: string) => {
-    if (!releaseId) return;
-    setQcApprovedByReleaseId((current) => {
-      if (!(releaseId in current)) return current;
-      const next = { ...current };
-      delete next[releaseId];
-      return next;
-    });
-  };
-
   const refreshHistory = async () => {
     const requestSeq = historyRequestSeqRef.current + 1;
     historyRequestSeqRef.current = requestSeq;
@@ -517,37 +374,6 @@ export default function App({
     } finally {
       if (requestSeq === historyRequestSeqRef.current) {
         setRefreshingHistory(false);
-      }
-    }
-  };
-
-  const loadQcForRelease = async (releaseId: string, options?: { preserveStatus?: boolean }) => {
-    const requestSeq = qcRequestSeqRef.current + 1;
-    qcRequestSeqRef.current = requestSeq;
-    setLoadingQcLookup(true);
-    try {
-      const result = await invokeCommand<ReleaseTrackAnalysisResponse | null>("get_release_track_analysis", { releaseId });
-      if (requestSeq !== qcRequestSeqRef.current) {
-        return result;
-      }
-      if (result) {
-        setQcAnalysis(buildQcViewFromPersisted(result));
-        resetQcPlayback();
-        setActiveScreen("Execute");
-        if (!options?.preserveStatus) {
-          setStatusMessage("Loaded persisted QC analysis.");
-        }
-      }
-      return result;
-    } catch (error) {
-      if (requestSeq === qcRequestSeqRef.current) {
-        setQcAnalysis((current) => (current?.release.id === releaseId ? null : current));
-        resetQcPlayback();
-      }
-      throw error;
-    } finally {
-      if (requestSeq === qcRequestSeqRef.current) {
-        setLoadingQcLookup(false);
       }
     }
   };
@@ -620,137 +446,6 @@ export default function App({
       setStructuredError(error, "Plan failed.");
     } finally {
       setPlanning(false);
-    }
-  };
-
-  const onAnalyzeQc = async () => {
-    if (!planResult?.release_id) {
-      setUiError("Plan a release before QC analysis.");
-      return;
-    }
-    if (!mediaPath.trim()) {
-      setUiError("Media file path is required for QC analysis.");
-      return;
-    }
-    const releaseId = planResult.release_id;
-    setUiError(null);
-    setBackendError(null);
-    clearQcApprovalForRelease(releaseId);
-    setLoadingQcAnalysis(true);
-    setStatusMessage("Analyzing audio and persisting QC metrics...");
-    try {
-      const persisted = await invokeCommand<ReleaseTrackAnalysisResponse>("analyze_and_persist_release_track", {
-        releaseId,
-        path: mediaPath
-      });
-      setQcAnalysis(buildQcViewFromPersisted(persisted));
-      resetQcPlayback();
-      setActiveScreen("Execute");
-      setStatusMessage("QC waveform and loudness metrics are ready. Listen and approve for release.");
-    } catch (error) {
-      try {
-        // Fallback for environments/mocks that only implement the non-persisting analysis command.
-        const analyzed = await invokeCommand<AnalyzeAudioFileResponse>("analyze_audio_file", { path: mediaPath });
-        setQcAnalysis(buildQcViewFromAnalyzeFile(analyzed, loadedSpec?.spec ?? null, releaseId));
-        resetQcPlayback();
-        setActiveScreen("Execute");
-        setStatusMessage("QC waveform and loudness metrics are ready (session-only preview). Listen and approve for release.");
-      } catch (fallbackError) {
-        setQcAnalysis((current) => (current?.release.id === releaseId ? null : current));
-        resetQcPlayback();
-        setStructuredError(mergeQcAnalysisAttemptErrors(error, fallbackError), "QC analysis failed.");
-      }
-    } finally {
-      setLoadingQcAnalysis(false);
-    }
-  };
-
-  const onLoadQcFromSelectedHistory = async () => {
-    if (!selectedHistoryReleaseId) {
-      setUiError("Select a release in history first.");
-      return;
-    }
-    setUiError(null);
-    setBackendError(null);
-    setStatusMessage("Loading persisted QC analysis...");
-    try {
-      const result = await loadQcForRelease(selectedHistoryReleaseId);
-      if (!result) {
-        setStatusMessage("No persisted QC analysis found for the selected release.");
-      }
-    } catch (error) {
-      setStructuredError(error, "QC analysis load failed.");
-    }
-  };
-
-  const onApproveForRelease = () => {
-    if (!planResult?.release_id) {
-      setUiError("Plan a release before approving QC.");
-      return;
-    }
-    if (!qcAnalysis || qcAnalysis.release.id !== planResult.release_id) {
-      setUiError("Analyze the planned audio in QC before approving.");
-      return;
-    }
-    if (!isValidQcTrackForApproval(qcAnalysis.track)) {
-      setUiError("QC analysis is invalid or incomplete. Re-run audio analysis before approving.");
-      return;
-    }
-    setUiError(null);
-    setQcApprovedByReleaseId((current) => ({
-      ...current,
-      [planResult.release_id]: { approved_at: new Date().toISOString() }
-    }));
-    setStatusMessage("QC approved. Execute is now enabled for this planned release.");
-  };
-
-  const onClearQcApproval = () => {
-    if (!planResult?.release_id) return;
-    setQcApprovedByReleaseId((current) => {
-      const next = { ...current };
-      delete next[planResult.release_id];
-      return next;
-    });
-    setStatusMessage("QC approval cleared for the current planned release.");
-  };
-
-  const onToggleQcPlayback = () => {
-    if (sharedTransport && qcSharedTransportSource) {
-      sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: true });
-      return;
-    }
-    const audio = qcAudioRef.current;
-    if (!audio) return;
-    if (audio.paused) {
-      const maybePromise = audio.play();
-      if (maybePromise && typeof maybePromise.catch === "function") {
-        maybePromise.catch(() => undefined);
-      }
-      return;
-    }
-    try {
-      audio.pause();
-    } catch {
-      // jsdom / unsupported media runtime
-    }
-  };
-
-  const onSeekQc = (ratio: number) => {
-    const normalized = Math.max(0, Math.min(1, ratio));
-    const durationSec = qcAnalysis ? qcAnalysis.track.duration_ms / 1000 : 0;
-    const nextTime = durationSec * normalized;
-    setQcCurrentTimeSec(nextTime);
-    if (sharedTransport && qcSharedTransportSource) {
-      sharedTransport.ensureSource(qcSharedTransportSource, { autoplay: false });
-      sharedTransport.seekToRatio(qcSharedTransportSource.sourceKey, normalized);
-      return;
-    }
-    if (qcAudioRef.current) {
-      try {
-        qcAudioRef.current.currentTime = nextTime;
-      } catch {
-        // unsupported media runtime / unloaded media element
-      }
     }
   };
 

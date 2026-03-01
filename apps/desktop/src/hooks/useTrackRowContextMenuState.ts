@@ -16,6 +16,7 @@ type UseTrackRowContextMenuStateArgs = {
 };
 
 export function useTrackRowContextMenuState(args: UseTrackRowContextMenuStateArgs) {
+  const { onSelectTrack } = args;
   const [trackRowContextMenu, setTrackRowContextMenu] = useState<TrackRowContextMenuState | null>(null);
 
   useEffect(() => {
@@ -39,10 +40,10 @@ export function useTrackRowContextMenuState(args: UseTrackRowContextMenuStateArg
     ) => {
       const clampedX = Math.max(8, Math.min(window.innerWidth - 220, x));
       const clampedY = Math.max(8, Math.min(window.innerHeight - 180, y));
-      args.onSelectTrack(trackId);
+      onSelectTrack(trackId);
       setTrackRowContextMenu({ trackId, x: clampedX, y: clampedY, source, queueIndex });
     },
-    [args.onSelectTrack]
+    [onSelectTrack]
   );
 
   const handleTrackRowContextMenu = useCallback(

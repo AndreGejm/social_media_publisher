@@ -184,6 +184,7 @@ describe("Tauri security config", () => {
     expect(appAclDefault).toContain("allow-analyze-audio-file");
     expect(appAclDefault).toContain("allow-analyze-and-persist-release-track");
     expect(appAclDefault).toContain("allow-get-release-track-analysis");
+    expect(appAclDefault).toContain("allow-catalog-reset-library-data");
 
     for (const label of capability.windows ?? []) {
       expect(label.includes("*")).toBe(false);
@@ -234,7 +235,6 @@ describe("Tauri security config", () => {
   });
 
   it("configures at least one bundle icon path", () => {
-    const config = loadTauriConfig();
     const bundle = readJsonFile<{ bundle?: { icon?: string[] } }>(desktopPath("src-tauri", "tauri.conf.json")).bundle;
     expect(bundle?.icon?.length ?? 0).toBeGreaterThan(0);
     expect(bundle?.icon).toContain("icons/icon.ico");

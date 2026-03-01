@@ -177,10 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`",
+          "description": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`"
+          "markdownDescription": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`"
         },
         {
           "description": "Enables the analyze_and_persist_release_track command without any pre-configured scope.",
@@ -199,6 +199,12 @@
           "type": "string",
           "const": "allow-catalog-add-library-root",
           "markdownDescription": "Enables the catalog_add_library_root command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the catalog_cancel_ingest_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-catalog-cancel-ingest-job",
+          "markdownDescription": "Enables the catalog_cancel_ingest_job command without any pre-configured scope."
         },
         {
           "description": "Enables the catalog_get_ingest_job command without any pre-configured scope.",
@@ -237,6 +243,12 @@
           "markdownDescription": "Enables the catalog_remove_library_root command without any pre-configured scope."
         },
         {
+          "description": "Enables the catalog_reset_library_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-catalog-reset-library-data",
+          "markdownDescription": "Enables the catalog_reset_library_data command without any pre-configured scope."
+        },
+        {
           "description": "Enables the catalog_scan_root command without any pre-configured scope.",
           "type": "string",
           "const": "allow-catalog-scan-root",
@@ -255,6 +267,18 @@
           "markdownDescription": "Enables the execute_release command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_playback_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-playback-context",
+          "markdownDescription": "Enables the get_playback_context command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_playback_decode_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-playback-decode-error",
+          "markdownDescription": "Enables the get_playback_decode_error command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_release_track_analysis command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-release-track-analysis",
@@ -265,6 +289,12 @@
           "type": "string",
           "const": "allow-get-report",
           "markdownDescription": "Enables the get_report command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the init_exclusive_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-init-exclusive-device",
+          "markdownDescription": "Enables the init_exclusive_device command without any pre-configured scope."
         },
         {
           "description": "Enables the list_history command without any pre-configured scope.",
@@ -291,6 +321,96 @@
           "markdownDescription": "Enables the publisher_create_draft_from_track command without any pre-configured scope."
         },
         {
+          "description": "Enables the push_track_change_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-push-track-change-request",
+          "markdownDescription": "Enables the push_track_change_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_get_active_preview_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-get-active-preview-media",
+          "markdownDescription": "Enables the qc_get_active_preview_media command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_get_batch_export_job_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-get-batch-export-job-status",
+          "markdownDescription": "Enables the qc_get_batch_export_job_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_get_feature_flags command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-get-feature-flags",
+          "markdownDescription": "Enables the qc_get_feature_flags command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_get_preview_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-get-preview-session",
+          "markdownDescription": "Enables the qc_get_preview_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_list_codec_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-list-codec-profiles",
+          "markdownDescription": "Enables the qc_list_codec_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_prepare_preview_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-prepare-preview-session",
+          "markdownDescription": "Enables the qc_prepare_preview_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_reveal_blind_x command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-reveal-blind-x",
+          "markdownDescription": "Enables the qc_reveal_blind_x command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_set_preview_variant command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-set-preview-variant",
+          "markdownDescription": "Enables the qc_set_preview_variant command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qc_start_batch_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qc-start-batch-export",
+          "markdownDescription": "Enables the qc_start_batch_export command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the seek_playback_ratio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-seek-playback-ratio",
+          "markdownDescription": "Enables the seek_playback_ratio command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_playback_playing command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-playback-playing",
+          "markdownDescription": "Enables the set_playback_playing command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_playback_queue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-playback-queue",
+          "markdownDescription": "Enables the set_playback_queue command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_volume command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-volume",
+          "markdownDescription": "Enables the set_volume command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_queue_visibility command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-queue-visibility",
+          "markdownDescription": "Enables the toggle_queue_visibility command without any pre-configured scope."
+        },
+        {
           "description": "Denies the analyze_and_persist_release_track command without any pre-configured scope.",
           "type": "string",
           "const": "deny-analyze-and-persist-release-track",
@@ -307,6 +427,12 @@
           "type": "string",
           "const": "deny-catalog-add-library-root",
           "markdownDescription": "Denies the catalog_add_library_root command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the catalog_cancel_ingest_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-catalog-cancel-ingest-job",
+          "markdownDescription": "Denies the catalog_cancel_ingest_job command without any pre-configured scope."
         },
         {
           "description": "Denies the catalog_get_ingest_job command without any pre-configured scope.",
@@ -345,6 +471,12 @@
           "markdownDescription": "Denies the catalog_remove_library_root command without any pre-configured scope."
         },
         {
+          "description": "Denies the catalog_reset_library_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-catalog-reset-library-data",
+          "markdownDescription": "Denies the catalog_reset_library_data command without any pre-configured scope."
+        },
+        {
           "description": "Denies the catalog_scan_root command without any pre-configured scope.",
           "type": "string",
           "const": "deny-catalog-scan-root",
@@ -363,6 +495,18 @@
           "markdownDescription": "Denies the execute_release command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_playback_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-playback-context",
+          "markdownDescription": "Denies the get_playback_context command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_playback_decode_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-playback-decode-error",
+          "markdownDescription": "Denies the get_playback_decode_error command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_release_track_analysis command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-release-track-analysis",
@@ -373,6 +517,12 @@
           "type": "string",
           "const": "deny-get-report",
           "markdownDescription": "Denies the get_report command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the init_exclusive_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-init-exclusive-device",
+          "markdownDescription": "Denies the init_exclusive_device command without any pre-configured scope."
         },
         {
           "description": "Denies the list_history command without any pre-configured scope.",
@@ -397,6 +547,96 @@
           "type": "string",
           "const": "deny-publisher-create-draft-from-track",
           "markdownDescription": "Denies the publisher_create_draft_from_track command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the push_track_change_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-push-track-change-request",
+          "markdownDescription": "Denies the push_track_change_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_get_active_preview_media command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-get-active-preview-media",
+          "markdownDescription": "Denies the qc_get_active_preview_media command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_get_batch_export_job_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-get-batch-export-job-status",
+          "markdownDescription": "Denies the qc_get_batch_export_job_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_get_feature_flags command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-get-feature-flags",
+          "markdownDescription": "Denies the qc_get_feature_flags command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_get_preview_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-get-preview-session",
+          "markdownDescription": "Denies the qc_get_preview_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_list_codec_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-list-codec-profiles",
+          "markdownDescription": "Denies the qc_list_codec_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_prepare_preview_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-prepare-preview-session",
+          "markdownDescription": "Denies the qc_prepare_preview_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_reveal_blind_x command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-reveal-blind-x",
+          "markdownDescription": "Denies the qc_reveal_blind_x command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_set_preview_variant command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-set-preview-variant",
+          "markdownDescription": "Denies the qc_set_preview_variant command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qc_start_batch_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qc-start-batch-export",
+          "markdownDescription": "Denies the qc_start_batch_export command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the seek_playback_ratio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-seek-playback-ratio",
+          "markdownDescription": "Denies the seek_playback_ratio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_playback_playing command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-playback-playing",
+          "markdownDescription": "Denies the set_playback_playing command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_playback_queue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-playback-queue",
+          "markdownDescription": "Denies the set_playback_queue command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_volume command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-volume",
+          "markdownDescription": "Denies the set_volume command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_queue_visibility command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-queue-visibility",
+          "markdownDescription": "Denies the toggle_queue_visibility command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

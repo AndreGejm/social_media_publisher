@@ -1,4 +1,11 @@
 import { HelpTooltip } from "../../HelpTooltip";
+import {
+  SHORTCUT_ACTIONS,
+  formatShortcutBinding,
+  keyboardEventToShortcutBinding,
+  type ShortcutActionId,
+  type ShortcutBindings
+} from "../../shortcuts";
 import SectionCollapseToggle from "../workspace/components/SectionCollapseToggle";
 
 type ThemePreference = "system" | "light" | "dark";
@@ -13,8 +20,16 @@ type SettingsPanelProps = {
   onCompactDensityChange: (value: boolean) => void;
   showFullPaths: boolean;
   onShowFullPathsChange: (value: boolean) => void;
+  addParentFoldersAsRootsOnDrop: boolean;
+  onAddParentFoldersAsRootsOnDropChange: (value: boolean) => void;
+  shortcutBindings: ShortcutBindings;
+  shortcutConflictActionIdSet: Set<ShortcutActionId>;
+  onShortcutBindingChange: (actionId: ShortcutActionId, binding: string | null) => void;
+  onResetShortcutBindings: () => void;
   onClearNotice: () => void;
   onClearErrorBanner: () => void;
+  onResetLibraryData: () => void;
+  resetLibraryDataPending: boolean;
   settingsSummaryCollapsed: boolean;
   onToggleSettingsSummaryCollapsed: () => void;
   summary: {
@@ -82,6 +97,78 @@ export default function SettingsPanel(props: SettingsPanelProps) {
               />
               <span>Show full local file paths (disable truncation)</span>
             </label>
+
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={props.addParentFoldersAsRootsOnDrop}
+                onChange={(event) => props.onAddParentFoldersAsRootsOnDropChange(event.target.checked)}
+              />
+              <span>On file drop, also add each file's parent folder as a scan root</span>
+            </label>
+          </div>
+
+          <div className="settings-shortcuts-section">
+            <div className="settings-shortcuts-head">
+              <h4>Shortcuts</h4>
+              <p className="helper-text">
+                Click a shortcut field and press a key (or key combo). Use Backspace/Delete to clear a binding.
+              </p>
+            </div>
+            <div className="settings-shortcuts-grid">
+              {SHORTCUT_ACTIONS.map((shortcut) => {
+                const hasConflict = props.shortcutConflictActionIdSet.has(shortcut.id);
+                const displayValue = formatShortcutBinding(props.shortcutBindings[shortcut.id]);
+                return (
+                  <div
+                    key={shortcut.id}
+                    className={`settings-shortcut-row${hasConflict ? " conflict" : ""}`}
+                  >
+                    <div className="settings-shortcut-meta">
+                      <strong>{shortcut.label}</strong>
+                      <span>{shortcut.description}</span>
+                    </div>
+                    <HelpTooltip content="Focus this field and press a key combination to set the shortcut.">
+                      <input
+                        type="text"
+                        readOnly
+                        value={displayValue}
+                        aria-label={`${shortcut.label} shortcut`}
+                        className="settings-shortcut-input"
+                        onKeyDown={(event) => {
+                          if (event.key === "Backspace" || event.key === "Delete") {
+                            event.preventDefault();
+                            props.onShortcutBindingChange(shortcut.id, null);
+                            return;
+                          }
+                          const binding = keyboardEventToShortcutBinding(event);
+                          if (!binding) return;
+                          event.preventDefault();
+                          props.onShortcutBindingChange(shortcut.id, binding);
+                        }}
+                      />
+                    </HelpTooltip>
+                    <button
+                      type="button"
+                      className="secondary-action compact"
+                      onClick={() => props.onShortcutBindingChange(shortcut.id, null)}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {props.shortcutConflictActionIdSet.size > 0 ? (
+              <p className="settings-shortcut-warning" role="alert">
+                Two or more shortcuts use the same binding. Only the first matching action will run.
+              </p>
+            ) : null}
+            <div className="settings-actions">
+              <button type="button" className="secondary-action" onClick={props.onResetShortcutBindings}>
+                Reset Shortcuts
+              </button>
+            </div>
           </div>
 
           <div className="settings-actions">
@@ -93,6 +180,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
             <HelpTooltip content="Clears the current catalog error banner shown in the music shell.">
               <button type="button" className="secondary-action" onClick={props.onClearErrorBanner}>
                 Clear Error Banner
+              </button>
+            </HelpTooltip>
+            <HelpTooltip content="Clears persisted local library roots, imported catalog tracks, ingest jobs, queue/favorites, and session selections. Local media files on disk are not deleted.">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={props.onResetLibraryData}
+                disabled={props.resetLibraryDataPending}
+              >
+                {props.resetLibraryDataPending ? "Resetting..." : "Reset Library Data"}
               </button>
             </HelpTooltip>
           </div>

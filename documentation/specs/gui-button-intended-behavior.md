@@ -1,440 +1,319 @@
-﻿# GUI Button Intended Behavior Reference (Desktop App)
+﻿# GUI Button Intended Behavior Reference (Desktop)
 
-Purpose: This document defines how each major GUI button is intended to behave in the current build. Use it as the source of truth when reporting bugs.
+Document ID: RP-GUI-BUTTONS-2026-03-01
+Date: 2026-03-01
+Status: Active
 
-Version context:
-- Desktop app: 0.2.0
-- Offline-first mode
-- Publisher execution transport: MockTransport (test simulation)
+Purpose:
 
-## How To Use This For Bug Reports
+- Define intended behavior for clickable controls in Listen/QC workspaces.
+- Provide pass/fail expectations for stability-focused implementation.
+- Serve as a bug triage reference.
 
-Include:
-- Mode and workspace/screen (`Listen > Tracks`, `Publish > Publisher Ops > Verify / QC`, etc.)
-- Exact button label
-- Preconditions (selected track, loaded draft, approved QC, and so on)
-- Expected behavior (from this document)
-- Actual behavior
-- Any visible error code/message
-- Whether it reproduces after restart
+Scope:
 
-## Global Help `?` Buttons
+- In scope: Listen mode workspaces (`Library`, `Quality Control`, `Playlists`, `Settings`, `About`) and shared transport.
+- Out of scope: Publish workflow button semantics beyond shell-level navigation.
 
-All help icons are rendered by `HelpTooltip`.
+## 1. Global Rules
 
-Intended behavior:
-- Hover or keyboard focus shows tooltip text.
-- Popover-style help opens from `?` icon buttons where used.
-- `Escape` closes open tooltip/popover.
-- Clicking outside closes pinned popovers.
-- Help buttons do not mutate app data.
+Rule G1: Buttons must be idempotent where repeated clicks are expected.
 
-## Global App Shell
+Rule G2: Buttons must expose deterministic disabled states based on prerequisites.
 
-### Top mode tabs (`Listen`, `Publish`)
+Rule G3: Buttons must not report false-positive errors for healthy fallback paths.
 
-Intended behavior:
-- Switches the app between listening/library workflows and publish workflows.
-- Persists mode in local storage key `rp.music.activeMode.v1`.
-- Mode switch does not run Rust IPC by itself.
+Rule G4: Any backend failure path must surface actionable status text.
 
-### Global bottom transport (`Shared transport`)
+Rule G5: UI state changes that imply backend truth must be backed by command success.
+
+## 2. App Shell Buttons
+
+### 2.1 Mode Tabs
 
 Buttons:
+
+- `Listen`
+- `Publish`
+
+Intended behavior:
+
+- Switches top-level mode.
+- Persists mode selection.
+- Does not trigger publish execution by itself.
+
+Pass:
+- Mode switches without stale workspace state corruption.
+
+Fail:
+- Mode switch triggers unrelated command side effects.
+
+### 2.2 Shared Transport
+
+Buttons:
+
 - `Prev`
-- `Play` / `Pause`
+- `Play` or `Pause`
 - `Next`
+- `Mute`
+- Queue visibility toggle (`Playlist` or equivalent queue toggle button)
 
 Intended behavior:
-- This is the single global transport for playback.
-- Operates on the current queue context.
-- Stays visible across all workspaces and scrolling.
 
-Disabled states:
-- `Prev`: disabled when queue index is at start.
-- `Next`: disabled when no next queue item exists.
-- `Play`: disabled if there is no active player source and queue is empty.
+- Controls active playback source from shared transport state.
+- `Prev` and `Next` navigate queue deterministically.
+- Queue visibility toggle must use native transport when available and local fallback when unavailable.
 
-Related control:
-- `Shared player seek` slider seeks current track position.
+Pass:
+- Queue visibility toggle does not emit playback error banner on healthy fallback path.
 
-### Global right dock (`Queue and session state`)
+Fail:
+- Toggle operation reports "Unable to toggle queue visibility" while behavior remains healthy.
 
-The dock switches content by app mode:
-- `Listen` mode: `Queue`
-- `Publish` mode: `Release Selection`
+## 3. Library Workspace Buttons
 
-No backend mutation for dock-only queue operations (local state).
-
-## Listen Mode Navigation
-
-Visible left-sidebar workspace buttons:
-- `Library`
-- `Albums`
-- `Tracks`
-- `Playlists`
-- `Settings`
-
-Intended behavior:
-- Switches visible center workspace.
-- Persists workspace in `rp.music.activeWorkspace.v1`.
-
-## Publish Mode Navigation
-
-Visible left-sidebar workspace button:
-- `Publisher Ops`
-
-Additional shell-level publish step bar (top of content):
-- `New Release`
-- `Plan / Preview`
-- `Verify / QC`
-- `Execute`
-- `Report / History`
-
-Intended behavior:
-- Step buttons control/sync the embedded Publisher Ops screen.
-- Persists shell step in `rp.publish.shellStep.v1`.
-
-## Listen > Library
-
-### Collapsible section toggles
-
-Buttons (dynamic labels):
-- `Show Library Ingest` / `Hide Library Ingest`
-- `Show Library overview` / `Hide Library overview`
-- `Show Quick actions` / `Hide Quick actions`
-
-Intended behavior:
-- Expands/collapses the corresponding card.
-- Persists collapsed state in local storage.
-
-### Quick Actions
+### 3.1 Ingest Panel Buttons
 
 Buttons:
-- `Open Tracks Workspace`
-- `Open Albums Workspace`
-- `Open Publish Workflow`
 
-Intended behavior:
-- First two switch Listen workspaces.
-- `Open Publish Workflow` switches app mode to `Publish`.
-- No Rust IPC call by button click itself.
-
-### Library Ingest tabs
-
-Tabs:
-- `Scan Folders`
-- `Import Files`
-
-Intended behavior:
-- Switches ingest sub-panel in the Library card.
-- Persists tab in `rp.music.libraryIngestTab.v1`.
-
-#### `Scan Folders` panel
-
-Buttons:
 - `Browse...`
-- `Add Folder`
-- `Refresh Folders`
-- Per-root: `Scan Folder`, `Remove Folder`
-
-Intended behavior:
-- `Browse...`: opens native folder picker and fills `Library root path` input.
-- `Add Folder`: persists folder as a library root.
-- `Refresh Folders`: reloads roots from SQLite.
-- `Scan Folder`: starts background ingest job for that root.
-- `Remove Folder`: removes saved root config only (does not delete files).
-
-Backend calls:
-- `catalog_add_library_root`
-- `catalog_list_library_roots`
-- `catalog_scan_root`
-- `catalog_get_ingest_job` (polling)
-- `catalog_remove_library_root`
-
-#### `Import Files` panel
-
-Button:
+- `Add Root`
+- `Refresh Roots`
+- Per-root `Scan`
+- Per-root `Remove`
 - `Import Files`
 
 Intended behavior:
-- Parses newline/comma-separated paths from `Import file paths` textarea.
-- Imports those files into catalog analysis flow.
-- Updates list + status messages with partial-failure tolerance.
 
-Backend call:
-- `catalog_import_files`
+- `Browse...` selects folder path.
+- `Add Root` persists root path.
+- `Scan` creates and tracks ingest job.
+- `Remove` removes root and prunes root-matched tracks/references.
+- `Import Files` imports file paths directly.
 
-## Listen > Tracks
+Pass:
+- Removing a root updates visible track count and prunes stale queue/favorite/selection IDs.
 
-### Tracks header actions
+Fail:
+- Removed-root tracks remain visible or continue in queue/favorites.
+
+### 3.2 Quick Navigation Buttons
 
 Buttons:
-- `Refresh List`
-- `All Tracks` / `Favorites Only`
-- `Albums View`
+
+- `Open Quality Control`
+- `Open Playlists`
+- `Open Publish Workflow` (if shown)
 
 Intended behavior:
-- `Refresh List`: reloads tracks from SQLite with current search.
-- `All Tracks`/`Favorites Only`: toggles local favorites filter (`rp.music.onlyFavorites.v1`).
-- `Albums View`: switches workspace to `Albums`.
 
-Related non-button controls:
-- `Search tracks` input
-- `Track sort` select
+- Workspace navigation only.
+- No hidden ingest/playback mutation.
 
-### Batch actions for selected tracks
+## 4. Playlists Workspace Buttons
 
-Visible when at least one track checkbox is selected.
+### 4.1 Toolbar Buttons
 
 Buttons:
+
+- `Refresh List`
+- `Library` (mode tab)
+- `Queue` (mode tab)
+- `Shuffle`
+- `Clear Queue`
+- `Album QC View`
+
+Intended behavior:
+
+- `Refresh List` reloads catalog list with active search context.
+- `Library` and `Queue` tabs switch list mode.
+- `Shuffle` randomizes queue order.
+- `Clear Queue` clears session queue lock and reverts to visible-list ordering.
+
+Pass:
+- Mode switching and queue actions do not trigger infinite update loops.
+
+Fail:
+- Repeated tab switching causes render-depth warnings or stale mode mismatch.
+
+### 4.2 Batch Selection Buttons (Library mode)
+
+Buttons:
+
 - `Play Selection`
 - `Add Selection to Queue`
 - `Play Selection Next`
 - `Clear Selection`
 
 Intended behavior:
-- Uses selected tracks in visible-list order.
-- `Play Selection`: replaces session queue with selection and starts playback from first selected.
-- `Add Selection to Queue`: appends selected tracks.
-- `Play Selection Next`: inserts selected tracks after current queue item.
-- `Clear Selection`: clears track multi-select.
 
-### Track rows
+- Operates in visible-order deterministic sequence.
+- `Play Selection` sets queue from selection and starts first selected track.
+
+Pass:
+- Queue order matches selected list order.
+
+Fail:
+- Selection playback starts on wrong track or wrong queue ordering.
+
+### 4.3 Row Buttons and Context Actions
 
 Controls:
-- Row checkbox (`Select <track> for batch actions`)
-- Row main button (track title)
-- Row menu button (`Track actions for <track>`) and right-click context menu
 
-Row main button behavior:
-- Selects track and loads detail panel.
+- Row main button (arm/select)
+- Row menu button
+- Context actions: `Play Now`, `Add to Queue`, `Play Next`, `Favorite`, `Show in Tracks`, `Remove from Queue`, `Move Up`, `Move Down`
 
-Row context menu actions:
-- `Play Now`
-- `Add to Queue`
-- `Play Next`
-- `Add Favorite` / `Remove Favorite`
-- `Show in Tracks`
-- `Add to Selection` / `Already in Selection`
+Intended behavior:
 
-### Track Detail header actions
+- `Play Now` starts immediate playback and updates queue ordering accordingly.
+- `Move Up` and `Move Down` are queue-only operations.
+
+Pass:
+- Queue reorder works for both drag-drop and keyboard shortcuts.
+
+Fail:
+- Drag-drop reorder appears to work in UI but does not persist queue order.
+
+## 5. Quality Control Workspace Buttons
+
+## 5.1 Track-Level Buttons
 
 Buttons:
+
 - `Play Now`
 - `Add to Queue`
 - `Play Next`
-- `Favorite` / `Unfavorite`
-- `Edit Metadata` (view mode)
-- `Save Metadata` (edit mode)
-- `Reset Fields` (edit mode)
-- `Cancel Edit` (edit mode)
+- `Favorite` or `Unfavorite`
+- Metadata edit controls: `Edit`, `Save`, `Reset`, `Cancel`
 - `Prepare for Release...`
 
 Intended behavior:
-- Playback/queue buttons dispatch to global shared transport queue state.
-- Favorite toggles local favorite set (`rp.music.favorites.v1`).
-- Edit buttons mutate local metadata editor state and persist via save.
-- `Prepare for Release...` creates a draft release from selected track and switches to Publish mode with Publisher Ops prefilled.
 
-Backend calls:
-- `catalog_get_track` (selection/detail load effect)
-- `catalog_update_track_metadata` (save)
-- `publisher_create_draft_from_track` (bridge)
+- Playback buttons route through shared transport state.
+- Metadata save persists validated fields and shows explicit success/failure notice.
 
-### Track Detail QC panel
+Pass:
+- Save updates persisted track metadata and survives reload.
 
-Intended behavior:
-- QC panel is inspection/seek/rate oriented in this shell integration.
-- Local audio element is not mounted in this panel (`renderAudioElement=false`).
-- Playback is controlled by global shared transport.
+Fail:
+- Save claims success without persisted field changes.
 
-## Listen > Albums
-
-### Album group list
-
-Control:
-- Album row button (dynamic title)
-
-Intended behavior:
-- Selects album group for detail panel.
-
-### Album detail header actions
+## 5.2 Codec Preview Buttons
 
 Buttons:
-- `Play Album`
-- `Add Album to Queue`
-- `Show in Tracks`
 
-Intended behavior:
-- `Play Album`: seeds queue from album tracks and starts from first track.
-- `Add Album to Queue`: appends album tracks to queue.
-- `Show in Tracks`: jumps to Tracks workspace, selecting first album track.
+- Variant buttons: `Bypass`, `Codec A`, `Codec B`, `Blind-X`, `Reveal`
+- Profile selectors: `Profile A`, `Profile B`
+- Blind-X toggle: `Enable Blind-X mode`
 
-### Batch actions for selected album tracks
+Intended behavior (stability release target):
 
-Visible when one or more album-track checkboxes are selected.
+- Variant switch changes actual playback source path for selected codec variant.
+- Blind-X maps deterministically to A or B until reveal.
+- Invalid or unavailable profile selection returns explicit error and keeps prior valid state.
 
-Buttons:
-- `Add Selection to Queue`
-- `Play Selection Next`
-- `Clear Selection`
+Pass:
+- Audible/source-path behavior changes with variant selection.
 
-Intended behavior:
-- Works like track batch actions, but uses selected tracks inside the active album detail list.
+Fail:
+- Variant state changes in UI with no actual source change.
 
-### Album track rows
-
-Controls:
-- Row checkbox (`Select <track> for album batch actions`)
-- Row main button
-- Row menu button (`Open actions for <track>`) and right-click context menu
-
-Row context menu actions:
-- `Play Now`
-- `Add to Queue`
-- `Play Next`
-- `Add Favorite` / `Remove Favorite`
-- `Show in Tracks`
-- `Add to Selection` / `Already in Selection`
-
-## Listen > Settings
-
-### Collapsible section toggles
-
-Buttons (dynamic labels):
-- `Show Preferences` / `Hide Preferences`
-- `Show Display summary` / `Hide Display summary`
-
-### Preference controls
-
-Clickable controls:
-- `Theme preference` select (`System`, `Light`, `Dark`)
-- `Compact density` checkbox
-- `Show full file paths in detail panels` checkbox
-
-Intended behavior:
-- Updates local UI preferences.
-- Persists to local storage:
-  - `rp.music.themePreference.v1`
-  - `rp.music.compactDensity.v1`
-  - `rp.music.showFullPaths.v1`
-
-## Global right dock details
-
-### Listen mode (`Queue`)
+## 5.3 Batch Export Buttons
 
 Buttons:
-- `Shuffle`
-- `Clear Queue`
-- `Show in Tracks`
-- Per-row `Remove` (only when manual session queue is active)
-- Per-row main button (select/focus queue item)
+
+- Profile checkboxes
+- `Start Batch Export`
 
 Intended behavior:
-- `Shuffle`: randomizes current queue order.
-- `Clear Queue`: clears manual queue and falls back to visible-list ordering.
-- `Show in Tracks`: jumps to Tracks workspace.
 
-### Publish mode (`Release Selection`)
+- Starts background export job for selected profiles.
+- Job status panel updates with truthful profile outcomes.
+- Missing encoder or encode failure must show failed status, not completed.
+
+Pass:
+- Per-profile failures are explicit and reflected in status summary.
+
+Fail:
+- Failed encode path reported as completed.
+
+## 6. Settings Workspace Buttons
 
 Buttons:
-- `Clear Selection`
-- `Show in Tracks`
-- Per-row `Remove`
-- Per-row main button (loads that draft prefill)
+
+- `Reset Shortcuts`
+- `Clear Notice`
+- `Clear Error Banner`
+- `Reset Library Data`
 
 Intended behavior:
-- This selection list is separate from Listen queue (`rp.publish.selectionQueue.v1`).
-- `Show in Tracks` returns to Listen mode for adding more tracks.
 
-## Publish > Publisher Ops (embedded)
+- `Reset Shortcuts` restores default bindings.
+- `Reset Library Data` clears local catalog roots, tracks, ingest jobs, queue/favorites/selection state.
 
-The embedded Publisher Ops remains the deterministic plan/execute flow.
+Pass:
+- Reset leaves app in clean local-library state with zero stale tracks.
 
-### Screen tabs inside Publisher Ops
+Fail:
+- Reset completes while stale state remains visible.
 
-Buttons:
-- `New Release`
-- `Plan / Preview`
-- `Verify / QC`
-- `Execute`
-- `Report / History`
+## 7. Keyboard Shortcut Behavior
 
-Intended behavior:
-- Switches active internal Publisher Ops panel.
-- Syncs with shell publish step bar.
+Configurable actions:
 
-### New Release actions
-
-Buttons:
-- `Load Spec`
-- `Plan / Preview`
-- `Execute`
+- play/pause
+- next
+- previous
+- mute
+- queue visibility toggle
+- focus search
+- queue track move up/down
 
 Intended behavior:
-- `Load Spec`: parse/validate YAML spec.
-- `Plan / Preview`: deterministic planning only.
-- `Execute`: run mocked pipeline, gated by valid QC + manual approval.
 
-### Verify / QC actions
+- Editable and persisted in settings.
+- Conflict warning shown when bindings collide.
 
-Buttons:
-- `Analyze & Persist QC`
-- `Load Saved QC`
-- `Approve for Release` / `Approved for Release`
-- `Clear Approval`
+Pass:
+- Rebound shortcut remains active after remount.
 
-Intended behavior:
-- Runs/loads QC analysis tied to current plan release ID.
-- Approval unlocks execute only for matching planned release.
-- Clearing approval relocks execute.
+Fail:
+- Binding is persisted but action does not execute.
 
-QC playback note in shell:
-- When embedded in Music shell, Publisher Ops QC delegates playback to shared transport and hides local QC play toggle.
+## 8. Error Display Rules
 
-### Report / History actions
+Rule E1:
+- Use warning/info banner only when user action requires intervention.
 
-Buttons:
-- `Refresh History`
-- `Open Release Report`
-- `Resume Release`
+Rule E2:
+- Suppressed fallback-path errors must not produce top-level playback error banners.
 
-Intended behavior:
-- `Refresh History`: reload history rows.
-- `Open Release Report`: load report artifact for selected release.
-- `Resume Release`: execute selected historical release.
+Rule E3:
+- Error messages must include clear action guidance where possible.
 
-## Other Clickable Controls (Not `<button>`)
+## 9. Pass/Fail Quick Matrix
 
-Common bug-report sources:
-- `Library root path` input
-- `Import file paths` textarea
-- Track search input
-- Track sort select
-- Metadata selects (`Visibility`, `License`) and tags textarea
-- Publisher Ops `Spec File Path` input
-- Publisher Ops `Media File Path` input
-- Publisher Ops `Environment` select
-- History release radio selection
-- `Shared player seek` slider
-- QC waveform click-to-seek and QC seek slider
+- Queue toggle fallback: pass if no false error banner, fail otherwise.
+- Root removal pruning: pass if no stale tracks/references, fail otherwise.
+- Drop folder autoplay: pass if first scanned track autoplays once, fail on repeated loop or no autoplay.
+- Queue reorder: pass if drag and keyboard both reorder deterministically, fail otherwise.
+- Codec preview variant truth: pass if real source changes, fail if UI-only.
+- Batch export semantics: pass if failed encode is failed state, fail if reported completed.
 
-## Bug Report Template
+## 10. Bug Report Template
 
-```md
-### Bug
-- Mode + Workspace / Screen:
-- Button label:
-- Preconditions:
-- Expected behavior:
-- Actual behavior:
-- Error message/banner (if any):
-- Repro steps:
-1.
-2.
-3.
+Include the following fields:
 
-- Happens after restart? (Yes/No):
-- Sample file path / release_id (if relevant):
-```
+- Mode and workspace
+- Button label
+- Preconditions
+- Expected behavior (quote from this document)
+- Actual behavior
+- Error code/message
+- Repro rate (always, intermittent, one-off)
+- Build and test context
+
+## 11. Change Log
+
+- 2026-03-01: Full update for stability-first backlog alignment and pass/fail button contracts.

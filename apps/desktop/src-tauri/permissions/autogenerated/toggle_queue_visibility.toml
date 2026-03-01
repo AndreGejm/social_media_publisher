@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-queue-visibility"
+description = "Enables the toggle_queue_visibility command without any pre-configured scope."
+commands.allow = ["toggle_queue_visibility"]
+
+[[permission]]
+identifier = "deny-toggle-queue-visibility"
+description = "Denies the toggle_queue_visibility command without any pre-configured scope."
+commands.deny = ["toggle_queue_visibility"]

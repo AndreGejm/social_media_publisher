@@ -7,16 +7,15 @@ use crate::pipeline::{
 use crate::spec::ReleaseSpec;
 use release_publisher_db::{
     db_busy_retry_delay_ms, retry_busy_locked, Db, DbBusyRetryPolicy, DbError, DbErrorCode,
-    NewAuditLogEntry,
-    NewReleaseRecord, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
+    NewAuditLogEntry, NewReleaseRecord, PlatformActionStatus, ReleaseState, UpsertPlatformAction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -46,9 +45,7 @@ pub enum OrchestratorError {
     TestGuardrailViolation { platform: String },
     #[error("release state does not allow execution: {0}")]
     InvalidReleaseState(String),
-    #[error(
-        "publisher `{platform}` failed (code={code}, retryable={retryable}): {message}"
-    )]
+    #[error("publisher `{platform}` failed (code={code}, retryable={retryable}): {message}")]
     PublisherFailure {
         platform: String,
         code: String,
@@ -399,9 +396,7 @@ impl Orchestrator {
             .as_ref()
             .map(|renewer| renewer.failure_flag())
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let result = self
-            .execute_locked(&planned, lease_renewal_failed)
-            .await;
+        let result = self.execute_locked(&planned, lease_renewal_failed).await;
         if let Some(renewer) = lease_renewer {
             renewer.stop().await;
         }

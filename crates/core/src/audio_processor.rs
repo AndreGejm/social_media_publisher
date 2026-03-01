@@ -36,6 +36,8 @@ pub struct TrackAnalysis {
     pub peak_data: Vec<f32>,
     /// Integrated loudness (EBU R128) in LUFS.
     pub loudness_lufs: f32,
+    /// Maximum true peak across channels in dBFS-equivalent scale (clamped to `<= 0.0`).
+    pub true_peak_dbfs: f32,
     /// Decoded sample rate.
     pub sample_rate_hz: u32,
     /// Decoded channel count.
@@ -295,11 +297,18 @@ fn analyze_interleaved_samples_with_config(
         config.dbfs_floor,
     )?;
     let loudness_lufs = compute_integrated_lufs(interleaved_samples, sample_rate_hz, channels)?;
+    let true_peak_dbfs = compute_true_peak_dbfs(
+        interleaved_samples,
+        sample_rate_hz,
+        channels,
+        config.dbfs_floor,
+    )?;
 
     Ok(TrackAnalysis {
         duration_ms,
         peak_data,
         loudness_lufs,
+        true_peak_dbfs,
         sample_rate_hz,
         channels,
     })
@@ -465,6 +474,68 @@ where
     Ok(loudness)
 }
 
+/// Computes true peak (dBFS-equivalent) using EBU R128 true-peak oversampling.
+fn compute_true_peak_dbfs(
+    interleaved_samples: &[f32],
+    sample_rate_hz: u32,
+    channels: u16,
+    dbfs_floor: f32,
+) -> Result<f32, AudioError> {
+    if sample_rate_hz == 0 {
+        return Err(AudioError::Analysis(
+            "true peak sample_rate_hz must be > 0".to_string(),
+        ));
+    }
+    if channels == 0 {
+        return Err(AudioError::Analysis(
+            "true peak channels must be > 0".to_string(),
+        ));
+    }
+    if interleaved_samples.is_empty() {
+        return Err(AudioError::Analysis(
+            "true peak received zero frames".to_string(),
+        ));
+    }
+    if !interleaved_samples
+        .len()
+        .is_multiple_of(usize::from(channels))
+    {
+        return Err(AudioError::Analysis(
+            "true peak chunk length must be divisible by channels".to_string(),
+        ));
+    }
+    if interleaved_samples.iter().any(|sample| !sample.is_finite()) {
+        return Err(AudioError::Analysis(
+            "true peak chunk contains non-finite samples".to_string(),
+        ));
+    }
+
+    let mut meter = EbuR128::new(u32::from(channels), sample_rate_hz, Mode::TRUE_PEAK)
+        .map_err(|error| AudioError::Analysis(format!("ebur128 true-peak init failed: {error}")))?;
+    meter.add_frames_f32(interleaved_samples).map_err(|error| {
+        AudioError::Analysis(format!("ebur128 true-peak add_frames_f32 failed: {error}"))
+    })?;
+
+    let mut max_true_peak_linear = 0.0f64;
+    for channel_idx in 0..u32::from(channels) {
+        let peak_linear = meter.true_peak(channel_idx).map_err(|error| {
+            AudioError::Analysis(format!(
+                "ebur128 true_peak failed for channel {channel_idx}: {error}"
+            ))
+        })?;
+        if !peak_linear.is_finite() || peak_linear < 0.0 {
+            return Err(AudioError::Analysis(
+                "ebur128 true peak is not a finite non-negative value".to_string(),
+            ));
+        }
+        if peak_linear > max_true_peak_linear {
+            max_true_peak_linear = peak_linear;
+        }
+    }
+
+    Ok(amplitude_to_dbfs(max_true_peak_linear as f32, dbfs_floor))
+}
+
 /// Extracts a fixed-size dBFS peak envelope by taking max absolute sample per bin.
 ///
 /// Each bin spans a contiguous frame window and considers all channels to make
@@ -557,8 +628,8 @@ fn amplitude_to_dbfs(amplitude: f32, dbfs_floor: f32) -> f32 {
 mod tests {
     use super::{
         amplitude_to_dbfs, analyze_interleaved_samples, analyze_interleaved_samples_with_config,
-        compute_integrated_lufs_from_chunks, compute_peak_data_dbfs, decode_audio_file,
-        AnalysisConfig, AudioError,
+        compute_integrated_lufs_from_chunks, compute_peak_data_dbfs, compute_true_peak_dbfs,
+        decode_audio_file, AnalysisConfig, AudioError,
     };
     use std::f32::consts::TAU;
     use std::fs::{self, File};
@@ -768,6 +839,8 @@ mod tests {
         assert_eq!(analysis.peak_data.len(), total_frames);
         assert!(analysis.loudness_lufs.is_finite());
         assert!(analysis.loudness_lufs <= 0.0);
+        assert!(analysis.true_peak_dbfs.is_finite());
+        assert!(analysis.true_peak_dbfs <= 0.0);
         assert!(analysis
             .peak_data
             .iter()
@@ -784,6 +857,11 @@ mod tests {
         assert!(
             (observed_peak_dbfs - expected_peak_dbfs).abs() < 1e-4,
             "observed_peak_dbfs={observed_peak_dbfs}, expected_peak_dbfs={expected_peak_dbfs}"
+        );
+        assert!(
+            analysis.true_peak_dbfs + 1e-4 >= observed_peak_dbfs,
+            "true_peak_dbfs should be >= sampled envelope peak (true={}, sampled={observed_peak_dbfs})",
+            analysis.true_peak_dbfs
         );
     }
 
@@ -822,6 +900,18 @@ mod tests {
 
         assert_eq!(peaks.len(), 32);
         assert!(peaks.iter().all(|peak| (*peak - (-90.0)).abs() < 1e-6));
+    }
+
+    #[test]
+    fn compute_true_peak_dbfs_reports_expected_dbfs_equivalent_peak() {
+        let samples = vec![0.0f32, 0.5, -0.5, 0.25, -0.25];
+        let peak = compute_true_peak_dbfs(&samples, TEST_SAMPLE_RATE, 1, -96.0)
+            .expect("true peak should compute");
+        assert!(peak <= 0.0);
+        assert!(
+            peak > -7.0 && peak < -5.0,
+            "expected around -6 dBFS, got {peak}"
+        );
     }
 
     #[test]

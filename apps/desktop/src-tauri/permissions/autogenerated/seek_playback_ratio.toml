@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-seek-playback-ratio"
+description = "Enables the seek_playback_ratio command without any pre-configured scope."
+commands.allow = ["seek_playback_ratio"]
+
+[[permission]]
+identifier = "deny-seek-playback-ratio"
+description = "Denies the seek_playback_ratio command without any pre-configured scope."
+commands.deny = ["seek_playback_ratio"]

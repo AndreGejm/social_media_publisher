@@ -23,25 +23,26 @@ use release_publisher_db::{
 use release_publisher_mock_connector::MockPublisher;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     Arc, OnceLock, RwLock,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::OnceCell;
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+use tokio::sync::{OnceCell, Semaphore};
 #[cfg(target_os = "windows")]
 use windows::Win32::Media::Audio::{
     eMultimedia, eRender, IAudioClient, IAudioRenderClient, IMMDeviceEnumerator,
-    AUDCLNT_SHAREMODE_EXCLUSIVE, MMDeviceEnumerator, WAVEFORMATEX, WAVE_FORMAT_PCM,
+    MMDeviceEnumerator, AUDCLNT_SHAREMODE_EXCLUSIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::{
@@ -259,11 +260,123 @@ pub struct PlaybackContextState {
     pub active_queue_index: u32,
     pub is_queue_ui_expanded: bool,
     pub queued_track_change_requests: usize,
+    pub is_playing: bool,
+    pub position_seconds: f64,
+    pub track_duration_seconds: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaybackQueueState {
     pub total_tracks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcFeatureFlagsResponse {
+    pub qc_codec_preview_v1: bool,
+    pub qc_realtime_meters_v1: bool,
+    pub qc_batch_export_v1: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QcPreviewVariant {
+    Bypass,
+    CodecA,
+    CodecB,
+    BlindX,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QcCodecFamily {
+    Opus,
+    Vorbis,
+    Aac,
+    Mp3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcCodecProfileResponse {
+    pub profile_id: String,
+    pub label: String,
+    pub codec_family: QcCodecFamily,
+    pub target_platform: String,
+    pub target_bitrate_kbps: u32,
+    pub expected_latency_ms: u32,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QcPreparePreviewSessionInput {
+    pub source_track_id: String,
+    pub profile_a_id: String,
+    pub profile_b_id: String,
+    pub blind_x_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcPreviewSessionStateResponse {
+    pub source_track_id: String,
+    pub active_variant: QcPreviewVariant,
+    pub profile_a_id: String,
+    pub profile_b_id: String,
+    pub blind_x_enabled: bool,
+    pub blind_x_revealed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcPreviewActiveMediaResponse {
+    pub variant: QcPreviewVariant,
+    pub media_path: String,
+    pub blind_x_resolved_variant: Option<QcPreviewVariant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QcBatchExportStartInput {
+    pub source_track_id: String,
+    pub profile_ids: Vec<String>,
+    pub output_dir: String,
+    pub target_integrated_lufs: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcBatchExportStartResponse {
+    pub job_id: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcBatchExportProfileStatusResponse {
+    pub profile_id: String,
+    pub codec_family: QcCodecFamily,
+    pub target_platform: String,
+    pub target_bitrate_kbps: u32,
+    pub status: String,
+    pub progress_percent: u8,
+    pub output_path: Option<String>,
+    pub output_bytes: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QcBatchExportJobStatusResponse {
+    pub job_id: String,
+    pub source_track_id: String,
+    pub output_dir: String,
+    pub requested_profile_ids: Vec<String>,
+    pub requested_target_integrated_lufs: Option<f32>,
+    pub status: String,
+    pub progress_percent: u8,
+    pub total_profiles: usize,
+    pub completed_profiles: usize,
+    pub failed_profiles: usize,
+    pub created_at_unix_ms: u64,
+    pub updated_at_unix_ms: u64,
+    pub summary_path: Option<String>,
+    pub profiles: Vec<QcBatchExportProfileStatusResponse>,
 }
 
 const PLANNED_RELEASE_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
@@ -285,6 +398,18 @@ const MAX_PLAYBACK_QUEUE_TRACKS: usize = 10_000;
 const UNITY_GAIN_LEVEL: f32 = 1.0;
 const PUBLISHER_CATALOG_DRAFTS_DIR: &str = "publisher_catalog_drafts";
 const PUBLISHER_CATALOG_DRAFT_SPEC_FILE_NAME: &str = "release_spec.yaml";
+const ENV_QC_CODEC_PREVIEW_V1: &str = "RELEASE_PUBLISHER_QC_CODEC_PREVIEW_V1";
+const ENV_QC_REALTIME_METERS_V1: &str = "RELEASE_PUBLISHER_QC_REALTIME_METERS_V1";
+const ENV_QC_BATCH_EXPORT_V1: &str = "RELEASE_PUBLISHER_QC_BATCH_EXPORT_V1";
+const ENV_MAX_CONCURRENT_INGEST_SCANS: &str = "RELEASE_PUBLISHER_MAX_CONCURRENT_INGEST_SCANS";
+const DEFAULT_QC_CODEC_PREVIEW_V1: bool = true;
+const DEFAULT_QC_REALTIME_METERS_V1: bool = false;
+const DEFAULT_QC_BATCH_EXPORT_V1: bool = true;
+const DEFAULT_MAX_CONCURRENT_INGEST_SCANS: usize = 2;
+const MAX_CONCURRENT_INGEST_SCANS_HARD_LIMIT: usize = 8;
+const QC_PREVIEW_SESSION_ARTIFACTS_DIR: &str = "qc_preview_sessions";
+const INSTALL_FINGERPRINT_SCHEMA_VERSION: u32 = 1;
+const INSTALL_FINGERPRINT_FILE_NAME: &str = "install_fingerprint.json";
 const ALLOWED_CATALOG_VISIBILITY_POLICIES: &[&str] = &["LOCAL", "PRIVATE", "SHARE_EXPORT_READY"];
 const ALLOWED_CATALOG_LICENSE_POLICIES: &[&str] = &[
     "ALL_RIGHTS_RESERVED",
@@ -294,6 +419,818 @@ const ALLOWED_CATALOG_LICENSE_POLICIES: &[&str] = &[
     "CC0",
     "CUSTOM",
 ];
+
+fn parse_env_flag_bool(raw: &str) -> Option<bool> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn read_env_flag_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| parse_env_flag_bool(&value))
+        .unwrap_or(default)
+}
+
+fn read_env_usize(key: &str, default: usize, min: usize, max: usize) -> usize {
+    let default = default.clamp(min, max);
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
+}
+
+fn max_concurrent_ingest_scans_from_env() -> usize {
+    read_env_usize(
+        ENV_MAX_CONCURRENT_INGEST_SCANS,
+        DEFAULT_MAX_CONCURRENT_INGEST_SCANS,
+        1,
+        MAX_CONCURRENT_INGEST_SCANS_HARD_LIMIT,
+    )
+}
+
+fn qc_feature_flags_from_env() -> QcFeatureFlagsResponse {
+    QcFeatureFlagsResponse {
+        qc_codec_preview_v1: read_env_flag_bool(
+            ENV_QC_CODEC_PREVIEW_V1,
+            DEFAULT_QC_CODEC_PREVIEW_V1,
+        ),
+        qc_realtime_meters_v1: read_env_flag_bool(
+            ENV_QC_REALTIME_METERS_V1,
+            DEFAULT_QC_REALTIME_METERS_V1,
+        ),
+        qc_batch_export_v1: read_env_flag_bool(ENV_QC_BATCH_EXPORT_V1, DEFAULT_QC_BATCH_EXPORT_V1),
+    }
+}
+
+fn qc_codec_profile_registry(flags: &QcFeatureFlagsResponse) -> Vec<QcCodecProfileResponse> {
+    let available = flags.qc_codec_preview_v1;
+    vec![
+        QcCodecProfileResponse {
+            profile_id: "spotify_vorbis_320".to_string(),
+            label: "Spotify Vorbis 320 kbps".to_string(),
+            codec_family: QcCodecFamily::Vorbis,
+            target_platform: "Spotify".to_string(),
+            target_bitrate_kbps: 320,
+            expected_latency_ms: 38,
+            available,
+        },
+        QcCodecProfileResponse {
+            profile_id: "apple_music_aac_256".to_string(),
+            label: "Apple Music AAC 256 kbps".to_string(),
+            codec_family: QcCodecFamily::Aac,
+            target_platform: "Apple Music".to_string(),
+            target_bitrate_kbps: 256,
+            expected_latency_ms: 34,
+            available,
+        },
+        QcCodecProfileResponse {
+            profile_id: "youtube_opus_160".to_string(),
+            label: "YouTube Opus 160 kbps".to_string(),
+            codec_family: QcCodecFamily::Opus,
+            target_platform: "YouTube".to_string(),
+            target_bitrate_kbps: 160,
+            expected_latency_ms: 45,
+            available,
+        },
+        QcCodecProfileResponse {
+            profile_id: "legacy_mp3_320".to_string(),
+            label: "MP3 CBR 320 kbps".to_string(),
+            codec_family: QcCodecFamily::Mp3,
+            target_platform: "Legacy MP3".to_string(),
+            target_bitrate_kbps: 320,
+            expected_latency_ms: 32,
+            available,
+        },
+    ]
+}
+
+fn normalize_qc_profile_id(raw: &str, label: &str) -> Result<String, AppError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::invalid_argument(format!(
+            "{label} cannot be empty"
+        )));
+    }
+    if normalized
+        .chars()
+        .any(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+    {
+        return Err(AppError::invalid_argument(format!(
+            "{label} must contain only ASCII letters, digits, '_' or '-'"
+        )));
+    }
+    Ok(normalized)
+}
+
+fn ensure_qc_profile_ids_known(
+    profile_ids: &[String],
+    known_profiles: &[QcCodecProfileResponse],
+) -> Result<(), AppError> {
+    for profile_id in profile_ids {
+        let known = known_profiles
+            .iter()
+            .any(|profile| profile.profile_id == *profile_id);
+        if !known {
+            return Err(AppError::invalid_argument(format!(
+                "unknown qc profile_id: {profile_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QcBatchExportProfileSummary {
+    profile_id: String,
+    codec_family: QcCodecFamily,
+    output_path: Option<String>,
+    status: String,
+    message: String,
+    copied_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QcBatchExportSummary {
+    job_id: String,
+    source_track_id: String,
+    source_file_path: String,
+    output_dir: String,
+    requested_profile_ids: Vec<String>,
+    requested_target_integrated_lufs: Option<f32>,
+    completed_profiles: usize,
+    failed_profiles: usize,
+    profile_results: Vec<QcBatchExportProfileSummary>,
+}
+
+#[derive(Debug)]
+struct QcBatchExportJobStore {
+    jobs: RwLock<HashMap<String, QcBatchExportJobStatusResponse>>,
+}
+
+impl QcBatchExportJobStore {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            jobs: RwLock::new(HashMap::new()),
+        })
+    }
+
+    fn insert_job(&self, job: QcBatchExportJobStatusResponse) {
+        if let Ok(mut guard) = self.jobs.write() {
+            guard.insert(job.job_id.clone(), job);
+        } else {
+            tracing::warn!(
+                target: "desktop.qc",
+                "failed to lock QC batch export store for insert"
+            );
+        }
+    }
+
+    fn get_job(&self, job_id: &str) -> Result<Option<QcBatchExportJobStatusResponse>, AppError> {
+        self.jobs
+            .read()
+            .map(|guard| guard.get(job_id).cloned())
+            .map_err(|_| {
+                AppError::new(
+                    app_error_codes::INVALID_RELEASE_STATE,
+                    "failed to read QC batch export job state",
+                )
+            })
+    }
+
+    fn mutate_job(&self, job_id: &str, mutator: impl FnOnce(&mut QcBatchExportJobStatusResponse)) {
+        let mut guard = match self.jobs.write() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::warn!(
+                    target: "desktop.qc",
+                    job_id = %job_id,
+                    "failed to lock QC batch export store for update"
+                );
+                return;
+            }
+        };
+        let Some(job) = guard.get_mut(job_id) else {
+            tracing::warn!(
+                target: "desktop.qc",
+                job_id = %job_id,
+                "QC batch export job missing in state store"
+            );
+            return;
+        };
+        mutator(job);
+        qc_refresh_batch_export_progress(job);
+    }
+}
+
+fn next_qc_batch_export_job_id(source_track_id: &str) -> String {
+    static QC_BATCH_EXPORT_JOB_NONCE: AtomicU64 = AtomicU64::new(0);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let nonce = QC_BATCH_EXPORT_JOB_NONCE.fetch_add(1, Ordering::Relaxed);
+    catalog_id(
+        "qc-batch-export-job.v1",
+        &format!("{source_track_id}:{now_ms}:{nonce}"),
+    )
+}
+
+fn current_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn shared_qc_batch_export_job_store() -> Arc<QcBatchExportJobStore> {
+    static STORE: OnceLock<Arc<QcBatchExportJobStore>> = OnceLock::new();
+    Arc::clone(STORE.get_or_init(QcBatchExportJobStore::new))
+}
+
+fn qc_profile_extension(codec_family: &QcCodecFamily) -> &'static str {
+    match codec_family {
+        QcCodecFamily::Vorbis => "ogg",
+        QcCodecFamily::Aac => "m4a",
+        QcCodecFamily::Opus => "opus",
+        QcCodecFamily::Mp3 => "mp3",
+    }
+}
+
+fn qc_batch_export_target_path(
+    source_path: &Path,
+    output_dir: &Path,
+    profile: &QcCodecProfileResponse,
+) -> PathBuf {
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("track");
+    let extension = qc_profile_extension(&profile.codec_family);
+    output_dir.join(format!("{stem}--{}.{extension}", profile.profile_id))
+}
+
+fn qc_batch_export_summary_path(output_dir: &Path, job_id: &str) -> PathBuf {
+    output_dir.join(format!("qc_batch_export_{job_id}_summary.json"))
+}
+
+fn qc_preview_session_cache_key(session: &QcPreviewSessionStateResponse) -> String {
+    let material = format!(
+        "{}\n{}\n{}",
+        session.source_track_id, session.profile_a_id, session.profile_b_id
+    );
+    blake3_hex(material.as_bytes())
+}
+
+fn qc_preview_session_output_dir(artifacts_root: &Path, session_cache_key: &str) -> PathBuf {
+    artifacts_root
+        .join(QC_PREVIEW_SESSION_ARTIFACTS_DIR)
+        .join(session_cache_key)
+}
+
+fn qc_preview_variant_target_path(
+    output_dir: &Path,
+    variant_label: &str,
+    profile: &QcCodecProfileResponse,
+) -> PathBuf {
+    output_dir.join(format!(
+        "{variant_label}.{}",
+        qc_profile_extension(&profile.codec_family)
+    ))
+}
+
+fn qc_preview_blind_assignment(session_cache_key: &str) -> QcPreviewVariant {
+    let nibble = session_cache_key
+        .bytes()
+        .next()
+        .and_then(|byte| char::from(byte).to_digit(16))
+        .unwrap_or(0);
+    if nibble.is_multiple_of(2) {
+        QcPreviewVariant::CodecA
+    } else {
+        QcPreviewVariant::CodecB
+    }
+}
+
+async fn qc_encode_preview_artifact_if_needed(
+    source_file_path: &Path,
+    output_path: &Path,
+    profile: &QcCodecProfileResponse,
+) -> Result<(), AppError> {
+    if let Ok(metadata) = tokio::fs::metadata(output_path).await {
+        if metadata.is_file() {
+            return Ok(());
+        }
+    }
+
+    match encode_qc_profile_artifact(source_file_path, output_path, profile, None).await {
+        Ok(_) => Ok(()),
+        Err(error) => Err(AppError::new(
+            app_error_codes::IO_ERROR,
+            format!(
+                "failed to prepare QC preview media for profile {}: {error}",
+                profile.profile_id
+            ),
+        )),
+    }
+}
+
+async fn qc_preview_media_state_is_reusable(
+    media_state: &QcPreviewSessionMediaState,
+    session_cache_key: &str,
+) -> bool {
+    if media_state.session_cache_key != session_cache_key {
+        return false;
+    }
+    for path in [
+        &media_state.source_media_path,
+        &media_state.codec_a_media_path,
+        &media_state.codec_b_media_path,
+    ] {
+        let Ok(metadata) = tokio::fs::metadata(Path::new(path)).await else {
+            return false;
+        };
+        if !metadata.is_file() {
+            return false;
+        }
+    }
+    true
+}
+
+async fn qc_ensure_preview_media_state(
+    service: &CommandService,
+    store: &QcPreviewSessionStore,
+    flags: &QcFeatureFlagsResponse,
+    session: &QcPreviewSessionStateResponse,
+) -> Result<QcPreviewSessionMediaState, AppError> {
+    let session_cache_key = qc_preview_session_cache_key(session);
+    if let Some(existing) = store.get_media_state()? {
+        if qc_preview_media_state_is_reusable(&existing, &session_cache_key).await {
+            return Ok(existing);
+        }
+    }
+
+    let source_track = service
+        .handle_catalog_get_track(&session.source_track_id)
+        .await?
+        .ok_or_else(|| AppError::invalid_argument("catalog source_track_id not found"))?;
+    let source_file_path =
+        canonicalize_file_path(&source_track.file_path, "catalog source file").await?;
+
+    let profiles = qc_codec_profile_registry(flags);
+    let profiles_by_id: HashMap<String, QcCodecProfileResponse> = profiles
+        .into_iter()
+        .map(|profile| (profile.profile_id.clone(), profile))
+        .collect();
+    let profile_a = profiles_by_id
+        .get(&session.profile_a_id)
+        .cloned()
+        .ok_or_else(|| AppError::invalid_argument("profile_a_id is not available"))?;
+    let profile_b = profiles_by_id
+        .get(&session.profile_b_id)
+        .cloned()
+        .ok_or_else(|| AppError::invalid_argument("profile_b_id is not available"))?;
+
+    let output_dir = qc_preview_session_output_dir(&service.artifacts_root, &session_cache_key);
+    tokio::fs::create_dir_all(&output_dir)
+        .await
+        .map_err(|error| {
+            AppError::file_write_failed(format!(
+                "failed to create QC preview session output dir: {error}"
+            ))
+        })?;
+
+    let codec_a_path = qc_preview_variant_target_path(&output_dir, "codec_a", &profile_a);
+    let codec_b_path = qc_preview_variant_target_path(&output_dir, "codec_b", &profile_b);
+    qc_encode_preview_artifact_if_needed(&source_file_path, &codec_a_path, &profile_a).await?;
+    qc_encode_preview_artifact_if_needed(&source_file_path, &codec_b_path, &profile_b).await?;
+
+    let media_state = QcPreviewSessionMediaState {
+        session_cache_key: session_cache_key.clone(),
+        source_media_path: path_to_string(&source_file_path),
+        codec_a_media_path: path_to_string(&codec_a_path),
+        codec_b_media_path: path_to_string(&codec_b_path),
+        blind_x_assignment: qc_preview_blind_assignment(&session_cache_key),
+    };
+    store.set_media_state(media_state.clone())?;
+    Ok(media_state)
+}
+
+fn qc_refresh_batch_export_progress(job: &mut QcBatchExportJobStatusResponse) {
+    let now = current_unix_ms();
+    let completed = job
+        .profiles
+        .iter()
+        .filter(|profile| profile.status == "completed")
+        .count();
+    let failed = job
+        .profiles
+        .iter()
+        .filter(|profile| profile.status == "failed")
+        .count();
+    let running = job
+        .profiles
+        .iter()
+        .filter(|profile| profile.status == "running")
+        .count();
+
+    job.completed_profiles = completed;
+    job.failed_profiles = failed;
+    job.total_profiles = job.profiles.len();
+    job.progress_percent = if job.profiles.is_empty() {
+        100
+    } else {
+        (job.profiles
+            .iter()
+            .map(|profile| u64::from(profile.progress_percent))
+            .sum::<u64>()
+            / (job.profiles.len() as u64))
+            .min(100) as u8
+    };
+    job.status = if completed == job.total_profiles && failed == 0 {
+        "completed".to_string()
+    } else if completed + failed == job.total_profiles && failed > 0 && completed > 0 {
+        "completed_with_errors".to_string()
+    } else if failed == job.total_profiles && job.total_profiles > 0 {
+        "failed".to_string()
+    } else if running > 0 || completed > 0 || failed > 0 {
+        "running".to_string()
+    } else {
+        "queued".to_string()
+    };
+    job.updated_at_unix_ms = now;
+}
+
+fn qc_find_profile_mut<'a>(
+    job: &'a mut QcBatchExportJobStatusResponse,
+    profile_id: &str,
+) -> Option<&'a mut QcBatchExportProfileStatusResponse> {
+    job.profiles
+        .iter_mut()
+        .find(|profile| profile.profile_id == profile_id)
+}
+
+enum QcEncoderExecutionResult {
+    Encoded { output_bytes: u64 },
+}
+
+fn qc_ffmpeg_codec_args(profile: &QcCodecProfileResponse) -> Vec<String> {
+    let bitrate = format!("{}k", profile.target_bitrate_kbps);
+    match profile.codec_family {
+        QcCodecFamily::Vorbis => vec![
+            "-vn".to_string(),
+            "-c:a".to_string(),
+            "libvorbis".to_string(),
+            "-b:a".to_string(),
+            bitrate,
+        ],
+        QcCodecFamily::Aac => vec![
+            "-vn".to_string(),
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            bitrate,
+            "-movflags".to_string(),
+            "+faststart".to_string(),
+        ],
+        QcCodecFamily::Opus => vec![
+            "-vn".to_string(),
+            "-c:a".to_string(),
+            "libopus".to_string(),
+            "-b:a".to_string(),
+            bitrate,
+        ],
+        QcCodecFamily::Mp3 => vec![
+            "-vn".to_string(),
+            "-c:a".to_string(),
+            "libmp3lame".to_string(),
+            "-b:a".to_string(),
+            bitrate,
+        ],
+    }
+}
+
+async fn encode_qc_profile_artifact(
+    source_file_path: &Path,
+    output_path: &Path,
+    profile: &QcCodecProfileResponse,
+    target_integrated_lufs: Option<f32>,
+) -> Result<QcEncoderExecutionResult, String> {
+    let source_file_path = source_file_path.to_path_buf();
+    let output_path = output_path.to_path_buf();
+    let ffmpeg_source_file_path = source_file_path.clone();
+    let ffmpeg_output_path = output_path.clone();
+    let ffmpeg_codec_args = qc_ffmpeg_codec_args(profile);
+    let ffmpeg_loudnorm_arg = target_integrated_lufs
+        .map(|target_lufs| format!("loudnorm=I={target_lufs:.1}:TP=-1.0:LRA=11"));
+
+    let ffmpeg_output = tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new("ffmpeg");
+        command
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-nostdin")
+            .arg("-y")
+            .arg("-i")
+            .arg(ffmpeg_source_file_path.as_os_str());
+
+        if let Some(loudnorm_arg) = ffmpeg_loudnorm_arg {
+            command.arg("-af").arg(loudnorm_arg);
+        }
+        for arg in ffmpeg_codec_args {
+            command.arg(arg);
+        }
+        command.arg(ffmpeg_output_path.as_os_str());
+        command.output()
+    })
+    .await
+    .map_err(|error| format!("failed to join ffmpeg worker: {error}"))?;
+
+    let output = match ffmpeg_output {
+        Ok(output) => output,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(format!("ffmpeg executable not found in PATH: {error}"));
+        }
+        Err(error) => return Err(format!("failed to launch ffmpeg: {error}")),
+    };
+
+    if output.status.success() {
+        let metadata = tokio::fs::metadata(output_path)
+            .await
+            .map_err(|error| format!("encoded file missing after ffmpeg success: {error}"))?;
+        return Ok(QcEncoderExecutionResult::Encoded {
+            output_bytes: metadata.len(),
+        });
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let ffmpeg_error = if stderr.is_empty() {
+        format!("ffmpeg exited with status {}", output.status)
+    } else {
+        format!("ffmpeg exited with status {}: {stderr}", output.status)
+    };
+
+    Err(ffmpeg_error)
+}
+
+async fn run_qc_batch_export_job(
+    job_id: String,
+    source_track_id: String,
+    source_file_path: PathBuf,
+    output_dir: PathBuf,
+    selected_profiles: Vec<QcCodecProfileResponse>,
+    target_integrated_lufs: Option<f32>,
+    store: Arc<QcBatchExportJobStore>,
+) {
+    store.mutate_job(&job_id, |job| {
+        job.status = "running".to_string();
+    });
+
+    let mut completed_profiles = 0usize;
+    let mut failed_profiles = 0usize;
+    let mut profile_results = Vec::with_capacity(selected_profiles.len());
+
+    for profile in &selected_profiles {
+        let profile_id = profile.profile_id.clone();
+        store.mutate_job(&job_id, |job| {
+            if let Some(progress) = qc_find_profile_mut(job, &profile_id) {
+                progress.status = "running".to_string();
+                progress.progress_percent = 10;
+                progress.message = Some("Encoding started".to_string());
+            }
+        });
+
+        let output_path = qc_batch_export_target_path(&source_file_path, &output_dir, profile);
+        match encode_qc_profile_artifact(
+            &source_file_path,
+            &output_path,
+            profile,
+            target_integrated_lufs,
+        )
+        .await
+        {
+            Ok(QcEncoderExecutionResult::Encoded { output_bytes }) => {
+                completed_profiles += 1;
+                store.mutate_job(&job_id, |job| {
+                    if let Some(progress) = qc_find_profile_mut(job, &profile_id) {
+                        progress.status = "completed".to_string();
+                        progress.progress_percent = 100;
+                        progress.output_path = Some(path_to_string(&output_path));
+                        progress.output_bytes = Some(output_bytes);
+                        progress.message = Some("Encoded successfully".to_string());
+                    }
+                });
+                profile_results.push(QcBatchExportProfileSummary {
+                    profile_id: profile.profile_id.clone(),
+                    codec_family: profile.codec_family.clone(),
+                    output_path: Some(path_to_string(&output_path)),
+                    status: "completed".to_string(),
+                    message: "encoded successfully".to_string(),
+                    copied_bytes: Some(output_bytes),
+                });
+            }
+            Err(error) => {
+                failed_profiles += 1;
+                store.mutate_job(&job_id, |job| {
+                    if let Some(progress) = qc_find_profile_mut(job, &profile_id) {
+                        progress.status = "failed".to_string();
+                        progress.progress_percent = 100;
+                        progress.output_path = None;
+                        progress.output_bytes = None;
+                        progress.message = Some(error.clone());
+                    }
+                });
+                profile_results.push(QcBatchExportProfileSummary {
+                    profile_id: profile.profile_id.clone(),
+                    codec_family: profile.codec_family.clone(),
+                    output_path: None,
+                    status: "failed".to_string(),
+                    message: format!("failed to write output artifact: {error}"),
+                    copied_bytes: None,
+                });
+            }
+        }
+    }
+
+    let summary = QcBatchExportSummary {
+        job_id: job_id.clone(),
+        source_track_id,
+        source_file_path: path_to_string(&source_file_path),
+        output_dir: path_to_string(&output_dir),
+        requested_profile_ids: selected_profiles
+            .iter()
+            .map(|profile| profile.profile_id.clone())
+            .collect(),
+        requested_target_integrated_lufs: target_integrated_lufs,
+        completed_profiles,
+        failed_profiles,
+        profile_results,
+    };
+
+    let summary_path = qc_batch_export_summary_path(&output_dir, &job_id);
+    match serde_json::to_vec_pretty(&summary) {
+        Ok(bytes) => {
+            if let Err(error) = tokio::fs::write(&summary_path, bytes).await {
+                tracing::warn!(
+                    target: "desktop.qc",
+                    job_id = %job_id,
+                    output_dir = %path_to_string(&output_dir),
+                    error = %error,
+                    "failed to persist QC batch export summary"
+                );
+            } else {
+                tracing::info!(
+                    target: "desktop.qc",
+                    job_id = %job_id,
+                    output_dir = %path_to_string(&output_dir),
+                    completed_profiles,
+                    failed_profiles,
+                    summary_path = %path_to_string(&summary_path),
+                    "QC batch export job completed"
+                );
+                store.mutate_job(&job_id, |job| {
+                    job.summary_path = Some(path_to_string(&summary_path));
+                });
+            }
+        }
+        Err(error) => tracing::warn!(
+            target: "desktop.qc",
+            job_id = %job_id,
+            error = %error,
+            "failed to serialize QC batch export summary"
+        ),
+    }
+}
+
+#[derive(Debug)]
+struct QcPreviewSessionStore {
+    state: RwLock<Option<QcPreviewSessionStateResponse>>,
+    media_state: RwLock<Option<QcPreviewSessionMediaState>>,
+}
+
+#[derive(Debug, Clone)]
+struct QcPreviewSessionMediaState {
+    session_cache_key: String,
+    source_media_path: String,
+    codec_a_media_path: String,
+    codec_b_media_path: String,
+    blind_x_assignment: QcPreviewVariant,
+}
+
+impl QcPreviewSessionStore {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: RwLock::new(None),
+            media_state: RwLock::new(None),
+        })
+    }
+
+    fn get_state(&self) -> Result<Option<QcPreviewSessionStateResponse>, AppError> {
+        self.state.read().map(|guard| guard.clone()).map_err(|_| {
+            AppError::new(
+                app_error_codes::INVALID_RELEASE_STATE,
+                "failed to read QC preview session state",
+            )
+        })
+    }
+
+    fn set_state(
+        &self,
+        session: QcPreviewSessionStateResponse,
+    ) -> Result<QcPreviewSessionStateResponse, AppError> {
+        let mut guard = self.state.write().map_err(|_| {
+            AppError::new(
+                app_error_codes::INVALID_RELEASE_STATE,
+                "failed to update QC preview session state",
+            )
+        })?;
+        *guard = Some(session.clone());
+        if let Ok(mut media_guard) = self.media_state.write() {
+            *media_guard = None;
+        }
+        Ok(session)
+    }
+
+    fn set_active_variant(
+        &self,
+        variant: QcPreviewVariant,
+    ) -> Result<QcPreviewSessionStateResponse, AppError> {
+        let mut guard = self.state.write().map_err(|_| {
+            AppError::new(
+                app_error_codes::INVALID_RELEASE_STATE,
+                "failed to update QC preview session state",
+            )
+        })?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| AppError::invalid_argument("QC preview session is not prepared"))?;
+        if matches!(variant, QcPreviewVariant::BlindX) && !session.blind_x_enabled {
+            return Err(AppError::invalid_argument(
+                "blind_x variant is unavailable when blind_x_enabled is false",
+            ));
+        }
+        session.active_variant = variant;
+        if !matches!(session.active_variant, QcPreviewVariant::BlindX) {
+            session.blind_x_revealed = true;
+        }
+        Ok(session.clone())
+    }
+
+    fn reveal_blind_x(&self) -> Result<QcPreviewSessionStateResponse, AppError> {
+        let mut guard = self.state.write().map_err(|_| {
+            AppError::new(
+                app_error_codes::INVALID_RELEASE_STATE,
+                "failed to update QC preview session state",
+            )
+        })?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| AppError::invalid_argument("QC preview session is not prepared"))?;
+        if !session.blind_x_enabled {
+            return Err(AppError::invalid_argument(
+                "blind_x reveal requires blind_x_enabled to be true",
+            ));
+        }
+        session.blind_x_revealed = true;
+        Ok(session.clone())
+    }
+
+    fn get_media_state(&self) -> Result<Option<QcPreviewSessionMediaState>, AppError> {
+        self.media_state
+            .read()
+            .map(|guard| guard.clone())
+            .map_err(|_| {
+                AppError::new(
+                    app_error_codes::INVALID_RELEASE_STATE,
+                    "failed to read QC preview media state",
+                )
+            })
+    }
+
+    fn set_media_state(&self, media_state: QcPreviewSessionMediaState) -> Result<(), AppError> {
+        let mut guard = self.media_state.write().map_err(|_| {
+            AppError::new(
+                app_error_codes::INVALID_RELEASE_STATE,
+                "failed to update QC preview media state",
+            )
+        })?;
+        *guard = Some(media_state);
+        Ok(())
+    }
+}
+
+fn shared_qc_preview_store() -> Arc<QcPreviewSessionStore> {
+    static STORE: OnceLock<Arc<QcPreviewSessionStore>> = OnceLock::new();
+    Arc::clone(STORE.get_or_init(QcPreviewSessionStore::new))
+}
 
 mod app_error_codes {
     pub const DB_PREFIX: &str = "DB_";
@@ -330,6 +1267,7 @@ mod app_error_codes {
     pub const EXCLUSIVE_AUDIO_UNAVAILABLE: &str = "EXCLUSIVE_AUDIO_UNAVAILABLE";
     pub const PLAYBACK_INVALID_VOLUME: &str = "PLAYBACK_INVALID_VOLUME";
     pub const PLAYBACK_QUEUE_REQUEST_REJECTED: &str = "PLAYBACK_QUEUE_REQUEST_REJECTED";
+    pub const FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 
     #[cfg(test)]
     pub const TEST_REDACTION_PROBE: &str = "TEST_REDACTION_PROBE";
@@ -401,6 +1339,12 @@ struct DecodedReleaseReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedInstallFingerprint {
+    schema_version: u32,
+    binary_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppError {
     pub code: String,
     pub message: String,
@@ -436,6 +1380,10 @@ impl AppError {
 
     fn invalid_encoding(message: impl Into<String>) -> Self {
         Self::new(app_error_codes::INVALID_ENCODING, message)
+    }
+
+    fn feature_disabled(message: impl Into<String>) -> Self {
+        Self::new(app_error_codes::FEATURE_DISABLED, message)
     }
 }
 
@@ -552,12 +1500,13 @@ impl From<OrchestratorError> for AppError {
                 code,
                 retryable,
                 message,
-            } => Self::new(app_error_codes::ORCHESTRATOR_PUBLISHER_FAILURE, message)
-                .with_details(serde_json::json!({
+            } => Self::new(app_error_codes::ORCHESTRATOR_PUBLISHER_FAILURE, message).with_details(
+                serde_json::json!({
                     "platform": platform,
                     "publisher_error_code": code,
                     "retryable": retryable,
-                })),
+                }),
+            ),
             OrchestratorError::Db(error) => Self::from(error),
             OrchestratorError::Io(error) => Self::new(app_error_codes::IO_ERROR, error.to_string()),
             OrchestratorError::Serialization(error) => {
@@ -687,6 +1636,9 @@ struct CommandService {
     db: Db,
     orchestrator: Arc<Orchestrator>,
     artifacts_root: PathBuf,
+    cancel_requested_ingest_jobs: RwLock<HashSet<String>>,
+    ingest_scan_semaphore: Arc<Semaphore>,
+    max_concurrent_ingest_scans: usize,
 }
 
 struct PreparedCatalogScanJob {
@@ -733,16 +1685,37 @@ impl CommandService {
         let mut cfg = DbConfig::sqlite(db_url);
         cfg.max_connections = 1;
         let db = Db::connect(&cfg).await?;
+        match maybe_reset_catalog_on_install_change(&db, base_dir).await {
+            Ok(true) => {
+                tracing::info!(
+                    target: "desktop.catalog",
+                    "catalog library reset because install fingerprint changed"
+                );
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "desktop.catalog",
+                    error_code = %error.code,
+                    error = %error.message,
+                    "failed to evaluate install fingerprint for catalog reset"
+                );
+            }
+        }
         let orchestrator = Orchestrator::with_publishers(
             db.clone(),
             vec![Arc::new(MockPublisher) as Arc<dyn release_publisher_core::pipeline::Publisher>],
         )
         .map_err(AppError::from)?;
+        let max_concurrent_ingest_scans = max_concurrent_ingest_scans_from_env();
 
         Ok(Self {
             db,
             orchestrator: Arc::new(orchestrator),
             artifacts_root,
+            cancel_requested_ingest_jobs: RwLock::new(HashSet::new()),
+            ingest_scan_semaphore: Arc::new(Semaphore::new(max_concurrent_ingest_scans)),
+            max_concurrent_ingest_scans,
         })
     }
 
@@ -1157,6 +2130,11 @@ impl CommandService {
             .map_err(AppError::from)
     }
 
+    async fn handle_catalog_reset_library_data(&self) -> Result<bool, AppError> {
+        self.db.reset_catalog_library_data().await?;
+        Ok(true)
+    }
+
     async fn handle_catalog_scan_root_prepare(
         &self,
         root_id: &str,
@@ -1200,6 +2178,59 @@ impl CommandService {
         Ok(Some(catalog_ingest_job_response_from_db(job)))
     }
 
+    async fn handle_catalog_cancel_ingest_job(&self, job_id: &str) -> Result<bool, AppError> {
+        let job_id = validate_catalog_hex_id(job_id, "ingest job_id")?;
+        let Some(job) = self.db.get_ingest_job(&job_id).await? else {
+            return Ok(false);
+        };
+        if matches!(
+            job.status,
+            DbIngestJobStatus::Completed | DbIngestJobStatus::Failed | DbIngestJobStatus::Canceled
+        ) {
+            return Ok(false);
+        }
+
+        self.mark_ingest_job_cancel_requested(&job_id);
+        self.db
+            .update_ingest_job(&UpdateIngestJob {
+                job_id: job_id.clone(),
+                status: DbIngestJobStatus::Canceled,
+                total_items: job.total_items,
+                processed_items: job.processed_items,
+                error_count: job.error_count,
+            })
+            .await?;
+        let _ = self
+            .db
+            .append_ingest_event(&NewIngestEvent {
+                job_id: job_id.clone(),
+                level: "INFO".to_string(),
+                message: "Ingest job canceled by user request.".to_string(),
+                payload_json: Some(serde_json::json!({ "status": "CANCELED" })),
+            })
+            .await;
+        Ok(true)
+    }
+
+    fn mark_ingest_job_cancel_requested(&self, job_id: &str) {
+        if let Ok(mut guard) = self.cancel_requested_ingest_jobs.write() {
+            guard.insert(job_id.to_string());
+        }
+    }
+
+    fn clear_ingest_job_cancel_requested(&self, job_id: &str) {
+        if let Ok(mut guard) = self.cancel_requested_ingest_jobs.write() {
+            guard.remove(job_id);
+        }
+    }
+
+    fn is_ingest_job_cancel_requested(&self, job_id: &str) -> bool {
+        self.cancel_requested_ingest_jobs
+            .read()
+            .map(|guard| guard.contains(job_id))
+            .unwrap_or(false)
+    }
+
     async fn import_catalog_track_from_path(
         &self,
         path: &str,
@@ -1228,17 +2259,6 @@ impl CommandService {
         let album_id = album_key
             .as_ref()
             .map(|key| catalog_id("catalog-album.v1", &format!("{artist_id}:{key}")));
-        let true_peak_dbfs = analyzed
-            .track
-            .peak_data()
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let true_peak_dbfs = if true_peak_dbfs.is_finite() {
-            Some(true_peak_dbfs)
-        } else {
-            None
-        };
 
         self.db
             .upsert_catalog_track_import(&UpsertCatalogTrackImport {
@@ -1254,7 +2274,7 @@ impl CommandService {
                 duration_ms: analyzed.track.duration_ms(),
                 peak_data: analyzed.track.peak_data().to_vec(),
                 loudness_lufs: analyzed.track.loudness_lufs(),
-                true_peak_dbfs,
+                true_peak_dbfs: analyzed.true_peak_dbfs,
                 sample_rate_hz: analyzed.sample_rate_hz,
                 channels: analyzed.channels,
                 visibility_policy: "LOCAL".to_string(),
@@ -1387,6 +2407,70 @@ impl CommandService {
     }
 }
 
+fn current_install_fingerprint() -> Option<String> {
+    let executable_path = std::env::current_exe().ok()?;
+    let metadata = std::fs::metadata(&executable_path).ok()?;
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let normalized_path = executable_path.to_string_lossy().replace('\\', "/");
+    Some(format!(
+        "{}:{}:{}:{}",
+        env!("CARGO_PKG_VERSION"),
+        normalized_path,
+        metadata.len(),
+        modified_unix_ms
+    ))
+}
+
+fn install_fingerprint_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(INSTALL_FINGERPRINT_FILE_NAME)
+}
+
+async fn maybe_reset_catalog_on_install_change(
+    db: &Db,
+    base_dir: &Path,
+) -> Result<bool, AppError> {
+    let Some(current_fingerprint) = current_install_fingerprint() else {
+        return Ok(false);
+    };
+    let fingerprint_path = install_fingerprint_path(base_dir);
+    let mut should_reset_catalog = true;
+
+    if let Ok(bytes) = tokio::fs::read(&fingerprint_path).await {
+        if let Ok(persisted) = serde_json::from_slice::<PersistedInstallFingerprint>(&bytes) {
+            if persisted.schema_version == INSTALL_FINGERPRINT_SCHEMA_VERSION
+                && persisted.binary_fingerprint == current_fingerprint
+            {
+                should_reset_catalog = false;
+            }
+        }
+    }
+
+    if should_reset_catalog {
+        db.reset_catalog_library_data().await?;
+    }
+
+    let fingerprint_record = PersistedInstallFingerprint {
+        schema_version: INSTALL_FINGERPRINT_SCHEMA_VERSION,
+        binary_fingerprint: current_fingerprint,
+    };
+    let encoded = serde_json::to_vec_pretty(&fingerprint_record).map_err(|error| {
+        AppError::new(
+            app_error_codes::SERIALIZATION_ERROR,
+            format!("failed to encode install fingerprint state: {error}"),
+        )
+    })?;
+    tokio::fs::write(fingerprint_path, encoded).await.map_err(|error| {
+        AppError::file_write_failed(format!("failed to write install fingerprint state: {error}"))
+    })?;
+
+    Ok(should_reset_catalog)
+}
+
 fn resolve_runtime_base_dir() -> Result<PathBuf, AppError> {
     static DEFAULT_BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
     if let Ok(value) = std::env::var("RELEASE_PUBLISHER_DATA_DIR") {
@@ -1474,6 +2558,7 @@ struct PlaybackControlPlane {
     exclusive_engine: RwLock<Option<ExclusiveAudioEngine>>,
     volume_scalar_bits: AtomicU32,
     is_bit_perfect_bypassed: AtomicBool,
+    transport_playing: AtomicBool,
     active_queue_index: AtomicU32,
     is_queue_ui_expanded: AtomicBool,
     playback_queue_paths: RwLock<Vec<String>>,
@@ -1493,6 +2578,7 @@ impl PlaybackControlPlane {
             exclusive_engine: RwLock::new(None),
             volume_scalar_bits: AtomicU32::new(UNITY_GAIN_LEVEL.to_bits()),
             is_bit_perfect_bypassed: AtomicBool::new(true),
+            transport_playing: AtomicBool::new(false),
             active_queue_index: AtomicU32::new(0),
             is_queue_ui_expanded: AtomicBool::new(false),
             playback_queue_paths: RwLock::new(Vec::new()),
@@ -1513,25 +2599,21 @@ impl PlaybackControlPlane {
         control.worker_running.store(true, Ordering::Release);
         match std::thread::Builder::new()
             .name("rp-playback-track-change-worker".to_string())
-            .spawn(move || {
-                loop {
-                    let mut drained_any = false;
-                    while let Some(request) = worker.track_change_queue.pop() {
-                        drained_any = true;
-                        worker.try_prepare_track_for_queue_index(request.new_index);
-                        worker
-                            .active_queue_index
-                            .store(request.new_index, Ordering::Release);
-                        worker
-                            .last_applied_track_change_request_id
-                            .store(request.request_id, Ordering::Release);
-                    }
+            .spawn(move || loop {
+                let mut drained_any = false;
+                while let Some(request) = worker.track_change_queue.pop() {
+                    drained_any = true;
+                    worker.try_prepare_track_for_queue_index(request.new_index);
+                    worker
+                        .active_queue_index
+                        .store(request.new_index, Ordering::Release);
+                    worker
+                        .last_applied_track_change_request_id
+                        .store(request.request_id, Ordering::Release);
+                }
 
-                    if !drained_any {
-                        std::thread::sleep(Duration::from_millis(
-                            PLAYBACK_COMMAND_THREAD_IDLE_MS,
-                        ));
-                    }
+                if !drained_any {
+                    std::thread::sleep(Duration::from_millis(PLAYBACK_COMMAND_THREAD_IDLE_MS));
                 }
             }) {
             Ok(_) => {}
@@ -1578,8 +2660,60 @@ impl PlaybackControlPlane {
 
         #[cfg(target_os = "windows")]
         {
-            let (engine, buffer_size_frames) =
-                start_wasapi_exclusive_engine(target_rate_hz, target_bit_depth)?;
+            let candidates =
+                wasapi_exclusive_fallback_candidates(target_rate_hz, target_bit_depth);
+            let mut startup_attempt_errors: Vec<String> = Vec::new();
+            let mut selected_config: Option<(ExclusiveAudioEngine, u32, u32, u16, usize)> = None;
+
+            for (attempt_index, (sample_rate_hz, bit_depth)) in candidates.into_iter().enumerate()
+            {
+                match start_wasapi_exclusive_engine(sample_rate_hz, bit_depth) {
+                    Ok((engine, buffer_size_frames)) => {
+                        selected_config = Some((
+                            engine,
+                            buffer_size_frames,
+                            sample_rate_hz,
+                            bit_depth,
+                            attempt_index,
+                        ));
+                        break;
+                    }
+                    Err(error) => {
+                        if attempt_index == 0
+                            && !is_wasapi_unsupported_format_error(&error.message)
+                        {
+                            return Err(error);
+                        }
+                        startup_attempt_errors.push(format!(
+                            "{sample_rate_hz}Hz/{bit_depth}-bit: {}",
+                            error.message
+                        ));
+                    }
+                }
+            }
+
+            let Some((engine, buffer_size_frames, selected_rate_hz, selected_bit_depth, attempt)) =
+                selected_config
+            else {
+                return Err(AppError::new(
+                    app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                    format!(
+                        "failed to initialize WASAPI exclusive output for all attempted formats: {}",
+                        startup_attempt_errors.join(" | ")
+                    ),
+                ));
+            };
+
+            if attempt > 0 {
+                tracing::warn!(
+                    target: "desktop.player",
+                    requested_sample_rate_hz = target_rate_hz,
+                    requested_bit_depth = target_bit_depth,
+                    selected_sample_rate_hz = selected_rate_hz,
+                    selected_bit_depth = selected_bit_depth,
+                    "WASAPI exclusive requested format unsupported; using fallback format"
+                );
+            }
             let previous_engine = {
                 let mut guard = self.exclusive_engine.write().map_err(|_| {
                     AppError::new(
@@ -1594,8 +2728,8 @@ impl PlaybackControlPlane {
             }
 
             let hardware = AudioHardwareState {
-                sample_rate_hz: target_rate_hz,
-                bit_depth: target_bit_depth,
+                sample_rate_hz: selected_rate_hz,
+                bit_depth: selected_bit_depth,
                 buffer_size_frames,
                 is_exclusive_lock: true,
             };
@@ -1620,7 +2754,8 @@ impl PlaybackControlPlane {
             ));
         }
 
-        self.volume_scalar_bits.store(level.to_bits(), Ordering::Release);
+        self.volume_scalar_bits
+            .store(level.to_bits(), Ordering::Release);
         self.is_bit_perfect_bypassed
             .store(level == UNITY_GAIN_LEVEL, Ordering::Release);
         Ok(())
@@ -1654,6 +2789,7 @@ impl PlaybackControlPlane {
                 *decoded_guard = None;
             }
             self.playback_frame_cursor.store(0, Ordering::Release);
+            self.transport_playing.store(false, Ordering::Release);
             self.set_decode_error(Some("playback queue is empty".to_string()));
             self.active_queue_index.store(0, Ordering::Release);
         }
@@ -1683,6 +2819,69 @@ impl PlaybackControlPlane {
         Ok(self.track_change_queue.push(request).is_ok())
     }
 
+    fn apply_pending_track_change_requests_inline(&self) {
+        let mut latest_request: Option<TrackChangeRequest> = None;
+        while let Some(request) = self.track_change_queue.pop() {
+            latest_request = Some(request);
+        }
+        let Some(request) = latest_request else {
+            return;
+        };
+
+        self.try_prepare_track_for_queue_index(request.new_index);
+        self.active_queue_index
+            .store(request.new_index, Ordering::Release);
+        self.last_applied_track_change_request_id
+            .store(request.request_id, Ordering::Release);
+    }
+
+    fn set_playback_playing(&self, is_playing: bool) -> Result<(), AppError> {
+        if is_playing {
+            if self.current_decoded_track().is_none() {
+                self.apply_pending_track_change_requests_inline();
+            }
+            if self.current_decoded_track().is_none() {
+                let active_queue_index = self.active_queue_index.load(Ordering::Acquire);
+                self.try_prepare_track_for_queue_index(active_queue_index);
+            }
+            if self.current_decoded_track().is_none() {
+                let message = self
+                    .decode_error()
+                    .unwrap_or_else(|| "no decoded playback track is armed".to_string());
+                return Err(AppError::new(
+                    app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED,
+                    message,
+                ));
+            }
+        }
+
+        self.transport_playing.store(is_playing, Ordering::Release);
+        Ok(())
+    }
+
+    fn seek_playback_ratio(&self, ratio: f32) -> Result<(), AppError> {
+        if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
+            return Err(AppError::invalid_argument(
+                "seek ratio must be a finite float between 0.0 and 1.0",
+            ));
+        }
+
+        let Some(track) = self.current_decoded_track() else {
+            return Err(AppError::new(
+                app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED,
+                "no decoded playback track is armed",
+            ));
+        };
+
+        let total_frames = track.total_frames as u64;
+        let target_frame = ((total_frames as f64) * (ratio as f64))
+            .round()
+            .clamp(0.0, total_frames as f64) as u64;
+        self.playback_frame_cursor
+            .store(target_frame, Ordering::Release);
+        Ok(())
+    }
+
     fn toggle_queue_visibility(&self) {
         let previous = self.is_queue_ui_expanded.load(Ordering::Acquire);
         self.is_queue_ui_expanded
@@ -1690,14 +2889,26 @@ impl PlaybackControlPlane {
     }
 
     fn context_state(&self) -> PlaybackContextState {
+        let decoded = self.current_decoded_track();
+        let (position_seconds, track_duration_seconds) = match decoded {
+            Some(track) if track.sample_rate_hz > 0 => {
+                let cursor_frames = self.playback_frame_cursor.load(Ordering::Acquire) as f64;
+                let duration = track.total_frames as f64 / track.sample_rate_hz as f64;
+                let position = (cursor_frames / track.sample_rate_hz as f64).clamp(0.0, duration);
+                (position, duration)
+            }
+            _ => (0.0, 0.0),
+        };
+
         PlaybackContextState {
             volume_scalar: f32::from_bits(self.volume_scalar_bits.load(Ordering::Acquire)),
-            is_bit_perfect_bypassed: self
-                .is_bit_perfect_bypassed
-                .load(Ordering::Acquire),
+            is_bit_perfect_bypassed: self.is_bit_perfect_bypassed.load(Ordering::Acquire),
             active_queue_index: self.active_queue_index.load(Ordering::Acquire),
             is_queue_ui_expanded: self.is_queue_ui_expanded.load(Ordering::Acquire),
             queued_track_change_requests: self.track_change_queue.len(),
+            is_playing: self.transport_playing.load(Ordering::Acquire),
+            position_seconds,
+            track_duration_seconds,
         }
     }
 
@@ -1760,7 +2971,7 @@ impl PlaybackControlPlane {
             return;
         };
 
-        match decode_track_to_stereo_i16_pcm(
+        match decode_track_to_stereo_f32_pcm(
             Path::new(&path),
             hardware.sample_rate_hz,
             hardware.bit_depth,
@@ -1788,20 +2999,54 @@ fn shared_playback_control() -> Arc<PlaybackControlPlane> {
     Arc::clone(CONTROL.get_or_init(PlaybackControlPlane::new))
 }
 
-fn decode_track_to_stereo_i16_pcm(
+#[cfg(target_os = "windows")]
+fn is_wasapi_unsupported_format_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("0x88890008") || lower.contains("audclnt_e_unsupported_format")
+}
+
+#[cfg(target_os = "windows")]
+fn wasapi_exclusive_fallback_candidates(
+    target_rate_hz: u32,
+    target_bit_depth: u16,
+) -> Vec<(u32, u16)> {
+    let preferred_rates_hz = [target_rate_hz, 48_000, 44_100, 96_000];
+    let preferred_bit_depths = [target_bit_depth, 24, 16, 32];
+    let mut candidates: Vec<(u32, u16)> = Vec::new();
+
+    for sample_rate_hz in preferred_rates_hz {
+        for bit_depth in preferred_bit_depths {
+            if sample_rate_hz == 0 || !matches!(bit_depth, 16 | 24 | 32) {
+                continue;
+            }
+            if candidates.contains(&(sample_rate_hz, bit_depth)) {
+                continue;
+            }
+            candidates.push((sample_rate_hz, bit_depth));
+        }
+    }
+
+    if candidates.is_empty() {
+        candidates.push((48_000, 16));
+    }
+    candidates
+}
+
+fn decode_track_to_stereo_f32_pcm(
     path: &Path,
     expected_sample_rate_hz: u32,
     bit_depth: u16,
 ) -> Result<DecodedPcmTrack, String> {
-    if bit_depth != 16 {
-        return Err(
-            "playback decode currently supports only 16-bit output while bit-perfect mode is enabled"
-                .to_string(),
-        );
+    if !matches!(bit_depth, 16 | 24 | 32) {
+        return Err("playback decode supports only 16/24/32-bit DAC output targets".to_string());
     }
 
-    let file = File::open(path)
-        .map_err(|error| format!("failed to open playback track `{}`: {error}", path.display()))?;
+    let file = File::open(path).map_err(|error| {
+        format!(
+            "failed to open playback track `{}`: {error}",
+            path.display()
+        )
+    })?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
@@ -1825,17 +3070,40 @@ fn decode_track_to_stereo_i16_pcm(
         .codec_params
         .sample_rate
         .ok_or_else(|| "playback track is missing sample-rate metadata".to_string())?;
-    if sample_rate_hz != expected_sample_rate_hz {
-        return Err(format!(
-            "bit-perfect playback requires sample-rate match: track={sample_rate_hz}Hz device={expected_sample_rate_hz}Hz"
-        ));
-    }
+    let decoder_channels = track
+        .codec_params
+        .channels
+        .map(|channels| channels.count() as u16)
+        .unwrap_or(2);
+    let boundary = AudioFormatBoundary {
+        decoder_sample_rate: sample_rate_hz,
+        decoder_channels,
+        decoder_is_interleaved: true,
+        decoder_bit_depth: 32,
+        dac_sample_rate: expected_sample_rate_hz,
+        dac_channels: 2,
+        dac_requires_interleaved: true,
+        dac_bit_depth: bit_depth,
+    };
+    validate_audio_format_boundary(&boundary)?;
+    tracing::info!(
+        target: "desktop.player",
+        decoder_sample_rate = boundary.decoder_sample_rate,
+        decoder_channels = boundary.decoder_channels,
+        decoder_interleaved = boundary.decoder_is_interleaved,
+        decoder_bit_depth = boundary.decoder_bit_depth,
+        dac_sample_rate = boundary.dac_sample_rate,
+        dac_channels = boundary.dac_channels,
+        dac_interleaved = boundary.dac_requires_interleaved,
+        dac_bit_depth = boundary.dac_bit_depth,
+        "audio format boundary negotiated"
+    );
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|error| format!("failed to initialize playback decoder: {error}"))?;
 
-    let mut interleaved_stereo_i16 = Vec::<i16>::new();
+    let mut interleaved_stereo_f32 = Vec::<f32>::new();
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
@@ -1845,7 +3113,9 @@ fn decode_track_to_stereo_i16_pcm(
                 break;
             }
             Err(symphonia::core::errors::Error::ResetRequired) => {
-                return Err("playback decode reset required; unsupported stream transition".to_string());
+                return Err(
+                    "playback decode reset required; unsupported stream transition".to_string(),
+                );
             }
             Err(error) => {
                 return Err(format!("failed reading playback packet stream: {error}"));
@@ -1868,39 +3138,47 @@ fn decode_track_to_stereo_i16_pcm(
         };
 
         let channel_count = decoded.spec().channels.count();
-        let mut sample_buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+        let frame_count = decoded.frames();
+        if frame_count == 0 {
+            continue;
+        }
+        let mut sample_buffer = SampleBuffer::<f32>::new(frame_count as u64, *decoded.spec());
         sample_buffer.copy_interleaved_ref(decoded);
-        append_interleaved_to_stereo_i16(
-            sample_buffer.samples(),
+        let expected_samples = frame_count.saturating_mul(channel_count);
+        let interleaved_samples = sample_buffer.samples();
+        if interleaved_samples.len() < expected_samples {
+            return Err(format!(
+                "decoder produced undersized interleaved buffer: expected at least {expected_samples} samples, got {}",
+                interleaved_samples.len()
+            ));
+        }
+        append_interleaved_to_stereo_f32(
+            &interleaved_samples[..expected_samples],
             channel_count,
-            &mut interleaved_stereo_i16,
+            &mut interleaved_stereo_f32,
         );
     }
 
-    if interleaved_stereo_i16.is_empty() {
+    if interleaved_stereo_f32.is_empty() {
         return Err("decoded playback track has no PCM frames".to_string());
     }
-    let total_frames = interleaved_stereo_i16.len() / 2;
+    let total_frames = interleaved_stereo_f32.len() / 2;
     Ok(DecodedPcmTrack {
-        samples_stereo_i16: Arc::new(interleaved_stereo_i16),
+        samples_stereo_f32: Arc::new(interleaved_stereo_f32),
         total_frames,
+        sample_rate_hz,
     })
 }
 
-fn append_interleaved_to_stereo_i16(
-    interleaved: &[f32],
-    channel_count: usize,
-    out: &mut Vec<i16>,
-) {
+fn append_interleaved_to_stereo_f32(interleaved: &[f32], channel_count: usize, out: &mut Vec<f32>) {
     if channel_count == 0 {
         return;
     }
 
     if channel_count == 1 {
         for &mono in interleaved {
-            let sample = float_sample_to_i16(mono);
-            out.push(sample);
-            out.push(sample);
+            out.push(mono);
+            out.push(mono);
         }
         return;
     }
@@ -1909,14 +3187,9 @@ fn append_interleaved_to_stereo_i16(
         if frame.len() < 2 {
             continue;
         }
-        out.push(float_sample_to_i16(frame[0]));
-        out.push(float_sample_to_i16(frame[1]));
+        out.push(frame[0]);
+        out.push(frame[1]);
     }
-}
-
-fn float_sample_to_i16(sample: f32) -> i16 {
-    let clamped = sample.clamp(-1.0, 1.0);
-    (clamped * i16::MAX as f32).round() as i16
 }
 
 #[derive(Debug)]
@@ -1927,8 +3200,52 @@ struct ExclusiveAudioEngine {
 
 #[derive(Debug, Clone)]
 struct DecodedPcmTrack {
-    samples_stereo_i16: Arc<Vec<i16>>,
+    samples_stereo_f32: Arc<Vec<f32>>,
     total_frames: usize,
+    sample_rate_hz: u32,
+}
+
+#[derive(Debug, Clone)]
+struct AudioFormatBoundary {
+    decoder_sample_rate: u32,
+    decoder_channels: u16,
+    decoder_is_interleaved: bool,
+    decoder_bit_depth: u16,
+    dac_sample_rate: u32,
+    dac_channels: u16,
+    dac_requires_interleaved: bool,
+    dac_bit_depth: u16,
+}
+
+fn validate_audio_format_boundary(boundary: &AudioFormatBoundary) -> Result<(), String> {
+    if boundary.decoder_sample_rate == 0 || boundary.dac_sample_rate == 0 {
+        return Err("audio boundary sample-rate cannot be zero".to_string());
+    }
+    if boundary.decoder_sample_rate != boundary.dac_sample_rate {
+        return Err(format!(
+            "bit-perfect playback requires sample-rate match: decoder={}Hz dac={}Hz",
+            boundary.decoder_sample_rate, boundary.dac_sample_rate
+        ));
+    }
+    if boundary.decoder_channels == 0 || boundary.dac_channels == 0 {
+        return Err("audio boundary channel count cannot be zero".to_string());
+    }
+    if boundary.dac_channels != 2 {
+        return Err(format!(
+            "exclusive playback currently supports exactly 2 DAC channels, got {}",
+            boundary.dac_channels
+        ));
+    }
+    if !boundary.decoder_is_interleaved || !boundary.dac_requires_interleaved {
+        return Err("audio boundary requires interleaved decoder and DAC buffers".to_string());
+    }
+    if !matches!(boundary.dac_bit_depth, 16 | 24 | 32) {
+        return Err(format!(
+            "unsupported DAC bit depth {} (expected 16/24/32)",
+            boundary.dac_bit_depth
+        ));
+    }
+    Ok(())
 }
 
 impl ExclusiveAudioEngine {
@@ -1980,15 +3297,17 @@ fn start_wasapi_exclusive_engine(
 
     let join_handle = std::thread::Builder::new()
         .name("rp-wasapi-exclusive-render".to_string())
-        .spawn(move || match create_wasapi_exclusive_context(target_rate_hz, target_bit_depth) {
-            Ok(context) => {
-                let _ = startup_tx.send(Ok(context.buffer_size_frames));
-                run_wasapi_exclusive_render_loop(context, stop_for_thread);
-            }
-            Err(message) => {
-                let _ = startup_tx.send(Err(message));
-            }
-        })
+        .spawn(
+            move || match create_wasapi_exclusive_context(target_rate_hz, target_bit_depth) {
+                Ok(context) => {
+                    let _ = startup_tx.send(Ok(context.buffer_size_frames));
+                    run_wasapi_exclusive_render_loop(context, stop_for_thread);
+                }
+                Err(message) => {
+                    let _ = startup_tx.send(Err(message));
+                }
+            },
+        )
         .map_err(|error| {
             AppError::new(
                 app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
@@ -2071,6 +3390,15 @@ fn create_wasapi_exclusive_context(
         wBitsPerSample: target_bit_depth,
         cbSize: 0,
     };
+    tracing::info!(
+        target: "desktop.player",
+        sample_rate_hz = target_rate_hz,
+        channels = channels,
+        bit_depth = target_bit_depth,
+        block_align = block_align,
+        avg_bytes_per_sec = avg_bytes_per_sec,
+        "requesting WASAPI exclusive format"
+    );
 
     // 50ms exclusive period/buffer. For exclusive mode, period must match buffer duration.
     let hns_buffer_duration: i64 = 500_000;
@@ -2183,6 +3511,10 @@ fn fill_wasapi_output_buffer(
     let output = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, bytes) };
     output.fill(0);
 
+    if !control.transport_playing.load(Ordering::Acquire) {
+        return;
+    }
+
     let track = match control.current_decoded_track() {
         Some(track) => track,
         None => return,
@@ -2200,49 +3532,19 @@ fn fill_wasapi_output_buffer(
             break;
         }
 
-        let left = track.samples_stereo_i16[cursor * 2];
-        let right = track.samples_stereo_i16[cursor * 2 + 1];
+        let left = track.samples_stereo_f32[cursor * 2];
+        let right = track.samples_stereo_f32[cursor * 2 + 1];
         let (left, right) = if bypass_volume {
             (left, right)
         } else {
             (
-                apply_volume_scalar_to_i16(left, volume_scalar),
-                apply_volume_scalar_to_i16(right, volume_scalar),
+                apply_volume_scalar_to_sample(left, volume_scalar),
+                apply_volume_scalar_to_sample(right, volume_scalar),
             )
         };
 
-        match bit_depth {
-            16 => {
-                let base = frame_idx * 4;
-                if base + 4 > output.len() {
-                    break;
-                }
-                output[base..base + 2].copy_from_slice(&left.to_le_bytes());
-                output[base + 2..base + 4].copy_from_slice(&right.to_le_bytes());
-            }
-            24 => {
-                let base = frame_idx * 6;
-                if base + 6 > output.len() {
-                    break;
-                }
-                let left24 = (left as i32) << 8;
-                let right24 = (right as i32) << 8;
-                let left_bytes = left24.to_le_bytes();
-                let right_bytes = right24.to_le_bytes();
-                output[base..base + 3].copy_from_slice(&left_bytes[..3]);
-                output[base + 3..base + 6].copy_from_slice(&right_bytes[..3]);
-            }
-            32 => {
-                let base = frame_idx * 8;
-                if base + 8 > output.len() {
-                    break;
-                }
-                let left32 = (left as i32) << 16;
-                let right32 = (right as i32) << 16;
-                output[base..base + 4].copy_from_slice(&left32.to_le_bytes());
-                output[base + 4..base + 8].copy_from_slice(&right32.to_le_bytes());
-            }
-            _ => {}
+        if !write_pcm_stereo_frame(output, frame_idx, bit_depth, left, right) {
+            break;
         }
 
         cursor += 1;
@@ -2253,14 +3555,75 @@ fn fill_wasapi_output_buffer(
         .store(cursor as u64, Ordering::Release);
 }
 
-fn apply_volume_scalar_to_i16(sample: i16, scalar: f32) -> i16 {
-    let next = (sample as f32) * scalar;
-    next.clamp(i16::MIN as f32, i16::MAX as f32).round() as i16
+fn write_pcm_stereo_frame(
+    output: &mut [u8],
+    frame_idx: usize,
+    bit_depth: u16,
+    left_sample: f32,
+    right_sample: f32,
+) -> bool {
+    match bit_depth {
+        16 => {
+            let base = frame_idx * 4;
+            if base + 4 > output.len() {
+                return false;
+            }
+            let left = quantize_sample_to_i16(left_sample);
+            let right = quantize_sample_to_i16(right_sample);
+            output[base..base + 2].copy_from_slice(&left.to_le_bytes());
+            output[base + 2..base + 4].copy_from_slice(&right.to_le_bytes());
+        }
+        24 => {
+            let base = frame_idx * 6;
+            if base + 6 > output.len() {
+                return false;
+            }
+            let left = quantize_sample_to_i24_i32(left_sample);
+            let right = quantize_sample_to_i24_i32(right_sample);
+            let left_bytes = left.to_le_bytes();
+            let right_bytes = right.to_le_bytes();
+            output[base..base + 3].copy_from_slice(&left_bytes[..3]);
+            output[base + 3..base + 6].copy_from_slice(&right_bytes[..3]);
+        }
+        32 => {
+            let base = frame_idx * 8;
+            if base + 8 > output.len() {
+                return false;
+            }
+            let left = quantize_sample_to_i32(left_sample);
+            let right = quantize_sample_to_i32(right_sample);
+            output[base..base + 4].copy_from_slice(&left.to_le_bytes());
+            output[base + 4..base + 8].copy_from_slice(&right.to_le_bytes());
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn apply_volume_scalar_to_sample(sample: f32, scalar: f32) -> f32 {
+    (sample * scalar).clamp(-1.0, 1.0)
+}
+
+fn quantize_sample_to_i16(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * i16::MAX as f32).round() as i16
+}
+
+fn quantize_sample_to_i24_i32(sample: f32) -> i32 {
+    const I24_MAX: f32 = 8_388_607.0;
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * I24_MAX).round() as i32
+}
+
+fn quantize_sample_to_i32(sample: f32) -> i32 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * i32::MAX as f32).round() as i32
 }
 
 struct AnalyzedTrackPayload {
     track: CoreTrackModel,
     media_fingerprint: String,
+    true_peak_dbfs: Option<f32>,
     sample_rate_hz: u32,
     channels: u16,
 }
@@ -2300,6 +3663,11 @@ async fn analyze_audio_file_to_track_payload(
     Ok(AnalyzedTrackPayload {
         track,
         media_fingerprint,
+        true_peak_dbfs: if analysis.true_peak_dbfs.is_finite() {
+            Some(analysis.true_peak_dbfs)
+        } else {
+            None
+        },
         sample_rate_hz: analysis.sample_rate_hz,
         channels: analysis.channels,
     })
@@ -2756,12 +4124,122 @@ fn collect_supported_audio_files_recursive(root: &Path) -> Result<Vec<PathBuf>, 
     Ok(files)
 }
 
+async fn append_ingest_info_event(
+    service: &CommandService,
+    job_id: &str,
+    message: &str,
+    payload_json: Option<Value>,
+) {
+    let _ = service
+        .db
+        .append_ingest_event(&NewIngestEvent {
+            job_id: job_id.to_string(),
+            level: "INFO".to_string(),
+            message: message.to_string(),
+            payload_json,
+        })
+        .await;
+}
+
 async fn run_catalog_scan_job(
     service: Arc<CommandService>,
     root: DbLibraryRootRecord,
     job_id: String,
 ) {
-    if let Err(error) = run_catalog_scan_job_inner(service, root, job_id.clone()).await {
+    append_ingest_info_event(
+        service.as_ref(),
+        &job_id,
+        "Scan job queued and waiting for an ingest worker slot.",
+        Some(serde_json::json!({
+            "status": "PENDING",
+            "max_parallel_scans": service.max_concurrent_ingest_scans
+        })),
+    )
+    .await;
+
+    let scan_permit = match Arc::clone(&service.ingest_scan_semaphore)
+        .acquire_owned()
+        .await
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            let _ = service
+                .db
+                .update_ingest_job(&UpdateIngestJob {
+                    job_id: job_id.clone(),
+                    status: DbIngestJobStatus::Failed,
+                    total_items: 0,
+                    processed_items: 0,
+                    error_count: 1,
+                })
+                .await;
+            let _ = service
+                .db
+                .append_ingest_event(&NewIngestEvent {
+                    job_id: job_id.clone(),
+                    level: "ERROR".to_string(),
+                    message: format!("failed to acquire ingest scan worker slot: {error}"),
+                    payload_json: Some(serde_json::json!({
+                        "status": "FAILED",
+                        "code": app_error_codes::IO_ERROR
+                    })),
+                })
+                .await;
+            tracing::warn!(
+                target: "desktop.catalog",
+                job_id = %job_id,
+                error = %error,
+                "catalog root scan job failed to acquire worker slot"
+            );
+            service.clear_ingest_job_cancel_requested(&job_id);
+            return;
+        }
+    };
+
+    append_ingest_info_event(
+        service.as_ref(),
+        &job_id,
+        "Scan job acquired worker slot and started.",
+        Some(serde_json::json!({
+            "status": "RUNNING",
+            "max_parallel_scans": service.max_concurrent_ingest_scans
+        })),
+    )
+    .await;
+
+    let run_result = run_catalog_scan_job_inner(Arc::clone(&service), root, job_id.clone()).await;
+    drop(scan_permit);
+
+    if let Err(error) = run_result {
+        let fallback_counts = match service.db.get_ingest_job(&job_id).await {
+            Ok(Some(job)) => (job.total_items, job.processed_items, job.error_count),
+            _ => (0, 0, 1),
+        };
+        let _ = service
+            .db
+            .update_ingest_job(&UpdateIngestJob {
+                job_id: job_id.clone(),
+                status: DbIngestJobStatus::Failed,
+                total_items: fallback_counts.0,
+                processed_items: fallback_counts.1,
+                error_count: fallback_counts.2.saturating_add(1),
+            })
+            .await;
+        let _ = service
+            .db
+            .append_ingest_event(&NewIngestEvent {
+                job_id: job_id.clone(),
+                level: "ERROR".to_string(),
+                message: error.message.clone(),
+                payload_json: Some(serde_json::json!({
+                    "code": error.code,
+                    "status": "FAILED",
+                    "total_items": fallback_counts.0,
+                    "processed_items": fallback_counts.1,
+                    "error_count": fallback_counts.2.saturating_add(1)
+                })),
+            })
+            .await;
         tracing::warn!(
             target: "desktop.catalog",
             job_id = %job_id,
@@ -2770,6 +4248,7 @@ async fn run_catalog_scan_job(
             "catalog root scan job failed"
         );
     }
+    service.clear_ingest_job_cancel_requested(&job_id);
 }
 
 async fn run_catalog_scan_job_inner(
@@ -2777,6 +4256,10 @@ async fn run_catalog_scan_job_inner(
     root: DbLibraryRootRecord,
     job_id: String,
 ) -> Result<(), AppError> {
+    if service.is_ingest_job_cancel_requested(&job_id) {
+        return Ok(());
+    }
+
     let _ = service
         .db
         .update_ingest_job(&UpdateIngestJob {
@@ -2799,6 +4282,32 @@ async fn run_catalog_scan_job_inner(
                 )
             })??;
 
+    if service.is_ingest_job_cancel_requested(&job_id) {
+        let _ = service
+            .db
+            .update_ingest_job(&UpdateIngestJob {
+                job_id: job_id.clone(),
+                status: DbIngestJobStatus::Canceled,
+                total_items: u32::try_from(files.len()).unwrap_or(u32::MAX),
+                processed_items: 0,
+                error_count: 0,
+            })
+            .await;
+        append_ingest_info_event(
+            service.as_ref(),
+            &job_id,
+            "Scan canceled before file import started.",
+            Some(serde_json::json!({
+                "status": "CANCELED",
+                "total_items": u32::try_from(files.len()).unwrap_or(u32::MAX),
+                "processed_items": 0,
+                "error_count": 0
+            })),
+        )
+        .await;
+        return Ok(());
+    }
+
     service
         .db
         .update_ingest_job(&UpdateIngestJob {
@@ -2815,6 +4324,32 @@ async fn run_catalog_scan_job_inner(
     let total_items = u32::try_from(files.len()).unwrap_or(u32::MAX);
 
     for file in files {
+        if service.is_ingest_job_cancel_requested(&job_id) {
+            service
+                .db
+                .update_ingest_job(&UpdateIngestJob {
+                    job_id: job_id.clone(),
+                    status: DbIngestJobStatus::Canceled,
+                    total_items,
+                    processed_items,
+                    error_count,
+                })
+                .await?;
+            append_ingest_info_event(
+                service.as_ref(),
+                &job_id,
+                "Scan canceled while importing files.",
+                Some(serde_json::json!({
+                    "status": "CANCELED",
+                    "total_items": total_items,
+                    "processed_items": processed_items,
+                    "error_count": error_count
+                })),
+            )
+            .await;
+            return Ok(());
+        }
+
         let file_str = path_to_string(&file);
         let result = service
             .import_catalog_track_from_canonical_path(&file)
@@ -2848,17 +4383,55 @@ async fn run_catalog_scan_job_inner(
             .await?;
     }
 
+    if service.is_ingest_job_cancel_requested(&job_id) {
+        service
+            .db
+            .update_ingest_job(&UpdateIngestJob {
+                job_id: job_id.clone(),
+                status: DbIngestJobStatus::Canceled,
+                total_items,
+                processed_items,
+                error_count,
+            })
+            .await?;
+        append_ingest_info_event(
+            service.as_ref(),
+            &job_id,
+            "Scan canceled after import loop completion.",
+            Some(serde_json::json!({
+                "status": "CANCELED",
+                "total_items": total_items,
+                "processed_items": processed_items,
+                "error_count": error_count
+            })),
+        )
+        .await;
+        return Ok(());
+    }
+
     let final_status = DbIngestJobStatus::Completed;
     service
         .db
         .update_ingest_job(&UpdateIngestJob {
-            job_id,
+            job_id: job_id.clone(),
             status: final_status,
             total_items,
             processed_items,
             error_count,
         })
         .await?;
+    append_ingest_info_event(
+        service.as_ref(),
+        &job_id,
+        "Scan completed.",
+        Some(serde_json::json!({
+            "status": "COMPLETED",
+            "total_items": total_items,
+            "processed_items": processed_items,
+            "error_count": error_count
+        })),
+    )
+    .await;
 
     Ok(())
 }
@@ -3006,11 +4579,6 @@ fn reject_odd_prefixes(raw: &str) -> Result<(), AppError> {
     if trimmed.starts_with("\\\\?\\") || trimmed.starts_with("\\\\.\\") {
         return Err(AppError::invalid_argument(
             "extended/device paths are not allowed",
-        ));
-    }
-    if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
-        return Err(AppError::invalid_argument(
-            "UNC/network paths are not allowed",
         ));
     }
     Ok(())
@@ -3184,6 +4752,16 @@ pub async fn push_track_change_request(new_index: u32) -> Result<bool, AppError>
 }
 
 #[tauri::command]
+pub async fn set_playback_playing(is_playing: bool) -> Result<(), AppError> {
+    shared_playback_control().set_playback_playing(is_playing)
+}
+
+#[tauri::command]
+pub async fn seek_playback_ratio(ratio: f32) -> Result<(), AppError> {
+    shared_playback_control().seek_playback_ratio(ratio)
+}
+
+#[tauri::command]
 pub async fn toggle_queue_visibility() -> Result<(), AppError> {
     shared_playback_control().toggle_queue_visibility();
     Ok(())
@@ -3197,6 +4775,354 @@ pub async fn get_playback_context() -> Result<PlaybackContextState, AppError> {
 #[tauri::command]
 pub async fn get_playback_decode_error() -> Result<Option<String>, AppError> {
     Ok(shared_playback_control().decode_error())
+}
+
+#[tauri::command]
+pub async fn qc_get_feature_flags() -> Result<QcFeatureFlagsResponse, AppError> {
+    Ok(qc_feature_flags_from_env())
+}
+
+#[tauri::command]
+pub async fn qc_list_codec_profiles() -> Result<Vec<QcCodecProfileResponse>, AppError> {
+    let flags = qc_feature_flags_from_env();
+    Ok(qc_codec_profile_registry(&flags))
+}
+
+#[tauri::command]
+pub async fn qc_prepare_preview_session(
+    input: QcPreparePreviewSessionInput,
+) -> Result<QcPreviewSessionStateResponse, AppError> {
+    let flags = qc_feature_flags_from_env();
+    if !flags.qc_codec_preview_v1 {
+        return Err(
+            AppError::feature_disabled("QC codec preview is disabled in this build").with_details(
+                serde_json::json!({
+                    "flag": ENV_QC_CODEC_PREVIEW_V1,
+                    "default": DEFAULT_QC_CODEC_PREVIEW_V1
+                }),
+            ),
+        );
+    }
+
+    let source_track_id = validate_catalog_track_id(&input.source_track_id)?;
+    let profile_a_id = normalize_qc_profile_id(&input.profile_a_id, "profile_a_id")?;
+    let profile_b_id = normalize_qc_profile_id(&input.profile_b_id, "profile_b_id")?;
+    if profile_a_id == profile_b_id {
+        return Err(AppError::invalid_argument(
+            "profile_a_id and profile_b_id must be different",
+        ));
+    }
+
+    let profiles = qc_codec_profile_registry(&flags);
+    ensure_qc_profile_ids_known(&[profile_a_id.clone(), profile_b_id.clone()], &profiles)?;
+
+    let active_variant = if input.blind_x_enabled {
+        QcPreviewVariant::BlindX
+    } else {
+        QcPreviewVariant::Bypass
+    };
+    let session = QcPreviewSessionStateResponse {
+        source_track_id,
+        active_variant,
+        profile_a_id,
+        profile_b_id,
+        blind_x_enabled: input.blind_x_enabled,
+        blind_x_revealed: !input.blind_x_enabled,
+    };
+    shared_qc_preview_store().set_state(session)
+}
+
+#[tauri::command]
+pub async fn qc_get_preview_session() -> Result<Option<QcPreviewSessionStateResponse>, AppError> {
+    shared_qc_preview_store().get_state()
+}
+
+#[tauri::command]
+pub async fn qc_set_preview_variant(
+    variant: QcPreviewVariant,
+) -> Result<QcPreviewSessionStateResponse, AppError> {
+    let flags = qc_feature_flags_from_env();
+    if !flags.qc_codec_preview_v1 {
+        return Err(
+            AppError::feature_disabled("QC codec preview is disabled in this build").with_details(
+                serde_json::json!({
+                    "flag": ENV_QC_CODEC_PREVIEW_V1,
+                    "default": DEFAULT_QC_CODEC_PREVIEW_V1
+                }),
+            ),
+        );
+    }
+    shared_qc_preview_store().set_active_variant(variant)
+}
+
+#[tauri::command]
+pub async fn qc_reveal_blind_x() -> Result<QcPreviewSessionStateResponse, AppError> {
+    let flags = qc_feature_flags_from_env();
+    if !flags.qc_codec_preview_v1 {
+        return Err(
+            AppError::feature_disabled("QC codec preview is disabled in this build").with_details(
+                serde_json::json!({
+                    "flag": ENV_QC_CODEC_PREVIEW_V1,
+                    "default": DEFAULT_QC_CODEC_PREVIEW_V1
+                }),
+            ),
+        );
+    }
+    shared_qc_preview_store().reveal_blind_x()
+}
+
+#[tauri::command]
+pub async fn qc_get_active_preview_media() -> Result<QcPreviewActiveMediaResponse, AppError> {
+    let flags = qc_feature_flags_from_env();
+    if !flags.qc_codec_preview_v1 {
+        return Err(
+            AppError::feature_disabled("QC codec preview is disabled in this build").with_details(
+                serde_json::json!({
+                    "flag": ENV_QC_CODEC_PREVIEW_V1,
+                    "default": DEFAULT_QC_CODEC_PREVIEW_V1
+                }),
+            ),
+        );
+    }
+
+    let service = shared_service().await?;
+    let store = shared_qc_preview_store();
+    qc_get_active_preview_media_with_dependencies(service, store.as_ref(), &flags).await
+}
+
+async fn qc_get_active_preview_media_with_dependencies(
+    service: Arc<CommandService>,
+    store: &QcPreviewSessionStore,
+    flags: &QcFeatureFlagsResponse,
+) -> Result<QcPreviewActiveMediaResponse, AppError> {
+    let session = store
+        .get_state()?
+        .ok_or_else(|| AppError::invalid_argument("QC preview session is not prepared"))?;
+    let media_state =
+        qc_ensure_preview_media_state(service.as_ref(), store, flags, &session).await?;
+
+    let (resolved_variant, media_path) = match session.active_variant {
+        QcPreviewVariant::Bypass => (
+            QcPreviewVariant::Bypass,
+            media_state.source_media_path.clone(),
+        ),
+        QcPreviewVariant::CodecA => (
+            QcPreviewVariant::CodecA,
+            media_state.codec_a_media_path.clone(),
+        ),
+        QcPreviewVariant::CodecB => (
+            QcPreviewVariant::CodecB,
+            media_state.codec_b_media_path.clone(),
+        ),
+        QcPreviewVariant::BlindX => match media_state.blind_x_assignment {
+            QcPreviewVariant::CodecB => (
+                QcPreviewVariant::CodecB,
+                media_state.codec_b_media_path.clone(),
+            ),
+            _ => (
+                QcPreviewVariant::CodecA,
+                media_state.codec_a_media_path.clone(),
+            ),
+        },
+    };
+    let blind_x_resolved_variant =
+        if matches!(session.active_variant, QcPreviewVariant::BlindX) && session.blind_x_revealed {
+            Some(resolved_variant)
+        } else {
+            None
+        };
+    Ok(QcPreviewActiveMediaResponse {
+        variant: session.active_variant,
+        media_path,
+        blind_x_resolved_variant,
+    })
+}
+
+#[tauri::command]
+pub async fn qc_start_batch_export(
+    input: QcBatchExportStartInput,
+) -> Result<QcBatchExportStartResponse, AppError> {
+    let service = shared_service().await?;
+    let flags = qc_feature_flags_from_env();
+    qc_start_batch_export_with_dependencies(service, &flags, input).await
+}
+
+async fn qc_start_batch_export_with_dependencies(
+    service: Arc<CommandService>,
+    flags: &QcFeatureFlagsResponse,
+    input: QcBatchExportStartInput,
+) -> Result<QcBatchExportStartResponse, AppError> {
+    if !flags.qc_batch_export_v1 {
+        return Err(
+            AppError::feature_disabled("QC batch export is disabled in this build").with_details(
+                serde_json::json!({
+                    "flag": ENV_QC_BATCH_EXPORT_V1,
+                    "default": DEFAULT_QC_BATCH_EXPORT_V1
+                }),
+            ),
+        );
+    }
+
+    let source_track_id = validate_catalog_track_id(&input.source_track_id)?;
+    let output_dir = input.output_dir.trim().to_string();
+    if output_dir.is_empty() {
+        return Err(AppError::invalid_argument("output_dir cannot be empty"));
+    }
+    tokio::fs::create_dir_all(&output_dir)
+        .await
+        .map_err(|error| {
+            AppError::file_write_failed(format!("failed to create output_dir: {error}"))
+        })?;
+    let output_dir_path = tokio::fs::canonicalize(&output_dir)
+        .await
+        .map_err(|error| {
+            AppError::file_read_failed(format!("failed to canonicalize output_dir: {error}"))
+        })?;
+    let output_dir_metadata = tokio::fs::metadata(&output_dir_path)
+        .await
+        .map_err(|error| {
+            AppError::file_read_failed(format!("failed to stat output_dir: {error}"))
+        })?;
+    if !output_dir_metadata.is_dir() {
+        return Err(AppError::invalid_argument("output_dir must be a directory"));
+    }
+
+    if let Some(target_integrated_lufs) = input.target_integrated_lufs {
+        if !target_integrated_lufs.is_finite() {
+            return Err(AppError::invalid_argument(
+                "target_integrated_lufs must be finite when present",
+            ));
+        }
+    }
+
+    if input.profile_ids.is_empty() {
+        return Err(AppError::invalid_argument(
+            "profile_ids must include at least one entry",
+        ));
+    }
+    let profile_ids = input
+        .profile_ids
+        .iter()
+        .map(|raw| normalize_qc_profile_id(raw, "profile_ids[]"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let known_profiles = qc_codec_profile_registry(flags);
+    ensure_qc_profile_ids_known(&profile_ids, &known_profiles)?;
+    let known_profiles_by_id: HashMap<String, QcCodecProfileResponse> = known_profiles
+        .into_iter()
+        .map(|profile| (profile.profile_id.clone(), profile))
+        .collect();
+    let selected_profiles = profile_ids
+        .iter()
+        .map(|profile_id| {
+            known_profiles_by_id
+                .get(profile_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::invalid_argument(format!("unknown qc profile_id: {profile_id}"))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if selected_profiles.iter().any(|profile| !profile.available) {
+        return Err(AppError::invalid_argument(
+            "selected qc profile_ids must be available in this build",
+        ));
+    }
+
+    let Some(source_track) = service.db.get_catalog_track(&source_track_id).await? else {
+        return Err(AppError::invalid_argument(
+            "source_track_id must reference a catalog track in the local library",
+        ));
+    };
+    let source_file_input = strip_single_layer_matching_quotes(source_track.file_path.trim());
+    let source_file_path = tokio::fs::canonicalize(PathBuf::from(source_file_input))
+        .await
+        .map_err(|error| {
+            AppError::file_read_failed(format!("failed to canonicalize source track file: {error}"))
+        })?;
+    let source_file_metadata = tokio::fs::metadata(&source_file_path)
+        .await
+        .map_err(|error| {
+            AppError::file_read_failed(format!("failed to stat source track file: {error}"))
+        })?;
+    if !source_file_metadata.is_file() {
+        return Err(AppError::invalid_argument(
+            "source track file must be a file",
+        ));
+    }
+
+    let job_id = next_qc_batch_export_job_id(&source_track_id);
+    let job_store = shared_qc_batch_export_job_store();
+    let now = current_unix_ms();
+    let mut queued_job = QcBatchExportJobStatusResponse {
+        job_id: job_id.clone(),
+        source_track_id: source_track_id.clone(),
+        output_dir: path_to_string(&output_dir_path),
+        requested_profile_ids: profile_ids.clone(),
+        requested_target_integrated_lufs: input.target_integrated_lufs,
+        status: "queued".to_string(),
+        progress_percent: 0,
+        total_profiles: selected_profiles.len(),
+        completed_profiles: 0,
+        failed_profiles: 0,
+        created_at_unix_ms: now,
+        updated_at_unix_ms: now,
+        summary_path: None,
+        profiles: selected_profiles
+            .iter()
+            .map(|profile| QcBatchExportProfileStatusResponse {
+                profile_id: profile.profile_id.clone(),
+                codec_family: profile.codec_family.clone(),
+                target_platform: profile.target_platform.clone(),
+                target_bitrate_kbps: profile.target_bitrate_kbps,
+                status: "queued".to_string(),
+                progress_percent: 0,
+                output_path: None,
+                output_bytes: None,
+                message: None,
+            })
+            .collect(),
+    };
+    qc_refresh_batch_export_progress(&mut queued_job);
+    job_store.insert_job(queued_job);
+
+    let output_dir_for_worker = output_dir_path.clone();
+    let source_track_id_for_worker = source_track_id.clone();
+    let source_file_path_for_worker = source_file_path.clone();
+    let selected_profiles_for_worker = selected_profiles.clone();
+    let target_integrated_lufs = input.target_integrated_lufs;
+    let job_id_for_worker = job_id.clone();
+    let job_store_for_worker = Arc::clone(&job_store);
+
+    tokio::spawn(async move {
+        run_qc_batch_export_job(
+            job_id_for_worker,
+            source_track_id_for_worker,
+            source_file_path_for_worker,
+            output_dir_for_worker,
+            selected_profiles_for_worker,
+            target_integrated_lufs,
+            job_store_for_worker,
+        )
+        .await;
+    });
+
+    Ok(QcBatchExportStartResponse {
+        job_id: job_id.clone(),
+        status: "queued".to_string(),
+        message: format!(
+            "QC batch export queued for {} profile(s); poll qc_get_batch_export_job_status with job_id {}",
+            profile_ids.len(),
+            job_id
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn qc_get_batch_export_job_status(
+    job_id: String,
+) -> Result<Option<QcBatchExportJobStatusResponse>, AppError> {
+    let job_id = validate_catalog_hex_id(&job_id, "qc batch export job_id")?;
+    shared_qc_batch_export_job_store().get_job(&job_id)
 }
 
 #[tauri::command]
@@ -3381,6 +5307,37 @@ pub async fn catalog_remove_library_root(root_id: String) -> Result<bool, AppErr
 }
 
 #[tauri::command]
+pub async fn catalog_reset_library_data() -> Result<bool, AppError> {
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_reset_library_data",
+        "command started"
+    );
+    let result = shared_service()
+        .await?
+        .handle_catalog_reset_library_data()
+        .await;
+    match &result {
+        Ok(_) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_reset_library_data",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_reset_library_data",
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
+}
+
+#[tauri::command]
 pub async fn catalog_scan_root(root_id: String) -> Result<CatalogScanRootResponse, AppError> {
     let started = Instant::now();
     tracing::info!(
@@ -3390,18 +5347,20 @@ pub async fn catalog_scan_root(root_id: String) -> Result<CatalogScanRootRespons
         "command started"
     );
     let service = shared_service().await?;
-    let prepared = service.handle_catalog_scan_root_prepare(&root_id).await.map_err(|error| {
-        tracing::warn!(
-            target: "desktop.catalog",
-            command = "catalog_scan_root",
-            root_id = %root_id,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            error_code = %error.code,
-            error = %error.message,
-            "command failed before dispatch"
-        );
-        error
-    })?;
+    let prepared = service
+        .handle_catalog_scan_root_prepare(&root_id)
+        .await
+        .inspect_err(|error| {
+            tracing::warn!(
+                target: "desktop.catalog",
+                command = "catalog_scan_root",
+                root_id = %root_id,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                error_code = %error.code,
+                error = %error.message,
+                "command failed before dispatch"
+            );
+        })?;
     let response = CatalogScanRootResponse {
         job_id: prepared.job.job_id.clone(),
         root_id: prepared.root.root_id.clone(),
@@ -3429,6 +5388,41 @@ pub async fn catalog_get_ingest_job(
         .await?
         .handle_catalog_get_ingest_job(&job_id)
         .await
+}
+
+#[tauri::command]
+pub async fn catalog_cancel_ingest_job(job_id: String) -> Result<bool, AppError> {
+    let started = Instant::now();
+    tracing::info!(
+        target: "desktop.catalog",
+        command = "catalog_cancel_ingest_job",
+        job_id = %job_id,
+        "command started"
+    );
+    let result = shared_service()
+        .await?
+        .handle_catalog_cancel_ingest_job(&job_id)
+        .await;
+    match &result {
+        Ok(canceled) => tracing::info!(
+            target: "desktop.catalog",
+            command = "catalog_cancel_ingest_job",
+            job_id = %job_id,
+            canceled = *canceled,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "command completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "desktop.catalog",
+            command = "catalog_cancel_ingest_job",
+            job_id = %job_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error_code = %error.code,
+            error = %error.message,
+            "command failed"
+        ),
+    }
+    result
 }
 
 #[cfg(test)]
@@ -3471,7 +5465,9 @@ tags: ["mock"]"#,
     #[test]
     fn playback_control_volume_unity_enables_bit_perfect_bypass() {
         let control = PlaybackControlPlane::new();
-        control.set_volume(UNITY_GAIN_LEVEL).expect("set unity gain");
+        control
+            .set_volume(UNITY_GAIN_LEVEL)
+            .expect("set unity gain");
         let state = control.context_state();
         assert_eq!(state.volume_scalar, UNITY_GAIN_LEVEL);
         assert!(state.is_bit_perfect_bypassed);
@@ -3493,6 +5489,105 @@ tags: ["mock"]"#,
             .set_volume(f32::NAN)
             .expect_err("NaN volume must be rejected");
         assert_eq!(err.code, app_error_codes::PLAYBACK_INVALID_VOLUME);
+    }
+
+    #[test]
+    fn playback_control_invalid_volume_error_wire_shape_is_stable() {
+        let control = PlaybackControlPlane::new();
+        let err = control
+            .set_volume(1.5)
+            .expect_err("out-of-range volume must be rejected");
+        assert_eq!(err.code, app_error_codes::PLAYBACK_INVALID_VOLUME);
+        assert_eq!(
+            err.message,
+            "volume level must be a finite float between 0.0 and 1.0"
+        );
+
+        let wire = serde_json::to_value(&err).expect("serialize AppError");
+        assert_app_error_wire_top_level_shape(&wire);
+        assert_eq!(wire["code"], app_error_codes::PLAYBACK_INVALID_VOLUME);
+        assert_eq!(
+            wire["message"],
+            "volume level must be a finite float between 0.0 and 1.0"
+        );
+        assert!(wire["details"].is_null());
+    }
+
+    #[test]
+    fn playback_control_requires_armed_track_before_playing() {
+        let control = PlaybackControlPlane::new();
+        let err = control
+            .set_playback_playing(true)
+            .expect_err("playing without armed track must fail");
+        assert_eq!(err.code, app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED);
+    }
+
+    #[test]
+    fn playback_control_start_playing_arms_pending_track_change_inline() {
+        let control = PlaybackControlPlane::new();
+        let dir = tempdir().expect("tempdir");
+        let wav_path = dir.path().join("inline-arm.wav");
+        std::fs::write(&wav_path, pcm16_wav_sine_bytes(48_000, 250, 440.0, 0.25))
+            .expect("write wav fixture");
+
+        {
+            let mut guard = control
+                .hardware_state
+                .write()
+                .expect("hardware_state write lock");
+            *guard = Some(AudioHardwareState {
+                sample_rate_hz: 48_000,
+                bit_depth: 16,
+                buffer_size_frames: 480,
+                is_exclusive_lock: false,
+            });
+        }
+        control
+            .set_playback_queue(vec![wav_path.to_string_lossy().to_string()])
+            .expect("set playback queue");
+        assert!(
+            control
+                .push_track_change_request(0)
+                .expect("queue request should succeed"),
+            "track-change request should be accepted"
+        );
+
+        control
+            .set_playback_playing(true)
+            .expect("playing should arm and start from pending track-change");
+        assert!(control.context_state().is_playing);
+        assert!(control.current_decoded_track().is_some());
+    }
+
+    #[test]
+    fn playback_control_seek_ratio_rejects_out_of_range_values() {
+        let control = PlaybackControlPlane::new();
+        let err = control
+            .seek_playback_ratio(1.5)
+            .expect_err("seek ratio above 1.0 must fail");
+        assert_eq!(err.code, app_error_codes::INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn playback_control_invalid_seek_ratio_error_wire_shape_is_stable() {
+        let control = PlaybackControlPlane::new();
+        let err = control
+            .seek_playback_ratio(f32::NAN)
+            .expect_err("non-finite seek ratio must fail");
+        assert_eq!(err.code, app_error_codes::INVALID_ARGUMENT);
+        assert_eq!(
+            err.message,
+            "seek ratio must be a finite float between 0.0 and 1.0"
+        );
+
+        let wire = serde_json::to_value(&err).expect("serialize AppError");
+        assert_app_error_wire_top_level_shape(&wire);
+        assert_eq!(wire["code"], app_error_codes::INVALID_ARGUMENT);
+        assert_eq!(
+            wire["message"],
+            "seek ratio must be a finite float between 0.0 and 1.0"
+        );
+        assert!(wire["details"].is_null());
     }
 
     #[test]
@@ -3548,6 +5643,67 @@ tags: ["mock"]"#,
         assert_eq!(error.code, app_error_codes::INVALID_ARGUMENT);
     }
 
+    #[test]
+    fn append_interleaved_to_stereo_f32_preserves_left_right_order() {
+        let mut out = Vec::new();
+        append_interleaved_to_stereo_f32(&[1.0, -1.0, 0.5, -0.5], 2, &mut out);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], 1.0, "left sample should stay on left channel");
+        assert_eq!(out[1], -1.0, "right sample should stay on right channel");
+        assert_eq!(out[2], 0.5, "second frame left should stay on left channel");
+        assert_eq!(
+            out[3], -0.5,
+            "second frame right should stay on right channel"
+        );
+    }
+
+    #[test]
+    fn append_interleaved_to_stereo_f32_duplicates_mono_to_lr() {
+        let mut out = Vec::new();
+        append_interleaved_to_stereo_f32(&[0.25, -0.25], 1, &mut out);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], out[1], "mono frame must duplicate to L/R");
+        assert_eq!(out[2], out[3], "mono frame must duplicate to L/R");
+    }
+
+    #[test]
+    fn write_pcm_stereo_frame_packs_16bit_little_endian() {
+        let mut out = [0u8; 4];
+        assert!(write_pcm_stereo_frame(&mut out, 0, 16, 0.5, -0.5));
+        assert_eq!(out, [0x00, 0x40, 0x00, 0xC0]);
+    }
+
+    #[test]
+    fn write_pcm_stereo_frame_packs_24bit_little_endian() {
+        let mut out = [0u8; 6];
+        assert!(write_pcm_stereo_frame(&mut out, 0, 24, 0.5, -0.5));
+        assert_eq!(out, [0x00, 0x00, 0x40, 0x00, 0x00, 0xC0]);
+    }
+
+    #[test]
+    fn write_pcm_stereo_frame_packs_32bit_little_endian() {
+        let mut out = [0u8; 8];
+        assert!(write_pcm_stereo_frame(&mut out, 0, 32, 0.5, -0.5));
+        assert_eq!(out, [0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0xC0]);
+    }
+
+    #[test]
+    fn validate_audio_format_boundary_rejects_sample_rate_mismatch() {
+        let boundary = AudioFormatBoundary {
+            decoder_sample_rate: 44_100,
+            decoder_channels: 2,
+            decoder_is_interleaved: true,
+            decoder_bit_depth: 32,
+            dac_sample_rate: 48_000,
+            dac_channels: 2,
+            dac_requires_interleaved: true,
+            dac_bit_depth: 16,
+        };
+        let err = validate_audio_format_boundary(&boundary)
+            .expect_err("sample-rate mismatch must be rejected");
+        assert!(err.contains("sample-rate match"));
+    }
+
     fn decode_plan_release_input_from_ipc_value_for_test(
         value: serde_json::Value,
     ) -> Result<PlanReleaseInput, AppError> {
@@ -3572,6 +5728,547 @@ tags: ["mock"]"#,
                 "invalid catalog_update_track_metadata payload: {error}"
             ))
         })
+    }
+
+    #[test]
+    fn parse_env_flag_bool_supports_expected_tokens() {
+        assert_eq!(parse_env_flag_bool("1"), Some(true));
+        assert_eq!(parse_env_flag_bool("TRUE"), Some(true));
+        assert_eq!(parse_env_flag_bool(" yes "), Some(true));
+        assert_eq!(parse_env_flag_bool("on"), Some(true));
+        assert_eq!(parse_env_flag_bool("0"), Some(false));
+        assert_eq!(parse_env_flag_bool("False"), Some(false));
+        assert_eq!(parse_env_flag_bool(" no "), Some(false));
+        assert_eq!(parse_env_flag_bool("off"), Some(false));
+        assert_eq!(parse_env_flag_bool("maybe"), None);
+    }
+
+    #[test]
+    fn qc_codec_profile_registry_marks_profiles_unavailable_when_preview_disabled() {
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: false,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: false,
+        };
+        let profiles = qc_codec_profile_registry(&flags);
+        assert!(
+            !profiles.is_empty(),
+            "codec profile registry should not be empty"
+        );
+        assert!(
+            profiles.iter().all(|profile| !profile.available),
+            "profiles should be unavailable when preview feature is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn qc_prepare_preview_session_succeeds_with_default_feature_flags() {
+        let session = qc_prepare_preview_session(QcPreparePreviewSessionInput {
+            source_track_id: "a".repeat(64),
+            profile_a_id: "spotify_vorbis_320".to_string(),
+            profile_b_id: "apple_music_aac_256".to_string(),
+            blind_x_enabled: false,
+        })
+        .await
+        .expect("preview session should be enabled by default");
+        assert_eq!(session.active_variant, QcPreviewVariant::Bypass);
+        assert!(!session.blind_x_enabled);
+        assert!(session.blind_x_revealed);
+    }
+
+    #[tokio::test]
+    async fn qc_get_active_preview_media_contract_success_wire_shape_is_stable() {
+        let (service, dir) = new_service().await;
+        let store = QcPreviewSessionStore::new();
+        let source_path = dir.path().join("preview-source.wav");
+        let codec_a_path = dir.path().join("preview-codec-a.ogg");
+        let codec_b_path = dir.path().join("preview-codec-b.m4a");
+        tokio::fs::write(&source_path, b"source")
+            .await
+            .expect("write source preview fixture");
+        tokio::fs::write(&codec_a_path, b"codec-a")
+            .await
+            .expect("write codec-a preview fixture");
+        tokio::fs::write(&codec_b_path, b"codec-b")
+            .await
+            .expect("write codec-b preview fixture");
+
+        let session = QcPreviewSessionStateResponse {
+            source_track_id: "b".repeat(64),
+            active_variant: QcPreviewVariant::BlindX,
+            profile_a_id: "spotify_vorbis_320".to_string(),
+            profile_b_id: "apple_music_aac_256".to_string(),
+            blind_x_enabled: true,
+            blind_x_revealed: true,
+        };
+        let session_cache_key = qc_preview_session_cache_key(&session);
+        store
+            .set_state(session)
+            .expect("store preview session state");
+        store
+            .set_media_state(QcPreviewSessionMediaState {
+                session_cache_key,
+                source_media_path: path_to_string(&source_path),
+                codec_a_media_path: path_to_string(&codec_a_path),
+                codec_b_media_path: path_to_string(&codec_b_path),
+                blind_x_assignment: QcPreviewVariant::CodecB,
+            })
+            .expect("store reusable preview media state");
+
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: true,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: true,
+        };
+        let response = qc_get_active_preview_media_with_dependencies(
+            Arc::new(service),
+            store.as_ref(),
+            &flags,
+        )
+        .await
+        .expect("active preview media should resolve");
+        assert_eq!(response.variant, QcPreviewVariant::BlindX);
+        assert_eq!(response.media_path, path_to_string(&codec_b_path));
+        assert_eq!(
+            response.blind_x_resolved_variant,
+            Some(QcPreviewVariant::CodecB)
+        );
+
+        let wire = serde_json::to_value(&response).expect("serialize preview media response");
+        let object = wire
+            .as_object()
+            .expect("preview media response should serialize to object");
+        let mut keys: Vec<_> = object.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["blind_x_resolved_variant", "media_path", "variant"]
+        );
+        assert_eq!(wire["variant"], "blind_x");
+        assert_eq!(wire["blind_x_resolved_variant"], "codec_b");
+    }
+
+    #[tokio::test]
+    async fn qc_get_active_preview_media_contract_blind_x_hidden_masks_resolved_variant() {
+        let (service, dir) = new_service().await;
+        let store = QcPreviewSessionStore::new();
+        let source_path = dir.path().join("preview-hidden-source.wav");
+        let codec_a_path = dir.path().join("preview-hidden-codec-a.ogg");
+        let codec_b_path = dir.path().join("preview-hidden-codec-b.m4a");
+        tokio::fs::write(&source_path, b"source")
+            .await
+            .expect("write source preview fixture");
+        tokio::fs::write(&codec_a_path, b"codec-a")
+            .await
+            .expect("write codec-a preview fixture");
+        tokio::fs::write(&codec_b_path, b"codec-b")
+            .await
+            .expect("write codec-b preview fixture");
+
+        let session = QcPreviewSessionStateResponse {
+            source_track_id: "c".repeat(64),
+            active_variant: QcPreviewVariant::BlindX,
+            profile_a_id: "spotify_vorbis_320".to_string(),
+            profile_b_id: "apple_music_aac_256".to_string(),
+            blind_x_enabled: true,
+            blind_x_revealed: false,
+        };
+        let session_cache_key = qc_preview_session_cache_key(&session);
+        store
+            .set_state(session)
+            .expect("store preview session state");
+        store
+            .set_media_state(QcPreviewSessionMediaState {
+                session_cache_key,
+                source_media_path: path_to_string(&source_path),
+                codec_a_media_path: path_to_string(&codec_a_path),
+                codec_b_media_path: path_to_string(&codec_b_path),
+                blind_x_assignment: QcPreviewVariant::CodecA,
+            })
+            .expect("store reusable preview media state");
+
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: true,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: true,
+        };
+        let response = qc_get_active_preview_media_with_dependencies(
+            Arc::new(service),
+            store.as_ref(),
+            &flags,
+        )
+        .await
+        .expect("active preview media should resolve");
+        assert_eq!(response.variant, QcPreviewVariant::BlindX);
+        assert_eq!(response.media_path, path_to_string(&codec_a_path));
+        assert_eq!(response.blind_x_resolved_variant, None);
+    }
+
+    #[tokio::test]
+    async fn qc_get_active_preview_media_contract_missing_track_wire_shape_is_stable() {
+        let (service, _dir) = new_service().await;
+        let store = QcPreviewSessionStore::new();
+        store
+            .set_state(QcPreviewSessionStateResponse {
+                source_track_id: "f".repeat(64),
+                active_variant: QcPreviewVariant::Bypass,
+                profile_a_id: "spotify_vorbis_320".to_string(),
+                profile_b_id: "apple_music_aac_256".to_string(),
+                blind_x_enabled: false,
+                blind_x_revealed: true,
+            })
+            .expect("store preview session state");
+
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: true,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: true,
+        };
+        let err = qc_get_active_preview_media_with_dependencies(
+            Arc::new(service),
+            store.as_ref(),
+            &flags,
+        )
+        .await
+        .expect_err("missing catalog track should fail");
+        assert_eq!(err.code, app_error_codes::INVALID_ARGUMENT);
+        assert_eq!(err.message, "catalog source_track_id not found");
+
+        let wire = serde_json::to_value(&err).expect("serialize AppError");
+        assert_app_error_wire_top_level_shape(&wire);
+        assert_eq!(wire["code"], "INVALID_ARGUMENT");
+        assert_eq!(wire["message"], "catalog source_track_id not found");
+        assert!(wire["details"].is_null());
+    }
+
+    #[test]
+    fn qc_feature_flag_defaults_enable_preview_and_batch_export() {
+        let preview_default = std::hint::black_box(DEFAULT_QC_CODEC_PREVIEW_V1);
+        let batch_export_default = std::hint::black_box(DEFAULT_QC_BATCH_EXPORT_V1);
+        let realtime_default = std::hint::black_box(DEFAULT_QC_REALTIME_METERS_V1);
+        assert!(
+            preview_default,
+            "codec preview should be enabled by default"
+        );
+        assert!(
+            batch_export_default,
+            "batch export should be enabled by default"
+        );
+        assert!(
+            !realtime_default,
+            "realtime meters should remain disabled by default"
+        );
+    }
+
+    #[tokio::test]
+    async fn qc_start_batch_export_never_reports_passthrough_copy_as_success() {
+        let (service, dir) = new_service().await;
+        let source_wav = write_wav_fixture_file(dir.path(), "batch-source.wav").await;
+        let imported = service
+            .handle_catalog_import_files(vec![source_wav])
+            .await
+            .expect("import source track");
+        let source_track_id = imported
+            .imported
+            .first()
+            .expect("import should contain one track")
+            .track_id
+            .clone();
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_millis();
+        let output_dir = std::env::current_dir()
+            .expect("cwd")
+            .join(format!(".tmp-qc-batch-exports-{now_ms}"));
+        let output_dir_input = output_dir
+            .to_string_lossy()
+            .to_string()
+            .replace(r"\\?\", "")
+            .replace("//?/", "");
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: true,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: true,
+        };
+
+        let response = qc_start_batch_export_with_dependencies(
+            Arc::new(service),
+            &flags,
+            QcBatchExportStartInput {
+                source_track_id: source_track_id.clone(),
+                profile_ids: vec![
+                    "spotify_vorbis_320".to_string(),
+                    "legacy_mp3_320".to_string(),
+                ],
+                output_dir: output_dir_input,
+                target_integrated_lufs: Some(-14.0),
+            },
+        )
+        .await
+        .expect("batch export should queue");
+        assert_eq!(response.status, "queued");
+        assert_eq!(response.job_id.len(), 64);
+
+        let summary_path = qc_batch_export_summary_path(&output_dir, &response.job_id);
+        for _ in 0..100 {
+            if tokio::fs::try_exists(&summary_path)
+                .await
+                .expect("check summary path")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        assert!(
+            tokio::fs::try_exists(&summary_path)
+                .await
+                .expect("check summary path"),
+            "summary artifact should exist"
+        );
+
+        let summary_bytes = tokio::fs::read(&summary_path)
+            .await
+            .expect("read summary artifact");
+        let summary: QcBatchExportSummary =
+            serde_json::from_slice(&summary_bytes).expect("decode summary artifact");
+        assert_eq!(summary.job_id, response.job_id);
+        assert_eq!(summary.source_track_id, source_track_id);
+        assert_eq!(summary.profile_results.len(), 2);
+        assert_eq!(
+            summary.completed_profiles + summary.failed_profiles,
+            summary.profile_results.len()
+        );
+        assert_eq!(
+            summary.completed_profiles,
+            summary
+                .profile_results
+                .iter()
+                .filter(|entry| entry.status == "completed")
+                .count()
+        );
+        assert_eq!(
+            summary.failed_profiles,
+            summary
+                .profile_results
+                .iter()
+                .filter(|entry| entry.status == "failed")
+                .count()
+        );
+        assert!(
+            summary
+                .profile_results
+                .iter()
+                .all(|entry| entry.status == "completed" || entry.status == "failed"),
+            "profile results should only report explicit completed or failed outcomes"
+        );
+        assert!(
+            summary
+                .profile_results
+                .iter()
+                .all(|entry| !entry.message.to_ascii_lowercase().contains("passthrough")),
+            "passthrough fallback messaging should not be emitted"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&output_dir).await;
+    }
+
+    #[tokio::test]
+    async fn qc_get_batch_export_job_status_tracks_progress_until_terminal_state() {
+        let (service, dir) = new_service().await;
+        let source_wav = write_wav_fixture_file(dir.path(), "batch-status-source.wav").await;
+        let imported = service
+            .handle_catalog_import_files(vec![source_wav])
+            .await
+            .expect("import source track");
+        let source_track_id = imported
+            .imported
+            .first()
+            .expect("import should contain one track")
+            .track_id
+            .clone();
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_millis();
+        let output_dir = std::env::current_dir()
+            .expect("cwd")
+            .join(format!(".tmp-qc-batch-status-{now_ms}"));
+        let output_dir_input = output_dir
+            .to_string_lossy()
+            .to_string()
+            .replace(r"\\?\", "")
+            .replace("//?/", "");
+        let flags = QcFeatureFlagsResponse {
+            qc_codec_preview_v1: true,
+            qc_realtime_meters_v1: false,
+            qc_batch_export_v1: true,
+        };
+
+        let response = qc_start_batch_export_with_dependencies(
+            Arc::new(service),
+            &flags,
+            QcBatchExportStartInput {
+                source_track_id,
+                profile_ids: vec!["legacy_mp3_320".to_string()],
+                output_dir: output_dir_input,
+                target_integrated_lufs: Some(-14.0),
+            },
+        )
+        .await
+        .expect("batch export should queue");
+
+        let initial = qc_get_batch_export_job_status(response.job_id.clone())
+            .await
+            .expect("status query should succeed")
+            .expect("job should exist");
+        assert_eq!(initial.total_profiles, 1);
+        assert!([
+            "queued",
+            "running",
+            "completed",
+            "completed_with_errors",
+            "failed"
+        ]
+        .contains(&initial.status.as_str()));
+
+        let mut terminal = initial.clone();
+        for _ in 0..120 {
+            if ["completed", "completed_with_errors", "failed"].contains(&terminal.status.as_str())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            terminal = qc_get_batch_export_job_status(response.job_id.clone())
+                .await
+                .expect("status query should succeed")
+                .expect("job should exist");
+        }
+
+        assert!(
+            ["completed", "completed_with_errors", "failed"].contains(&terminal.status.as_str()),
+            "job should eventually reach a terminal status"
+        );
+        assert_eq!(terminal.progress_percent, 100);
+
+        let _ = tokio::fs::remove_dir_all(&output_dir).await;
+    }
+
+    #[tokio::test]
+    async fn qc_get_feature_flags_reports_enabled_defaults_for_preview_and_batch_export() {
+        let flags = qc_get_feature_flags()
+            .await
+            .expect("qc_get_feature_flags should succeed");
+        assert!(flags.qc_codec_preview_v1);
+        assert!(flags.qc_batch_export_v1);
+        assert!(!flags.qc_realtime_meters_v1);
+    }
+
+    #[test]
+    fn qc_preview_session_store_round_trip_and_variant_updates() {
+        let store = QcPreviewSessionStore::new();
+        let session = QcPreviewSessionStateResponse {
+            source_track_id: "a".repeat(64),
+            active_variant: QcPreviewVariant::BlindX,
+            profile_a_id: "spotify_vorbis_320".to_string(),
+            profile_b_id: "apple_music_aac_256".to_string(),
+            blind_x_enabled: true,
+            blind_x_revealed: false,
+        };
+
+        let stored = store.set_state(session).expect("store preview session");
+        assert_eq!(stored.active_variant, QcPreviewVariant::BlindX);
+        assert!(!stored.blind_x_revealed);
+
+        let revealed = store.reveal_blind_x().expect("reveal blind-x");
+        assert!(revealed.blind_x_revealed);
+        assert_eq!(revealed.active_variant, QcPreviewVariant::BlindX);
+
+        let switched = store
+            .set_active_variant(QcPreviewVariant::CodecA)
+            .expect("set codec_a variant");
+        assert_eq!(switched.active_variant, QcPreviewVariant::CodecA);
+        assert!(switched.blind_x_revealed);
+    }
+
+    #[test]
+    fn qc_preview_session_store_rejects_invalid_state_transitions() {
+        let store = QcPreviewSessionStore::new();
+
+        let missing_err = store
+            .set_active_variant(QcPreviewVariant::CodecA)
+            .expect_err("variant update without session must fail");
+        assert_eq!(missing_err.code, app_error_codes::INVALID_ARGUMENT);
+
+        store
+            .set_state(QcPreviewSessionStateResponse {
+                source_track_id: "b".repeat(64),
+                active_variant: QcPreviewVariant::Bypass,
+                profile_a_id: "spotify_vorbis_320".to_string(),
+                profile_b_id: "apple_music_aac_256".to_string(),
+                blind_x_enabled: false,
+                blind_x_revealed: true,
+            })
+            .expect("store non-blind session");
+
+        let blind_variant_err = store
+            .set_active_variant(QcPreviewVariant::BlindX)
+            .expect_err("blind-x variant should fail when blind mode disabled");
+        assert_eq!(blind_variant_err.code, app_error_codes::INVALID_ARGUMENT);
+
+        let reveal_err = store
+            .reveal_blind_x()
+            .expect_err("blind-x reveal should fail when blind mode disabled");
+        assert_eq!(reveal_err.code, app_error_codes::INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn qc_preview_session_store_set_state_clears_cached_media_state() {
+        let store = QcPreviewSessionStore::new();
+        store
+            .set_media_state(QcPreviewSessionMediaState {
+                session_cache_key: "cache-key".to_string(),
+                source_media_path: "C:/media/source.wav".to_string(),
+                codec_a_media_path: "C:/media/codec_a.ogg".to_string(),
+                codec_b_media_path: "C:/media/codec_b.m4a".to_string(),
+                blind_x_assignment: QcPreviewVariant::CodecA,
+            })
+            .expect("store preview media state");
+
+        store
+            .set_state(QcPreviewSessionStateResponse {
+                source_track_id: "f".repeat(64),
+                active_variant: QcPreviewVariant::Bypass,
+                profile_a_id: "spotify_vorbis_320".to_string(),
+                profile_b_id: "apple_music_aac_256".to_string(),
+                blind_x_enabled: false,
+                blind_x_revealed: true,
+            })
+            .expect("store preview session state");
+
+        assert!(
+            store.get_media_state().expect("read media state").is_none(),
+            "preview media cache should reset when session changes"
+        );
+    }
+
+    #[test]
+    fn qc_preview_blind_assignment_is_deterministic() {
+        assert_eq!(
+            qc_preview_blind_assignment("0abc1234"),
+            QcPreviewVariant::CodecA
+        );
+        assert_eq!(
+            qc_preview_blind_assignment("fabc1234"),
+            QcPreviewVariant::CodecB
+        );
+        assert_eq!(
+            qc_preview_blind_assignment("0abc1234"),
+            QcPreviewVariant::CodecA
+        );
     }
 
     async fn write_spec_file(dir: &Path, title: &str, artist: &str) -> String {
@@ -3645,7 +6342,7 @@ tags: ["mock"]"#,
                 .await
                 .expect("get ingest job")
                 .expect("ingest job exists");
-            if matches!(job.status.as_str(), "COMPLETED" | "FAILED") {
+            if matches!(job.status.as_str(), "COMPLETED" | "FAILED" | "CANCELED") {
                 return job;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -3767,6 +6464,103 @@ tags: ["mock"]"#,
         assert_eq!(detail.sample_rate_hz, 48_000);
         assert_eq!(detail.channels, 1);
         assert!(!detail.track.peak_data().is_empty());
+        assert!(
+            detail
+                .track
+                .peak_data()
+                .iter()
+                .all(|peak| peak.is_finite() && *peak <= 0.0),
+            "catalog peak_data should remain finite and non-positive"
+        );
+        assert!(
+            detail.track.loudness_lufs().is_finite() && detail.track.loudness_lufs() <= 0.0,
+            "catalog loudness_lufs should remain finite and non-positive"
+        );
+        assert!(
+            detail.true_peak_dbfs.is_some(),
+            "catalog true_peak_dbfs should be populated from analysis"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_get_track_rejects_tampered_positive_true_peak_dbfs() {
+        let (service, dir) = new_service().await;
+        let wav = write_wav_fixture_file(dir.path(), "Artist TP - Tamper.wav").await;
+        let imported = service
+            .handle_catalog_import_files(vec![wav])
+            .await
+            .expect("catalog import");
+        let track_id = imported.imported[0].track_id.clone();
+
+        sqlx::query("UPDATE catalog_tracks SET true_peak_dbfs = ? WHERE track_id = ?")
+            .bind(0.5f64)
+            .bind(&track_id)
+            .execute(service.orchestrator.db().pool())
+            .await
+            .expect("tamper catalog true_peak_dbfs");
+
+        let err = service
+            .handle_catalog_get_track(&track_id)
+            .await
+            .expect_err("tampered true_peak_dbfs should be rejected");
+        assert!(err.code.starts_with(app_error_codes::DB_PREFIX));
+        assert!(
+            err.message.contains("true_peak_dbfs"),
+            "expected decode error to reference true_peak_dbfs, got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_track_tamper_positive_loudness_lufs_is_blocked_by_sqlite_check() {
+        let (service, dir) = new_service().await;
+        let wav = write_wav_fixture_file(dir.path(), "Artist LUFS - Tamper.wav").await;
+        let imported = service
+            .handle_catalog_import_files(vec![wav])
+            .await
+            .expect("catalog import");
+        let track_id = imported.imported[0].track_id.clone();
+
+        let err = sqlx::query("UPDATE catalog_tracks SET loudness_lufs = ? WHERE track_id = ?")
+            .bind(0.25f64)
+            .bind(&track_id)
+            .execute(service.orchestrator.db().pool())
+            .await
+            .expect_err("positive loudness_lufs tamper should be blocked by CHECK constraint");
+        let message = err.to_string();
+        assert!(
+            message.contains("CHECK constraint failed") && message.contains("loudness_lufs <= 0"),
+            "unexpected sqlite error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_get_track_rejects_tampered_peak_data_json() {
+        let (service, dir) = new_service().await;
+        let wav = write_wav_fixture_file(dir.path(), "Artist Peak - Tamper.wav").await;
+        let imported = service
+            .handle_catalog_import_files(vec![wav])
+            .await
+            .expect("catalog import");
+        let track_id = imported.imported[0].track_id.clone();
+
+        sqlx::query("UPDATE catalog_tracks SET peak_data_json = ? WHERE track_id = ?")
+            .bind("[0.0, 1.0, -3.0]")
+            .bind(&track_id)
+            .execute(service.orchestrator.db().pool())
+            .await
+            .expect("tamper catalog peak_data_json");
+
+        let err = service
+            .handle_catalog_get_track(&track_id)
+            .await
+            .expect_err("tampered peak_data_json should be rejected");
+        assert!(err.code.starts_with(app_error_codes::DB_PREFIX));
+        assert!(
+            err.message.contains("peak_data"),
+            "expected decode error to reference peak_data, got: {}",
+            err.message
+        );
     }
 
     #[tokio::test]
@@ -3957,7 +6751,9 @@ tags: ["mock"]"#,
             .await
             .expect_err("oversized import payload must be rejected");
         assert_eq!(err.code, "INVALID_ARGUMENT");
-        assert!(err.message.contains("payload exceeds maximum aggregate path length"));
+        assert!(err
+            .message
+            .contains("payload exceeds maximum aggregate path length"));
     }
 
     #[tokio::test]
@@ -3967,6 +6763,7 @@ tags: ["mock"]"#,
         tokio::fs::create_dir_all(&root_dir)
             .await
             .expect("create library root");
+        let wav = write_wav_fixture_file(&root_dir, "Artist Root - Root Track.wav").await;
 
         let added = service
             .handle_catalog_add_library_root(&root_dir.to_string_lossy())
@@ -3983,6 +6780,23 @@ tags: ["mock"]"#,
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].root_id, added.root_id);
 
+        let imported = service
+            .handle_catalog_import_files(vec![wav])
+            .await
+            .expect("import catalog track under root");
+        assert_eq!(imported.failed.len(), 0);
+        assert_eq!(imported.imported.len(), 1);
+
+        let tracks_before_remove = service
+            .handle_catalog_list_tracks(Some(CatalogListTracksInput {
+                search: None,
+                limit: Some(50),
+                offset: Some(0),
+            }))
+            .await
+            .expect("list tracks before remove");
+        assert_eq!(tracks_before_remove.total, 1);
+
         let removed = service
             .handle_catalog_remove_library_root(&added.root_id)
             .await
@@ -3993,6 +6807,114 @@ tags: ["mock"]"#,
             .await
             .expect("list roots after remove");
         assert!(listed_after.is_empty());
+
+        let tracks_after_remove = service
+            .handle_catalog_list_tracks(Some(CatalogListTracksInput {
+                search: None,
+                limit: Some(50),
+                offset: Some(0),
+            }))
+            .await
+            .expect("list tracks after remove");
+        assert_eq!(tracks_after_remove.total, 0);
+    }
+
+    #[tokio::test]
+    async fn catalog_reset_library_data_clears_tracks_and_roots() {
+        let (service, dir) = new_service().await;
+        let root_dir = dir.path().join("reset-root");
+        tokio::fs::create_dir_all(&root_dir)
+            .await
+            .expect("create reset root");
+        let wav = write_wav_fixture_file(&root_dir, "Artist Reset - Track.wav").await;
+
+        let added = service
+            .handle_catalog_add_library_root(&root_dir.to_string_lossy())
+            .await
+            .expect("add root for reset");
+        assert_eq!(added.root_id.len(), 64);
+
+        let imported = service
+            .handle_catalog_import_files(vec![wav])
+            .await
+            .expect("import before reset");
+        assert_eq!(imported.imported.len(), 1);
+        assert!(imported.failed.is_empty());
+
+        let reset = service
+            .handle_catalog_reset_library_data()
+            .await
+            .expect("reset catalog library data");
+        assert!(reset);
+
+        let listed_roots = service
+            .handle_catalog_list_library_roots()
+            .await
+            .expect("list roots after reset");
+        assert!(listed_roots.is_empty());
+
+        let listed_tracks = service
+            .handle_catalog_list_tracks(Some(CatalogListTracksInput {
+                search: None,
+                limit: Some(50),
+                offset: Some(0),
+            }))
+            .await
+            .expect("list tracks after reset");
+        assert_eq!(listed_tracks.total, 0);
+        assert!(listed_tracks.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn catalog_remove_library_root_only_prunes_matching_root_prefix() {
+        let (service, dir) = new_service().await;
+        let root_a = dir.path().join("library-root");
+        let root_b = dir.path().join("library-root-2");
+        tokio::fs::create_dir_all(&root_a)
+            .await
+            .expect("create root A");
+        tokio::fs::create_dir_all(&root_b)
+            .await
+            .expect("create root B");
+
+        let wav_a = write_wav_fixture_file(&root_a, "Artist Root A - Keep Out.wav").await;
+        let wav_b = write_wav_fixture_file(&root_b, "Artist Root B - Keep In.wav").await;
+
+        let added_a = service
+            .handle_catalog_add_library_root(&root_a.to_string_lossy())
+            .await
+            .expect("add root A");
+        let _added_b = service
+            .handle_catalog_add_library_root(&root_b.to_string_lossy())
+            .await
+            .expect("add root B");
+
+        let imported = service
+            .handle_catalog_import_files(vec![wav_a, wav_b])
+            .await
+            .expect("import tracks for both roots");
+        assert_eq!(imported.failed.len(), 0);
+        assert_eq!(imported.imported.len(), 2);
+
+        let removed = service
+            .handle_catalog_remove_library_root(&added_a.root_id)
+            .await
+            .expect("remove root A");
+        assert!(removed);
+
+        let tracks_after_remove = service
+            .handle_catalog_list_tracks(Some(CatalogListTracksInput {
+                search: None,
+                limit: Some(50),
+                offset: Some(0),
+            }))
+            .await
+            .expect("list tracks after removing root A");
+        assert_eq!(tracks_after_remove.total, 1);
+        assert_eq!(tracks_after_remove.items.len(), 1);
+        assert!(tracks_after_remove.items[0]
+            .file_path
+            .ends_with("Artist Root B - Keep In.wav"));
     }
 
     #[tokio::test]
@@ -4087,6 +7009,46 @@ tags: ["mock"]"#,
             .await
             .expect("list imported tracks");
         assert_eq!(listed.total, 1);
+    }
+
+    #[tokio::test]
+    async fn catalog_cancel_ingest_job_marks_job_canceled_and_prevents_scan_run() {
+        let (service, dir) = new_service().await;
+        let service = Arc::new(service);
+        let root_dir = dir.path().join("scan-cancel");
+        tokio::fs::create_dir_all(&root_dir)
+            .await
+            .expect("create scan root");
+        let _wav = write_wav_fixture_file(&root_dir, "Cancel Me.wav").await;
+
+        let root = service
+            .handle_catalog_add_library_root(&root_dir.to_string_lossy())
+            .await
+            .expect("add root");
+        let prepared = service
+            .handle_catalog_scan_root_prepare(&root.root_id)
+            .await
+            .expect("prepare scan");
+        let job_id = prepared.job.job_id.clone();
+
+        let canceled = service
+            .handle_catalog_cancel_ingest_job(&job_id)
+            .await
+            .expect("cancel ingest job");
+        assert!(canceled);
+
+        run_catalog_scan_job_inner(Arc::clone(&service), prepared.root, job_id.clone())
+            .await
+            .expect("canceled scan job should short-circuit cleanly");
+
+        let job = wait_for_ingest_job_terminal(service.as_ref(), &job_id).await;
+        assert_eq!(job.status, "CANCELED");
+
+        let canceled_again = service
+            .handle_catalog_cancel_ingest_job(&job_id)
+            .await
+            .expect("repeat cancel");
+        assert!(!canceled_again);
     }
 
     #[tokio::test]
@@ -4797,6 +7759,14 @@ tags: ["mock"]"#,
             .await
             .expect_err("odd prefix must be rejected");
         assert_eq!(err.code, "INVALID_ARGUMENT");
+    }
+
+    #[test]
+    fn reject_odd_prefixes_allows_unc_and_network_style_paths() {
+        reject_odd_prefixes("\\\\server\\share\\music\\track.wav")
+            .expect("UNC path should not be rejected by odd-prefix guard");
+        reject_odd_prefixes("//server/share/music/track.wav")
+            .expect("network-style path should not be rejected by odd-prefix guard");
     }
 
     #[test]

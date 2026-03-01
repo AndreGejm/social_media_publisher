@@ -747,6 +747,16 @@ async fn catalog_track_import_round_trips_and_dedupes_by_track_id() {
     assert_eq!(fetched.file_path, updated.file_path);
     assert_eq!(fetched.title, updated.title);
     assert_eq!(fetched.media_fingerprint, first.media_fingerprint);
+    assert!(
+        fetched.loudness_lufs.is_finite() && fetched.loudness_lufs <= 0.0,
+        "persisted catalog loudness_lufs must remain finite and non-positive"
+    );
+    assert!(
+        fetched
+            .true_peak_dbfs
+            .is_some_and(|value| value.is_finite() && value <= 0.0),
+        "persisted catalog true_peak_dbfs must remain finite and non-positive when present"
+    );
 }
 
 #[tokio::test]
@@ -757,11 +767,11 @@ async fn catalog_track_listing_search_filters_by_title_or_artist() {
     alpha.track_id = "1".repeat(64);
     alpha.media_asset_id = "2".repeat(64);
     alpha.artist_id = "3".repeat(64);
-    alpha.album_id = None;
+    alpha.album_id = Some("9".repeat(64));
     alpha.media_fingerprint = "4".repeat(64);
     alpha.title = "Sunset Demo".to_string();
     alpha.artist_name = "Rau Artist".to_string();
-    alpha.album_title = None;
+    alpha.album_title = Some("Night Session".to_string());
 
     let mut beta = sample_catalog_track_import("22", "C:/music/beta.wav");
     beta.track_id = "5".repeat(64);
@@ -773,12 +783,25 @@ async fn catalog_track_listing_search_filters_by_title_or_artist() {
     beta.artist_name = "Other Artist".to_string();
     beta.album_title = None;
 
+    let mut gamma = sample_catalog_track_import("23", "C:/music/ambient/folder-only.wav");
+    gamma.track_id = "9".repeat(64);
+    gamma.media_asset_id = "a".repeat(64);
+    gamma.artist_id = "b".repeat(64);
+    gamma.album_id = None;
+    gamma.media_fingerprint = "c".repeat(64);
+    gamma.title = "Nocturne".to_string();
+    gamma.artist_name = "Sunset Voices".to_string();
+    gamma.album_title = None;
+
     db.upsert_catalog_track_import(&alpha)
         .await
         .expect("insert alpha");
     db.upsert_catalog_track_import(&beta)
         .await
         .expect("insert beta");
+    db.upsert_catalog_track_import(&gamma)
+        .await
+        .expect("insert gamma");
 
     let by_title = db
         .list_catalog_tracks(&CatalogListTracksQuery {
@@ -788,8 +811,9 @@ async fn catalog_track_listing_search_filters_by_title_or_artist() {
         })
         .await
         .expect("list by title");
-    assert_eq!(by_title.total, 1);
+    assert_eq!(by_title.total, 2);
     assert_eq!(by_title.items[0].title, "Sunset Demo");
+    assert_eq!(by_title.items[1].artist_name, "Sunset Voices");
 
     let by_artist = db
         .list_catalog_tracks(&CatalogListTracksQuery {
@@ -801,6 +825,187 @@ async fn catalog_track_listing_search_filters_by_title_or_artist() {
         .expect("list by artist");
     assert_eq!(by_artist.total, 1);
     assert_eq!(by_artist.items[0].artist_name, "Rau Artist");
+
+    let by_album = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("session".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by album");
+    assert_eq!(by_album.total, 1);
+    assert_eq!(
+        by_album.items[0].album_title.as_deref(),
+        Some("Night Session")
+    );
+
+    let by_multi_term = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset rau".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by multi-term query");
+    assert_eq!(by_multi_term.total, 1);
+    assert_eq!(by_multi_term.items[0].title, "Sunset Demo");
+
+    let no_match_multi_term = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset other".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by mismatched multi-term query");
+    assert_eq!(no_match_multi_term.total, 0);
+    assert!(no_match_multi_term.items.is_empty());
+
+    let by_file_path = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("folder-only.wav".to_string()),
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list by file path tokenized query");
+    assert_eq!(by_file_path.total, 1);
+    assert_eq!(by_file_path.items[0].track_id, gamma.track_id);
+}
+
+#[tokio::test]
+async fn catalog_track_listing_search_pagination_is_stable() {
+    let db = new_test_db().await;
+
+    let mut first = sample_catalog_track_import("71", "C:/music/page-first.wav");
+    first.track_id = "1".repeat(64);
+    first.media_asset_id = "2".repeat(64);
+    first.artist_id = "3".repeat(64);
+    first.album_id = None;
+    first.media_fingerprint = "4".repeat(64);
+    first.title = "Sunset Grid A".to_string();
+    first.artist_name = "Stable Order".to_string();
+
+    let mut second = sample_catalog_track_import("72", "C:/music/page-second.wav");
+    second.track_id = "5".repeat(64);
+    second.media_asset_id = "6".repeat(64);
+    second.artist_id = first.artist_id.clone();
+    second.album_id = None;
+    second.media_fingerprint = "8".repeat(64);
+    second.title = "Sunset Grid B".to_string();
+    second.artist_name = "Stable Order".to_string();
+
+    let mut third = sample_catalog_track_import("73", "C:/music/page-third.wav");
+    third.track_id = "9".repeat(64);
+    third.media_asset_id = "a".repeat(64);
+    third.artist_id = first.artist_id.clone();
+    third.album_id = None;
+    third.media_fingerprint = "c".repeat(64);
+    third.title = "Sunset Grid C".to_string();
+    third.artist_name = "Stable Order".to_string();
+
+    db.upsert_catalog_track_import(&first)
+        .await
+        .expect("insert first track");
+    db.upsert_catalog_track_import(&second)
+        .await
+        .expect("insert second track");
+    db.upsert_catalog_track_import(&third)
+        .await
+        .expect("insert third track");
+
+    let page_one = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset grid".to_string()),
+            limit: 2,
+            offset: 0,
+        })
+        .await
+        .expect("list first page");
+    let page_one_repeat = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset grid".to_string()),
+            limit: 2,
+            offset: 0,
+        })
+        .await
+        .expect("list first page repeat");
+    let page_two = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: Some("sunset grid".to_string()),
+            limit: 2,
+            offset: 2,
+        })
+        .await
+        .expect("list second page");
+
+    assert_eq!(page_one.total, 3);
+    assert_eq!(page_one_repeat.total, 3);
+    assert_eq!(page_two.total, 3);
+    assert_eq!(page_one.items.len(), 2);
+    assert_eq!(page_one_repeat.items.len(), 2);
+    assert_eq!(page_two.items.len(), 1);
+
+    let page_one_ids = page_one
+        .items
+        .iter()
+        .map(|item| item.track_id.clone())
+        .collect::<Vec<_>>();
+    let page_one_repeat_ids = page_one_repeat
+        .items
+        .iter()
+        .map(|item| item.track_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(page_one_ids, page_one_repeat_ids);
+
+    let page_two_ids = page_two
+        .items
+        .iter()
+        .map(|item| item.track_id.clone())
+        .collect::<Vec<_>>();
+    assert!(!page_one_ids.contains(&page_two_ids[0]));
+}
+
+#[tokio::test]
+async fn catalog_track_import_rejects_positive_loudness_and_true_peak_values() {
+    let db = new_test_db().await;
+
+    let mut loudness_invalid = sample_catalog_track_import("55", "C:/music/invalid-loudness.wav");
+    loudness_invalid.track_id = "a".repeat(64);
+    loudness_invalid.media_asset_id = "b".repeat(64);
+    loudness_invalid.artist_id = "c".repeat(64);
+    loudness_invalid.album_id = None;
+    loudness_invalid.media_fingerprint = "d".repeat(64);
+    loudness_invalid.loudness_lufs = 0.1;
+    let loudness_err = db
+        .upsert_catalog_track_import(&loudness_invalid)
+        .await
+        .expect_err("positive loudness_lufs must be rejected");
+    assert_eq!(loudness_err.code, DbErrorCode::Query);
+    assert!(
+        loudness_err.message.contains("loudness_lufs"),
+        "unexpected message: {}",
+        loudness_err.message
+    );
+
+    let mut true_peak_invalid = sample_catalog_track_import("66", "C:/music/invalid-true-peak.wav");
+    true_peak_invalid.track_id = "e".repeat(64);
+    true_peak_invalid.media_asset_id = "f".repeat(64);
+    true_peak_invalid.artist_id = "1".repeat(64);
+    true_peak_invalid.album_id = None;
+    true_peak_invalid.media_fingerprint = "2".repeat(64);
+    true_peak_invalid.true_peak_dbfs = Some(0.25);
+    let true_peak_err = db
+        .upsert_catalog_track_import(&true_peak_invalid)
+        .await
+        .expect_err("positive true_peak_dbfs must be rejected");
+    assert_eq!(true_peak_err.code, DbErrorCode::Query);
+    assert!(
+        true_peak_err.message.contains("true_peak_dbfs"),
+        "unexpected message: {}",
+        true_peak_err.message
+    );
 }
 
 #[tokio::test]
@@ -954,6 +1159,65 @@ async fn library_roots_round_trip_and_delete() {
         .get_library_root(&root.root_id)
         .await
         .expect("get after delete")
+        .is_none());
+}
+
+#[tokio::test]
+async fn reset_catalog_library_data_clears_roots_tracks_and_ingest_jobs() {
+    let db = new_test_db().await;
+
+    db.upsert_library_root(&UpsertLibraryRoot {
+        root_id: "a".repeat(64),
+        path: "C:/Music".to_string(),
+        enabled: true,
+    })
+    .await
+    .expect("upsert library root");
+
+    let mut track = sample_catalog_track_import("55", "C:/Music/reset-me.wav");
+    track.track_id = "1".repeat(64);
+    track.media_asset_id = "2".repeat(64);
+    track.artist_id = "3".repeat(64);
+    track.album_id = None;
+    track.media_fingerprint = "4".repeat(64);
+    db.upsert_catalog_track_import(&track)
+        .await
+        .expect("insert catalog track");
+
+    let job_id = "5".repeat(64);
+    db.create_ingest_job(&NewIngestJob {
+        job_id: job_id.clone(),
+        status: IngestJobStatus::Pending,
+        scope: "scan-root:reset".to_string(),
+        total_items: 0,
+        processed_items: 0,
+        error_count: 0,
+    })
+    .await
+    .expect("create ingest job");
+
+    db.reset_catalog_library_data()
+        .await
+        .expect("reset catalog data");
+
+    let roots = db.list_library_roots().await.expect("list roots");
+    assert!(roots.is_empty());
+
+    let tracks = db
+        .list_catalog_tracks(&CatalogListTracksQuery {
+            search: None,
+            limit: 50,
+            offset: 0,
+        })
+        .await
+        .expect("list tracks after reset");
+    assert_eq!(tracks.total, 0);
+    assert!(tracks.items.is_empty());
+
+    assert!(db
+        .get_ingest_job(&job_id)
+        .await
+        .expect("fetch ingest job after reset")
         .is_none());
 }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-init-exclusive-device"
+description = "Enables the init_exclusive_device command without any pre-configured scope."
+commands.allow = ["init_exclusive_device"]
+
+[[permission]]
+identifier = "deny-init-exclusive-device"
+description = "Denies the init_exclusive_device command without any pre-configured scope."
+commands.deny = ["init_exclusive_device"]

@@ -14,6 +14,10 @@ This folder centralizes project documentation that was previously scattered acro
 - `specs/gui-button-intended-behavior.md`: Expected behavior for key GUI actions.
 - `specs/ui-navigation-refactor-step-plan.md`: UI navigation refactor plan.
 - `specs/2026-02-26-rauversion-qc-ui-gap-analysis-and-plan.md`: QC UI gap analysis and remediation plan.
+- `specs/2026-03-01-qc-player-stability-backlog-and-implementation-plan.md`: Master implementation backlog with pass/fail criteria and quality gates for QC player stabilization.
+
+## Requirement Specs
+- `requirements/requirement adding post mastering features.txt`: Active requirements specification for QC player and codec preview stabilization (functional, non-functional, and pass/fail gates).
 
 ## Review Reports
 - `reviews/01-rust-runtime-and-db.md`: Rust runtime and DB review notes.

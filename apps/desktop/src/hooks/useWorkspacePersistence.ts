@@ -16,9 +16,12 @@ type StorageKeys = {
   themePreference: string;
   compactDensity: string;
   showFullPaths: string;
+  shortcutBindings: string;
   trackSort: string;
+  trackGroupMode: string;
   playListMode: string;
   onlyFavorites: string;
+  dropAddParentFoldersAsRootsOnDrop: string;
   favorites: string;
   sessionQueue: string;
   publishSelectionQueue: string;
@@ -39,9 +42,12 @@ type UseWorkspacePersistenceArgs = {
   themePreference: string;
   compactDensity: boolean;
   showFullPaths: boolean;
+  shortcutBindings: unknown;
   trackSort: string;
+  trackGroupMode: string;
   playListMode: string;
   showFavoritesOnly: boolean;
+  dropAddParentFoldersAsRootsOnDrop: boolean;
   favoriteTrackIds: string[];
   sessionQueueTrackIds: string[];
   publishSelectionItems: unknown[];
@@ -101,8 +107,16 @@ export function useWorkspacePersistence(args: UseWorkspacePersistenceArgs) {
   }, [args.showFullPaths, args.storageKeys.showFullPaths]);
 
   useEffect(() => {
+    writeStorage(args.storageKeys.shortcutBindings, args.shortcutBindings);
+  }, [args.shortcutBindings, args.storageKeys.shortcutBindings]);
+
+  useEffect(() => {
     writeStorage(args.storageKeys.trackSort, args.trackSort);
   }, [args.storageKeys.trackSort, args.trackSort]);
+
+  useEffect(() => {
+    writeStorage(args.storageKeys.trackGroupMode, args.trackGroupMode);
+  }, [args.storageKeys.trackGroupMode, args.trackGroupMode]);
 
   useEffect(() => {
     writeStorage(args.storageKeys.playListMode, args.playListMode);
@@ -111,6 +125,10 @@ export function useWorkspacePersistence(args: UseWorkspacePersistenceArgs) {
   useEffect(() => {
     writeStorage(args.storageKeys.onlyFavorites, args.showFavoritesOnly);
   }, [args.showFavoritesOnly, args.storageKeys.onlyFavorites]);
+
+  useEffect(() => {
+    writeStorage(args.storageKeys.dropAddParentFoldersAsRootsOnDrop, args.dropAddParentFoldersAsRootsOnDrop);
+  }, [args.dropAddParentFoldersAsRootsOnDrop, args.storageKeys.dropAddParentFoldersAsRootsOnDrop]);
 
   useEffect(() => {
     writeStorage(args.storageKeys.favorites, args.favoriteTrackIds);

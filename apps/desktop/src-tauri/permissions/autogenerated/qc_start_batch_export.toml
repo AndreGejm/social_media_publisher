@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-start-batch-export"
+description = "Enables the qc_start_batch_export command without any pre-configured scope."
+commands.allow = ["qc_start_batch_export"]
+
+[[permission]]
+identifier = "deny-qc-start-batch-export"
+description = "Denies the qc_start_batch_export command without any pre-configured scope."
+commands.deny = ["qc_start_batch_export"]

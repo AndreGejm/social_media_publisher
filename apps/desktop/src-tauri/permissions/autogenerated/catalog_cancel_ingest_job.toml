@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-catalog-cancel-ingest-job"
+description = "Enables the catalog_cancel_ingest_job command without any pre-configured scope."
+commands.allow = ["catalog_cancel_ingest_job"]
+
+[[permission]]
+identifier = "deny-catalog-cancel-ingest-job"
+description = "Denies the catalog_cancel_ingest_job command without any pre-configured scope."
+commands.deny = ["catalog_cancel_ingest_job"]

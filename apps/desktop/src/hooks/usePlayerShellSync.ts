@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 import type { CatalogListTracksResponse, CatalogTrackDetailResponse } from "../services/tauriClient";
 
@@ -27,10 +27,10 @@ type UsePlayerShellSyncArgs = {
   setPlayerTimeSec: Dispatch<SetStateAction<number>>;
   playerIsPlaying: boolean;
   setPlayerIsPlaying: Dispatch<SetStateAction<boolean>>;
+  setNativePlaybackPlaying: (isPlaying: boolean) => Promise<void>;
   playerSource: PlayerSource;
   queue: CatalogListTracksResponse["items"];
   setPlayerTrackFromQueueIndex: (index: number, options?: { autoplay?: boolean; openTracksWorkspace?: boolean }) => void;
-  playerAudioRef: RefObject<HTMLAudioElement>;
   setPlayerError: Dispatch<SetStateAction<string | null>>;
   onNotice: (notice: AppNotice) => void;
 };
@@ -44,10 +44,10 @@ export function usePlayerShellSync(args: UsePlayerShellSyncArgs) {
     setPlayerTimeSec,
     playerIsPlaying,
     setPlayerIsPlaying,
+    setNativePlaybackPlaying,
     playerSource,
     queue,
     setPlayerTrackFromQueueIndex,
-    playerAudioRef,
     setPlayerError,
     onNotice
   } = args;
@@ -76,17 +76,14 @@ export function usePlayerShellSync(args: UsePlayerShellSyncArgs) {
       }
       return;
     }
-    const audio = playerAudioRef.current;
-    if (!audio) return;
-    if (audio.paused) {
-      void audio.play().catch(() => {
-        setPlayerIsPlaying(false);
-        setPlayerError("Unable to start playback for the current track.");
-        onNotice({ level: "warning", message: "Playback failed to start." });
-      });
-    } else {
-      audio.pause();
-    }
+
+    void setNativePlaybackPlaying(!playerIsPlaying).catch((error) => {
+      const message =
+        error instanceof Error ? error.message : "Unable to start playback for the current track.";
+      setPlayerIsPlaying(false);
+      setPlayerError(message);
+      onNotice({ level: "warning", message: "Playback failed to start." });
+    });
   };
 
   return { togglePlay };

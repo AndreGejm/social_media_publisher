@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-get-batch-export-job-status"
+description = "Enables the qc_get_batch_export_job_status command without any pre-configured scope."
+commands.allow = ["qc_get_batch_export_job_status"]
+
+[[permission]]
+identifier = "deny-qc-get-batch-export-job-status"
+description = "Denies the qc_get_batch_export_job_status command without any pre-configured scope."
+commands.deny = ["qc_get_batch_export_job_status"]

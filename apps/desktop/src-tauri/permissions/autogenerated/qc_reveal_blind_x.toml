@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-reveal-blind-x"
+description = "Enables the qc_reveal_blind_x command without any pre-configured scope."
+commands.allow = ["qc_reveal_blind_x"]
+
+[[permission]]
+identifier = "deny-qc-reveal-blind-x"
+description = "Denies the qc_reveal_blind_x command without any pre-configured scope."
+commands.deny = ["qc_reveal_blind_x"]

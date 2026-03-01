@@ -73,6 +73,14 @@ type UseTrackMetadataEditorStateArgs = {
 };
 
 export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArgs) {
+  const {
+    selectedTrackDetail,
+    setSelectedTrackDetail,
+    setTrackDetailsById,
+    setCatalogPage,
+    setTrackDetailEditMode,
+    mapUiError
+  } = args;
   const [trackEditor, setTrackEditor] = useState<TrackMetadataEditorState>(EMPTY_TRACK_EDITOR_STATE);
   const [trackEditorDirty, setTrackEditorDirty] = useState(false);
   const [trackEditorSaving, setTrackEditorSaving] = useState(false);
@@ -81,44 +89,44 @@ export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArg
   const previousSelectedTrackIdRef = useRef<string>("");
 
   useEffect(() => {
-    if (!args.selectedTrackDetail) {
+    if (!selectedTrackDetail) {
       setTrackEditor(EMPTY_TRACK_EDITOR_STATE);
       setTrackEditorDirty(false);
       setTrackEditorError(null);
       setTrackEditorNotice(null);
-      args.setTrackDetailEditMode(false);
+      setTrackDetailEditMode(false);
       previousSelectedTrackIdRef.current = "";
       return;
     }
-    const isSameTrackRefresh = previousSelectedTrackIdRef.current === args.selectedTrackDetail.track_id;
-    setTrackEditor(trackEditorStateFromDetail(args.selectedTrackDetail));
+    const isSameTrackRefresh = previousSelectedTrackIdRef.current === selectedTrackDetail.track_id;
+    setTrackEditor(trackEditorStateFromDetail(selectedTrackDetail));
     setTrackEditorDirty(false);
     setTrackEditorError(null);
     if (!isSameTrackRefresh) {
       setTrackEditorNotice(null);
-      args.setTrackDetailEditMode(false);
+      setTrackDetailEditMode(false);
     }
-    previousSelectedTrackIdRef.current = args.selectedTrackDetail.track_id;
-  }, [args.selectedTrackDetail, args.setTrackDetailEditMode]);
+    previousSelectedTrackIdRef.current = selectedTrackDetail.track_id;
+  }, [selectedTrackDetail, setTrackDetailEditMode]);
 
   const handleSaveTrackMetadata = useCallback(async () => {
-    if (!args.selectedTrackDetail) return;
-    if (trackEditor.trackId !== args.selectedTrackDetail.track_id) return;
+    if (!selectedTrackDetail) return;
+    if (trackEditor.trackId !== selectedTrackDetail.track_id) return;
 
     setTrackEditorSaving(true);
     setTrackEditorError(null);
     setTrackEditorNotice(null);
     try {
       const updated = await catalogUpdateTrackMetadata({
-        track_id: args.selectedTrackDetail.track_id,
+        track_id: selectedTrackDetail.track_id,
         visibility_policy: trackEditor.visibilityPolicy,
         license_policy: trackEditor.licensePolicy,
         downloadable: trackEditor.downloadable,
         tags: parseTagEditorInput(trackEditor.tagsInput)
       });
-      args.setSelectedTrackDetail(updated);
-      args.setTrackDetailsById((current) => ({ ...current, [updated.track_id]: updated }));
-      args.setCatalogPage((current) => ({
+      setSelectedTrackDetail(updated);
+      setTrackDetailsById((current) => ({ ...current, [updated.track_id]: updated }));
+      setCatalogPage((current) => ({
         ...current,
         items: current.items.map((item) =>
           item.track_id === updated.track_id ? { ...item, updated_at: updated.updated_at } : item
@@ -126,20 +134,28 @@ export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArg
       }));
       setTrackEditorDirty(false);
       setTrackEditorNotice("Track metadata saved.");
-      args.setTrackDetailEditMode(false);
+      setTrackDetailEditMode(false);
     } catch (error) {
-      setTrackEditorError(args.mapUiError(error));
+      setTrackEditorError(mapUiError(error));
     } finally {
       setTrackEditorSaving(false);
     }
-  }, [args, trackEditor]);
+  }, [
+    selectedTrackDetail,
+    trackEditor,
+    setSelectedTrackDetail,
+    setTrackDetailsById,
+    setCatalogPage,
+    setTrackDetailEditMode,
+    mapUiError
+  ]);
 
   const trackEditorTagsPreview = useMemo(() => parseTagEditorInput(trackEditor.tagsInput), [trackEditor.tagsInput]);
   const trackEditorBoundToSelection = Boolean(
-    args.selectedTrackDetail && trackEditor.trackId === args.selectedTrackDetail.track_id
+    selectedTrackDetail && trackEditor.trackId === selectedTrackDetail.track_id
   );
   const canSaveTrackMetadata = !trackEditorSaving && trackEditorBoundToSelection && trackEditorDirty;
-  const canResetTrackMetadata = !trackEditorSaving && Boolean(args.selectedTrackDetail) && trackEditorDirty;
+  const canResetTrackMetadata = !trackEditorSaving && Boolean(selectedTrackDetail) && trackEditorDirty;
 
   const patchTrackEditor = useCallback((patch: Partial<TrackMetadataEditorState>) => {
     setTrackEditor((current) => ({ ...current, ...patch }));
@@ -148,12 +164,12 @@ export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArg
   }, []);
 
   const resetTrackEditorFromSelectedDetail = useCallback(() => {
-    if (!args.selectedTrackDetail) return;
-    setTrackEditor(trackEditorStateFromDetail(args.selectedTrackDetail));
+    if (!selectedTrackDetail) return;
+    setTrackEditor(trackEditorStateFromDetail(selectedTrackDetail));
     setTrackEditorDirty(false);
     setTrackEditorError(null);
     setTrackEditorNotice(null);
-  }, [args.selectedTrackDetail]);
+  }, [selectedTrackDetail]);
 
   const clearTrackEditorMessages = useCallback(() => {
     setTrackEditorError(null);

@@ -1,181 +1,223 @@
-QC Player to Multi‑Codec Preview & Export Utility – Requirements & Architecture
-1. Requirements Specification
-1.1 A/B/X Preview Matrix
+﻿QC Player and Codec Preview Requirements Specification (Stability Release)
 
-Preview states: real‑time codec toggling must support at least three states: Bypass (raw PCM/WAV), Codec A, and Codec B. Users can map codecs to consumer platform profiles (e.g., Spotify Vorbis 320 kbps, Apple AAC 256 kbps).
+Document ID: RP-QC-REQ-2026-03-01
+Date: 2026-03-01
+Status: Active
 
-Sample‑aligned switching: toggling must be instantaneous and glitch‑free. Insert a delay line on the bypass signal equal to the round‑trip latency of the active codec chain so the A/B switch preserves phase and time alignment.
+1. Scope
 
-Blind X mode: optionally hide which profile is active until the user clicks “Reveal” so that comparisons are unbiased.
+This specification defines required behavior for the desktop Listen and QC experience:
 
-User flow:
+- Library ingest and root lifecycle
+- Playlist and queue interaction
+- Shared playback transport
+- Codec preview (A/B/X)
+- Batch export for codec artifacts
+- Search, sorting, grouping, and keyboard shortcuts
 
-User loads the mastered audio file.
+Out of scope for this document:
 
-In a preview panel, the user selects two codec profiles from a list. A third button always represents the uncompressed bypass.
+- Publish workspace execution workflow changes
+- External publisher connector rollout
 
-Pressing A, B or Bypass switches the audio path in the shared player without interrupting playback. The UI shows the current profile, applied latency compensation (ms) and any clipped samples detected after decode.
+2. Product Intent
 
-A blind X mode randomises whether A or B is active, allowing the user to guess which sounds better before revealing.
+The product must deliver a trustworthy post-mastering QC and playback workflow where:
 
-1.2 Real‑time Metering
+- What the user hears in codec preview is the real selected codec path.
+- Export status always reflects real encoder outcomes.
+- Library and queue behavior remains stable under large catalogs and repeated interaction.
+- The system is testable and maintainable as a long-lived desktop application.
 
-FFT visualisation: display a log‑frequency spectrum at 30–60 fps. FFT size is configurable (default 2048 samples). Use smoothing and interpolation to avoid flicker.
+3. Functional Requirements
 
-Momentary/short‑term/integrated LUFS: compute loudness according to ITU‑R BS.1770‑4. Momentary (400 ms) and short‑term (3 s) values update ≤10 Hz. Integrated LUFS resets manually.
+FR-001: Real Codec Preview Truth Layer
 
-True peak and crest factor: over‑sample the signal 4× or 8× to detect inter‑sample peaks. Display dBTP per channel. Crest factor = true peak – integrated LUFS.
+- The preview session must support variants: bypass, codec_a, codec_b, blind_x.
+- Variant selection must switch actual playback source, not only UI/session metadata.
+- If the selected profile cannot be rendered, the command must return an explicit error.
 
-BPM detection: perform tempo estimation via onset detection. Display the current BPM and a confidence metric. Targeted for high‑transient genres.
+Pass:
+- Active variant changes both state and playback source path.
 
-Display units: all meters must specify units (LUFS, dBTP, Hz, BPM).
+Fail:
+- Active variant changes while playback source remains unchanged.
 
-1.3 Batch Export Pipeline
+FR-002: Blind-X Determinism
 
-Allow the user to select multiple codec profiles and export them simultaneously. A progress view shows one row per profile with percentage complete.
+- Blind-X must map to A or B deterministically per preview session.
+- Reveal must return the exact mapped identity and preserve auditable state.
 
-Exports run off the audio thread on worker tasks:
+Pass:
+- Repeated reads before reveal keep mapping hidden and stable.
 
-Open the source master file (WAV/FLAC).
+Fail:
+- Blind-X mapping changes unpredictably during one session.
 
-Render through the selected encoder into a buffer.
+FR-003: Batch Export Outcome Integrity
 
-Write to disk (Ogg, M4A, MP3, etc.).
+- Per-profile export statuses must be explicit and truthful.
+- The system must not report completed when encoding did not happen.
+- Required status set:
+  - completed
+  - failed_encoder_unavailable
+  - failed_encode
+  - failed_io
 
-Optionally normalise to a target integrated LUFS by applying only attenuation.
+Pass:
+- Missing encoder results in failed_encoder_unavailable.
 
-After exporting all profiles, display a summary with file paths, durations, integrated LUFS, true peak values and any clipped samples.
+Fail:
+- Missing encoder results in completed output.
 
-If an encoder fails initialisation or during rendering, skip that profile, mark it failed and continue with others.
+FR-004: QC Metric Integrity
 
-1.4 Error Handling & Defaults
+- Integrated loudness must follow BS.1770 semantics.
+- True peak (dBTP) must be computed through a true-peak path, not waveform max proxy.
+- Stored track metrics must be finite and range-validated.
 
-Fail‑safe bypass: if any encoder fails to initialise, immediately fall back to bypass streaming and display a red warning; the system continues playback.
+Pass:
+- True peak is independently computed and persisted.
 
-Threading constraints: all file I/O and encoding must occur on worker threads. The audio thread must not allocate memory, perform disk I/O or acquire blocking locks.
+Fail:
+- true_peak_dbfs is derived only from peak bins or sample max approximation.
 
-Input validation: unsupported sample rates/bit depths must be rejected in the UI before starting processing.
+FR-005: Library Root Lifecycle Correctness
 
-2. Study Items & Git Repository Inspiration
-Repository	Pattern to study	Pitfall solved
-libebur128 (C, permissive licence)	Implements ITU‑R BS.1770 loudness and true‑peak measurement using stateful structures (e.g., ebur128_state_t). Shows how to accumulate momentary, short‑term and integrated LUFS in real time and detect inter‑sample peaks with minimal CPU.	Demonstrates how to over‑sample and filter the audio efficiently; avoids memory allocations on the audio thread.
-RustFFT / FFTW / JUCE dsp::FFT	Efficient FFT implementations that pre‑plan transforms and reuse buffers. They allocate once and avoid per‑block memory operations.	Shows how to pre‑allocate complex buffers and perform FFTs in real‑time; highlights the necessity of ring buffers to move data from the audio thread to GUI.
-xiph/opus & xiph/vorbis	Reference implementations of Opus and Vorbis encoders/decoders. Provide API for querying codec look‑ahead and delay.	Illustrate inherent codec latency and how to query it programmatically (via ctl calls) so that your delay line can compensate when switching between bypass and encoded paths.
-JUCE audio graph examples / Blue Ripple plug‑ins	Demonstrate component‑based GUI and DSP separation. Each module (meter, spectrum, player) operates independently and communicates via atomics or lock‑free FIFOs.	Shows how to build a modular UI that polls atomics instead of locking the audio thread, and how to integrate third‑party DSP without blocking the GUI.
-3. Minimal Data Model
+- Dropped folder ingest must add root, scan, and autoplay first discovered track.
+- Removing a root must remove tracks sourced from that root and prune stale queue/favorites/selection references.
+- Reset library data must clear persisted local catalog and UI-derived state safely.
 
-Below is a C++‑style structure representing the state shared between the DSP thread and the UI. A Rust equivalent would use AtomicFloat/AtomicUsize and lock‑free channels.
+Pass:
+- Track counts and queue/favorites stay consistent after root removal.
 
-Notes:
+Fail:
+- Removed root tracks remain visible or keep stale queue references.
 
-All cross‑thread variables are atomic to avoid locks.
+FR-006: Queue and Playlist Control
 
-fftFifo stores interleaved real/imaginary data for the spectrum visualisation; the GUI pops frames and draws them.
+- Queue mode and library mode toggling must work with native and fallback transport paths.
+- Queue reorder must work via drag-drop and keyboard shortcuts.
+- Batch actions must preserve deterministic insertion order.
 
-latencySamples is measured once per codec and used to set the delay line length for bypass.
+Pass:
+- Reorder and mode toggle work without false error banners.
 
-4. API Surface & Input/Output Behavior
-Function	Inputs	Outputs	Invariants & Error Conditions
-initEngine	sampleRate (Hz), blockSize (samples)	bool success	Allocates all buffers and initialises meters and codec objects. Must not allocate in the audio callback after this. Returns false if the sample rate is unsupported.
-loadAudioFile	filepath (string)	bool success	Opens a WAV/FLAC file and verifies format. Fails if unreadable or unsupported.
-setCodecProfile	profileId (int)	None	Updates activeCodecId and recalculates the delay line length using the selected latencySamples. Invalid IDs set bypass and log a warning.
-processAudioBlock	inputL, inputR (float arrays), numSamples	Writes to outputL, outputR	Called from the audio thread. Reads the current activeCodecId. If non‑zero, encodes and decodes the block, applying the delay line on bypass to maintain alignment. Updates meters and pushes FFT frames. Never allocates memory or throws.
-getMeterState	None	Returns a copy of MeterState	Called from the GUI thread (≤60 Hz). Copies atomics into a local structure for safe display.
-exportBatch	profiles (list of profile IDs), outputDir (string)	bool started	Creates background tasks to render each selected profile. Validates outputDir. Fails (returns false) if an export is already running.
-onExportProgress	None	Event payload: {profileId, progressPct, errorFlag}	Emitted from the worker threads to update UI. Progress in percent (0–100); errorFlag true if a profile fails.
-shutdownEngine	None	None	De‑initialises codecs and frees resources. Safe to call multiple times.
+Fail:
+- Toggle path emits non-actionable playback errors when fallback mode is healthy.
 
-Error handling:
+FR-007: Shortcut Configuration
 
-If processAudioBlock detects a codec failure mid‑frame, it writes bypass data for the remainder of that block and sets encoderError. The UI should display a warning and may disable codec preview.
+- Shortcuts must be editable in Settings and persisted.
+- Conflicting bindings must be detected and visibly flagged.
+- Focus search shortcut must move focus to track search input.
 
-exportBatch must catch exceptions and report them via errorFlag in the progress event. Export continues for other profiles.
+Pass:
+- Rebound shortcut is effective after remount.
 
-Units:
+Fail:
+- Binding changes are accepted but do not execute action.
 
-sampleRate in hertz (Hz), blockSize in samples.
+FR-008: Search and Browse Scalability
 
-Meter values in LUFS (loudness) and dBTP (true peak). progressPct is a float between 0 and 100.
+- Search must support title, artist, album, and file_path relevance.
+- Paging must preserve stable ordering across load-more operations.
+- Search must avoid first-page ranking bias for large libraries.
 
-5. Stepwise Implementation Plan & Incremental Builds
-Phase 1 – Core I/O & Lock‑Free Infrastructure
+Pass:
+- Results stay stable across pagination and repeated query.
 
-Audio passthrough: Build a minimal app that loads a WAV file and passes audio through to the system output without modification. Test by comparing the output to the input with a null test; they must cancel perfectly.
+Fail:
+- Later pages reorder or invalidate prior ranked results unexpectedly.
 
-Lock‑free ring buffer: Implement a single‑producer/single‑consumer ring buffer (LockFreeRingBuffer) for FFT frames. Write a unit test that pushes and pops data at different rates.
+4. Non-Functional Requirements
 
-State container: Define QCState. Initialise all atomics and fill profiles with default codec definitions.
+NFR-001: Stability
 
-Deliverable: a working player that does nothing more than play audio. This ensures the I/O pipeline is solid and latency can be measured.
+- No infinite render/update loops in UI effects.
+- Async polling and completion handlers must be idempotent.
+- State transitions must avoid redundant setState cascades.
 
-Phase 2 – Metering Integration
+NFR-002: Maintainability
 
-Integrate libebur128: Create an ebur128_state_t per channel in initEngine. Feed frames in processAudioBlock and read momentary, short‑term, integrated LUFS and true peak into QCState.meters atomics.
+- Large orchestration logic must be split into focused controllers/hooks.
+- Command contracts must remain typed and version-safe.
+- Shared constants and feature flags must be centralized.
 
-FFT computation: Choose an FFT implementation (RustFFT, FFTW or JUCE’s FFT). Pre‑allocate real/imaginary arrays and plans. In the audio thread, decimate the input (e.g., accumulate 2048 samples), push to fftFifo, and compute magnitude in a background thread at ~30 fps. Send magnitude data to the UI for plotting.
+NFR-003: Testability
 
-BPM estimation: Integrate a tempo detection library such as aubio. Downsample the input and update the bpm atomic every few seconds. Handle low‑confidence results by displaying “—”.
+- Every new command behavior must include contract tests.
+- Every fixed regression must include a dedicated test case.
+- Deterministic test fixtures are required for ingest/preview/export paths.
 
-GUI meters: Build separate GUI components for each meter (spectrum, LUFS, true peak, BPM). These components read from MeterState and never access the audio thread.
+NFR-004: Performance
 
-Deliverable: a player that displays accurate loudness, spectrum, true peak and BPM readings in real time while playing audio.
+- Search and ingest operations must remain responsive for large local libraries.
+- Export and scan operations must run off UI-critical threads.
+- Playback controls must not block on disk operations.
 
-Phase 3 – Codec Pipeline & Delay Compensation
+NFR-005: Security and Boundary Safety
 
-Codec integration: Link against Opus and Vorbis libraries. In initEngine, create encoder/decoder instances for each profile and query their inherent latency. Store latency in profiles[].latencySamples.
+- Frontend input is untrusted; backend validates all command inputs.
+- Error payloads must remain sanitized for UI display.
+- Path handling must remain canonicalized and bounded.
 
-Delay line: Implement a circular buffer delay line for the bypass path. When a codec is active, no delay is applied to the encoded signal; the bypass path is delayed by latencySamples to keep alignment.
+5. Quality Gates (Pass/Fail)
 
-Process flow: Modify processAudioBlock so that, when activeCodecId > 0, it encodes and decodes the block and writes the result; when zero, it writes the delayed bypass. Always update meters from the raw input so measurements correspond to the source.
+Gate A: Build and Test Gate
 
-Toggle logic: Add UI buttons for A, B, bypass, and X mode. Buttons call setCodecProfile, which only sets an atomic and leaves the audio thread to see the change on the next block. Toggling must not cause clicks.
+Pass:
+- npm run test --workspace apps/desktop -- --run
+- cargo test -p release-publisher-desktop --lib
 
-Error handling: If encoder initialisation fails or the encode/decode call returns an error, immediately switch to bypass, set encoderError, and log the fault.
+Fail:
+- Any red test in modified scope.
 
-Deliverable: a QC preview player with glitch‑free toggling between raw and codec‑degraded audio. Verified by null tests and manual listening.
+Gate B: Functional Truth Gate
 
-Phase 4 – Offline Batch Export Engine
+Pass:
+- Variant selection changes playback truthfully.
+- Export outcomes are semantically accurate.
+- Root lifecycle leaves no stale visible state.
 
-Worker framework: Create a job system (thread pool or serial worker) that can render multiple exports. Each job opens the source file, processes it through the selected encoder and writes the output file.
+Fail:
+- UI state claims behavior not backed by backend outcome.
 
-Normalization option: Add optional target LUFS. Before encoding, compute the integrated LUFS of the entire file using libebur128; calculate gain (only attenuation) needed to hit the target and apply it during export.
+Gate C: Regression Safety Gate
 
-Progress reporting: Emit progress events from each job. Events include profile ID, percentage complete and any error flags.
+Pass:
+- No maximum update depth warnings in tests.
+- Queue toggle fallback and drop-autoplay tests remain green.
 
-Summary: Upon completion, compile a report summarising the final LUFS, true peak, clipping count and file sizes. Write a log file to disk alongside the exports.
+Fail:
+- Previously fixed loop/fallback defects reappear.
 
-Deliverable: ability to batch export the master to multiple codec formats with correct loudness and reliable progress reporting.
+6. Traceability to Backlog
 
-6. Acceptance Criteria & Test Scaffolding
+This specification is implemented through:
 
-AC1 – Meter accuracy: A –20 dBFS 1 kHz sine wave must yield –20.0 LUFS integrated and true peak ≤ –20 dBTP, within ±0.1 dB tolerance.
+- documentation/specs/2026-03-01-qc-player-stability-backlog-and-implementation-plan.md
 
-AC2 – FFT integrity: With a 1 kHz sine at 44.1 kHz, the spectrum must show a single peak at 1 kHz (±0.2 Hz) and a noise floor at least 90 dB below the peak.
+Primary backlog IDs:
 
-AC3 – A/B switch transparency: Switching between bypass and any codec profile while streaming silence must produce silence. Summing the recorded output with the original (phase‑inverted) must cancel to < –100 dBFS.
+- QCP-002..QCP-004 map to FR-001 and FR-002
+- QCP-005..QCP-006 map to FR-003
+- QCP-007..QCP-008 map to FR-004
+- QCP-013..QCP-014 map to FR-005
+- QCP-003, QCP-009, QCP-017 map to FR-006
+- QCP-015, QCP-016, QCP-017 map to NFR-002 and NFR-003
+- QCP-011..QCP-012 map to FR-008
 
-AC4 – Encoder failure handling: When a codec initialisation function is intentionally passed invalid parameters, playback must fall back to bypass, set the encoderError flag and continue uninterrupted.
+7. Reference Implementations and Research Inputs
 
-AC5 – Batch export correctness: Export a 30 s test file to Vorbis and Opus. The resulting files must match the source duration and have no samples exceeding 0 dBTP. Integrated LUFS of each export must be within 0.3 LUFS of the real‑time meter value.
+- Opus: https://github.com/xiph/opus
+- Vorbis: https://github.com/xiph/vorbis
+- FLAC: https://github.com/xiph/flac
+- Ogg: https://github.com/xiph/ogg
+- libebur128: https://github.com/jiixyj/libebur128
+- Chromaprint: https://github.com/acoustid/chromaprint
+- Strawberry: https://github.com/strawberrymusicplayer/strawberry
 
-AC6 – Concurrency safety: With buffer size 64 samples at 44.1 kHz, run real‑time playback while concurrently exporting. There must be no audio dropouts (XRuns) and CPU utilisation should stay below 50% on a mid‑range CPU.
+8. Change Log
 
-Test scaffolding suggestions:
-
-Use automated unit tests feeding known test signals into the metering functions and asserting the returned values.
-
-For codec tests, precompute known good encodings (e.g., using the official reference encoders) and compare output CRCs and durations.
-
-Build headless tests for each GUI component using mocked MeterState values to ensure they react properly without a DSP thread.
-
-7. Complexity & Traceability Disclosure
-
-Time complexity: For each audio block of length N, meter processing runs in O(N) (biquad filtering for LUFS) and FFT runs in O(N log N). Codec encode/decode operations vary but generally dominate CPU usage; with small block sizes (≤512 samples), encode+decode latency is constant per block. BPM estimation adds O(N) per detection interval. Overall, the audio callback remains real‑time capable if codecs and FFTs run fast enough.
-
-Space complexity: O(M) where M is the size of all ring buffers and delay lines. For example, with FFT size 2048 and delay lines <4096 samples, memory usage stays within tens of kilobytes. Meter state uses a few bytes of atomics.
-
-Logging & error handling: All critical operations (file open, encoder init, processing errors, export failures) write to a rotating log with timestamps. The audio thread must never write to disk; only set atomic flags. Worker threads write detailed error descriptions. The summary log for exports includes checksums of input and output files, loudness metrics, true peaks and any clipping events.
-
-Traceability: Each exported file should embed metadata (e.g., in Vorbis comments or M4A tags) with the software version, codec profile ID and integrated loudness. The export summary log must record the input file checksum (e.g., SHA‑256) and output file checksums. This ensures determinism across releases and allows verifying that re‑runs produce identical files.
-
-This architecture strictly separates the GUI and DSP concerns: the audio thread never allocates memory or performs I/O; cross‑thread communication uses atomics and lock‑free FIFOs. The phased implementation plan produces a deterministic, robust QC tool that allows mastering engineers to audition codec degradation, monitor loudness and spectrum, estimate BPM and export multiple streaming‑ready formats with complete transparency.
+- 2026-03-01: Full rewrite for stability-first implementation and pass/fail criteria.

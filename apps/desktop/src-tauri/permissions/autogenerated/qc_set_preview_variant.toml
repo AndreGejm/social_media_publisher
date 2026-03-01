@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-qc-set-preview-variant"
+description = "Enables the qc_set_preview_variant command without any pre-configured scope."
+commands.allow = ["qc_set_preview_variant"]
+
+[[permission]]
+identifier = "deny-qc-set-preview-variant"
+description = "Denies the qc_set_preview_variant command without any pre-configured scope."
+commands.deny = ["qc_set_preview_variant"]
