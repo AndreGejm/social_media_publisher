@@ -1,5 +1,9 @@
-import MusicWorkspaceApp from "../../MusicWorkspaceApp";
+import WorkspaceRuntime, { type WorkspaceShellFrame } from "./WorkspaceRuntime";
 
-export default function WorkspaceFeature() {
-  return <MusicWorkspaceApp />;
+export type WorkspaceFeatureProps = {
+  shellFrame?: WorkspaceShellFrame | null;
+};
+
+export default function WorkspaceFeature(props: WorkspaceFeatureProps) {
+  return <WorkspaceRuntime shellFrame={props.shellFrame ?? null} />;
 }

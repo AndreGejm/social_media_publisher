@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 
-import { HelpTooltip } from "../../HelpTooltip";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
 
 type PlayerSource = {
   title: string;
@@ -17,6 +17,11 @@ type SharedPlayerBarProps = {
   queueVisible: boolean;
   volumePercent: number;
   isMuted: boolean;
+  outputMode: "shared" | "exclusive";
+  outputModeSwitching: boolean;
+  bitPerfectEligible: boolean;
+  bitPerfectReasons: string[];
+  onOutputModeChange: (mode: "shared" | "exclusive") => void;
   onPrev: () => void;
   onTogglePlay: () => void;
   onStop: () => void;
@@ -35,7 +40,13 @@ type SharedPlayerBarProps = {
   onAudioEnded?: () => void;
 };
 
+function outputModeLabel(mode: "shared" | "exclusive"): string {
+  return mode === "exclusive" ? "Exclusive" : "Shared";
+}
+
 export default function SharedPlayerBar(props: SharedPlayerBarProps) {
+  const primaryOutputReason = props.bitPerfectReasons[0] ?? "Output status is unavailable.";
+
   return (
     <div className="persistent-player-bar" role="region" aria-label="Shared transport">
       <div className="persistent-player-main">
@@ -45,8 +56,35 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
           <p className="persistent-player-subtitle">
             {props.playerSource?.artist || "Queue a track to start playback"}
           </p>
+          <p className="persistent-player-output-status">
+            Output: {outputModeLabel(props.outputMode)} | Bit-perfect path: {props.bitPerfectEligible ? "Eligible" : "Not eligible"}
+          </p>
+          <p className="persistent-player-output-reason">{primaryOutputReason}</p>
+          {props.outputMode === "exclusive" ? (
+            <p className="persistent-player-output-warning">
+              Exclusive mode may take ownership of this Windows audio endpoint and mute other apps.
+            </p>
+          ) : null}
         </div>
         <div className="persistent-player-actions">
+          <div className="output-mode-toggle" role="group" aria-label="Playback output mode">
+            <button
+              type="button"
+              className={`media-button ghost${props.outputMode === "shared" ? " active" : ""}`}
+              onClick={() => props.onOutputModeChange("shared")}
+              disabled={props.outputModeSwitching}
+            >
+              Shared
+            </button>
+            <button
+              type="button"
+              className={`media-button ghost${props.outputMode === "exclusive" ? " active" : ""}`}
+              onClick={() => props.onOutputModeChange("exclusive")}
+              disabled={props.outputModeSwitching}
+            >
+              Exclusive
+            </button>
+          </div>
           <HelpTooltip content={props.queueVisible ? "Show playlist results." : "Show queue order."}>
             <button
               type="button"

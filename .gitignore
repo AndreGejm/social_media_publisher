@@ -1,16 +1,35 @@
+# Dependencies
 node_modules/
-dist/
+apps/**/node_modules/
+
+# Frontend build outputs
+/dist/
+apps/**/dist/
 coverage/
+.turbo/
+
+# Rust/Tauri build outputs
+/target/
+target-*/
+target_agent*/
+target-agent*/
+target-clippy*/
+apps/desktop/target-*/
+apps/desktop/src-tauri/.tmp-*/
+
+# Test reports and runtime temp
 playwright-report/
 playwright-report-runtime/
 test-results/
-.turbo/
-target/
-artifacts/
-revisions/
-build/logs/
+test-results-runtime*/
 .runtime-e2e-temp/
-.snapshot_tag_name
+
+# Packaging and generated artifacts
+artifacts/
+build/artifacts_test/
+scripts/windows/logs/
+
+# Local environment and database state
 *.tsbuildinfo
 *.db
 *.db-shm
@@ -18,3 +37,27 @@ build/logs/
 .env
 .env.*
 !.env.example
+
+# Workspace-local scratch and temporary mirrors
+.agent-tmp/
+tmp_perm_dir/
+tmp_perm_check.txt
+_tmp_*
+_push_workspace/
+_push_workspace_*/
+index.alt.lock
+.snapshot_tag_name
+Temporary Workspace for a excel search program/
+
+# Archive hygiene (do not keep generated output in archived material)
+archives/**/node_modules/
+archives/**/dist/
+archives/**/target/
+archives/**/target-*/
+archives/**/.cache/
+archives/**/.turbo/
+archives/**/.vite/
+archives/**/test-results/
+archives/**/playwright-report/
+
+

@@ -1,4 +1,4 @@
-import { HelpTooltip } from "../../../HelpTooltip";
+import { HelpTooltip } from "../../../shared/ui/HelpTooltip";
 import SectionCollapseToggle from "./SectionCollapseToggle";
 
 type LibraryHomeSectionProps = {
@@ -102,3 +102,4 @@ export default function LibraryHomeSection(props: LibraryHomeSectionProps) {
     </section>
   );
 }
+

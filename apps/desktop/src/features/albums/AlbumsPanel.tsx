@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 
-import { HelpTooltip } from "../../HelpTooltip";
-import type { CatalogListTracksResponse } from "../../services/tauriClient";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
+import type { CatalogListTracksResponse } from "../../services/tauri/tauriClient";
 
 export type AlbumGroup = {
   key: string;
@@ -229,3 +229,4 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
     </section>
   );
 }
+

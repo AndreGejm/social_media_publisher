@@ -105,8 +105,10 @@ export default function AppShell() {
           } as CSSProperties
         }
       >
-        <WorkspaceFeature />
+        <WorkspaceFeature shellFrame={{ layoutTier: layout.geometry.tier, refreshTick, eventBus }} />
       </div>
     </AppShellContext.Provider>
   );
 }
+
+

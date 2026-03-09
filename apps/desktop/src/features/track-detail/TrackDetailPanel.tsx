@@ -1,14 +1,14 @@
 import type { RefObject } from "react";
 
-import { HelpTooltip } from "../../HelpTooltip";
-import { QcPlayer, type QcPlayerAnalysis } from "../../QcPlayer";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
+import { QcPlayer, type QcPlayerAnalysis } from "../player/QcPlayer";
 import type {
   CatalogTrackDetailResponse,
   QcCodecProfileResponse,
   QcPreviewSessionStateResponse,
   QcPreviewVariant,
   UiAppError
-} from "../../services/tauriClient";
+} from "../../services/tauri/tauriClient";
 
 type TrackEditorState = {
   trackId: string;
@@ -595,3 +595,4 @@ export default function TrackDetailPanel(props: TrackDetailPanelProps) {
     </div>
   );
 }
+

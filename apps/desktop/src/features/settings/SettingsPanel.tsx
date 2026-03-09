@@ -1,14 +1,20 @@
-import { HelpTooltip } from "../../HelpTooltip";
+import {
+  DARK_THEME_VARIANTS,
+  LIGHT_THEME_VARIANTS,
+  getDefaultThemeVariantForMode,
+  getThemeVariantMode,
+  type ThemePreference,
+  type ThemeVariantId
+} from "../../shared/theme/themeVariants";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
 import {
   SHORTCUT_ACTIONS,
   formatShortcutBinding,
   keyboardEventToShortcutBinding,
   type ShortcutActionId,
   type ShortcutBindings
-} from "../../shortcuts";
+} from "../../shared/input/shortcuts";
 import SectionCollapseToggle from "../workspace/components/SectionCollapseToggle";
-
-type ThemePreference = "system" | "light" | "dark";
 
 type SettingsPanelProps = {
   hidden: boolean;
@@ -16,6 +22,8 @@ type SettingsPanelProps = {
   onToggleSettingsPreferencesCollapsed: () => void;
   themePreference: ThemePreference;
   onThemePreferenceChange: (value: ThemePreference) => void;
+  themeVariantPreference: ThemeVariantId;
+  onThemeVariantPreferenceChange: (value: ThemeVariantId) => void;
   compactDensity: boolean;
   onCompactDensityChange: (value: boolean) => void;
   showFullPaths: boolean;
@@ -44,6 +52,13 @@ type SettingsPanelProps = {
 };
 
 export default function SettingsPanel(props: SettingsPanelProps) {
+  const resolvedThemeVariantPreference =
+    props.themePreference === "system"
+      ? props.themeVariantPreference
+      : getThemeVariantMode(props.themeVariantPreference) === props.themePreference
+        ? props.themeVariantPreference
+        : getDefaultThemeVariantForMode(props.themePreference);
+
   return (
     <section hidden={props.hidden} className="workspace-section settings-layout">
       <div className="settings-card">
@@ -66,7 +81,7 @@ export default function SettingsPanel(props: SettingsPanelProps) {
         <div id="settings-preferences-panel" hidden={props.settingsPreferencesCollapsed} className="collapsible-panel-body">
           <div className="settings-grid">
             <label className="settings-field">
-              <span>Theme</span>
+              <span>Theme Mode</span>
               <HelpTooltip content="Choose light, dark, or follow the operating system theme.">
                 <select
                   aria-label="Theme preference"
@@ -76,6 +91,48 @@ export default function SettingsPanel(props: SettingsPanelProps) {
                   <option value="system">System</option>
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
+                </select>
+              </HelpTooltip>
+            </label>
+
+            <label className="settings-field">
+              <span>Palette Variant</span>
+              <HelpTooltip content="Choose a curated palette. In System mode, Skald applies the closest variant for the active OS light/dark state.">
+                <select
+                  aria-label="Theme palette variant"
+                  value={resolvedThemeVariantPreference}
+                  onChange={(event) => props.onThemeVariantPreferenceChange(event.target.value as ThemeVariantId)}
+                >
+                  {props.themePreference === "system" ? (
+                    <>
+                      <optgroup label="Dark variants">
+                        {DARK_THEME_VARIANTS.map((variant) => (
+                          <option key={variant.id} value={variant.id}>
+                            {variant.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Light variants">
+                        {LIGHT_THEME_VARIANTS.map((variant) => (
+                          <option key={variant.id} value={variant.id}>
+                            {variant.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </>
+                  ) : props.themePreference === "dark" ? (
+                    DARK_THEME_VARIANTS.map((variant) => (
+                      <option key={variant.id} value={variant.id}>
+                        {variant.label}
+                      </option>
+                    ))
+                  ) : (
+                    LIGHT_THEME_VARIANTS.map((variant) => (
+                      <option key={variant.id} value={variant.id}>
+                        {variant.label}
+                      </option>
+                    ))
+                  )}
                 </select>
               </HelpTooltip>
             </label>

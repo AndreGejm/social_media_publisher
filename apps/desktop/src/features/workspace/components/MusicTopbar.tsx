@@ -1,4 +1,4 @@
-type Workspace = "Library" | "Quality Control" | "Playlists" | "Publisher Ops" | "Settings" | "About";
+type Workspace = "Library" | "Quality Control" | "Playlists" | "Video Workspace" | "Publisher Ops" | "Settings" | "About";
 type AppMode = "Listen" | "Publish";
 
 type MusicTopbarProps = {
@@ -44,6 +44,8 @@ export default function MusicTopbar(props: MusicTopbarProps) {
             ? "You are in Publish mode (release workflow). General library browsing is hidden; use prepared drafts from Release Preview mode."
             : props.activeWorkspace === "Quality Control"
               ? "Run focused QC workflows: Track QC for single-file checks, Album QC for relational checks across tracks."
+            : props.activeWorkspace === "Video Workspace"
+              ? "Compose one still image and one audio file into a YouTube-ready video render."
             : props.activeWorkspace === "Settings"
               ? "Configure local UI behavior, playback preferences, and path display settings."
               : props.activeWorkspace === "About"

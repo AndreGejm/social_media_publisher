@@ -20,6 +20,14 @@ permissions = [
   "allow-toggle-queue-visibility",
   "allow-get-playback-context",
   "allow-get-playback-decode-error",
+  "allow-video-render-validate",
+  "allow-video-render-start",
+  "allow-video-render-status",
+  "allow-video-render-cancel",
+  "allow-video-render-result",
+  "allow-video-render-get-environment-diagnostics",
+  "allow-video-render-check-source-path",
+  "allow-video-render-open-output-folder",
   "allow-qc-get-feature-flags",
   "allow-qc-list-codec-profiles",
   "allow-qc-prepare-preview-session",
@@ -42,3 +50,42 @@ permissions = [
   "allow-catalog-get-ingest-job",
   "allow-catalog-cancel-ingest-job",
 ]
+
+[[permission]]
+identifier = "allow-video-render-validate"
+description = "Enables the video_render_validate command without any pre-configured scope."
+commands.allow = ["video_render_validate"]
+
+[[permission]]
+identifier = "allow-video-render-start"
+description = "Enables the video_render_start command without any pre-configured scope."
+commands.allow = ["video_render_start"]
+
+[[permission]]
+identifier = "allow-video-render-status"
+description = "Enables the video_render_status command without any pre-configured scope."
+commands.allow = ["video_render_status"]
+
+[[permission]]
+identifier = "allow-video-render-cancel"
+description = "Enables the video_render_cancel command without any pre-configured scope."
+commands.allow = ["video_render_cancel"]
+
+[[permission]]
+identifier = "allow-video-render-result"
+description = "Enables the video_render_result command without any pre-configured scope."
+commands.allow = ["video_render_result"]
+[[permission]]
+identifier = "allow-video-render-get-environment-diagnostics"
+description = "Enables the video_render_get_environment_diagnostics command without any pre-configured scope."
+commands.allow = ["video_render_get_environment_diagnostics"]
+
+[[permission]]
+identifier = "allow-video-render-check-source-path"
+description = "Enables the video_render_check_source_path command without any pre-configured scope."
+commands.allow = ["video_render_check_source_path"]
+
+[[permission]]
+identifier = "allow-video-render-open-output-folder"
+description = "Enables the video_render_open_output_folder command without any pre-configured scope."
+commands.allow = ["video_render_open_output_folder"]

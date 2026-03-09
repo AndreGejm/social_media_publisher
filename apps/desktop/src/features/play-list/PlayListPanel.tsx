@@ -19,8 +19,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-import { HelpTooltip } from "../../HelpTooltip";
-import type { CatalogListTracksResponse } from "../../services/tauriClient";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
+import type { CatalogListTracksResponse } from "../../services/tauri/tauriClient";
 
 type PlayListRowSource = "tracks" | "queue";
 type TrackGroupMode = "none" | "artist" | "album";
@@ -514,3 +514,4 @@ export default function PlayListPanel(props: PlayListPanelProps) {
     </div>
   );
 }
+

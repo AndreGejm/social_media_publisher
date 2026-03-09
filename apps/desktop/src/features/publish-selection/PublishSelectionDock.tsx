@@ -1,4 +1,4 @@
-import { HelpTooltip } from "../../HelpTooltip";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
 
 type PublishSelectionItem = {
   trackId: string;
@@ -91,3 +91,4 @@ export default function PublishSelectionDock(props: PublishSelectionDockProps) {
     </aside>
   );
 }
+

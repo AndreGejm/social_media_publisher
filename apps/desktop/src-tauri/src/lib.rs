@@ -24,6 +24,7 @@ pub fn run() {
             commands::analyze_audio_file,
             commands::analyze_and_persist_release_track,
             commands::get_release_track_analysis,
+            commands::init_exclusive_device,
             commands::acquire_audio_device_lock,
             commands::release_audio_device_lock,
             commands::get_audio_device_context,
@@ -35,6 +36,14 @@ pub fn run() {
             commands::toggle_queue_visibility,
             commands::get_playback_context,
             commands::get_playback_decode_error,
+            commands::video_render_validate,
+            commands::video_render_start,
+            commands::video_render_status,
+            commands::video_render_cancel,
+            commands::video_render_result,
+            commands::video_render_get_environment_diagnostics,
+            commands::video_render_check_source_path,
+            commands::video_render_open_output_folder,
             commands::qc_get_feature_flags,
             commands::qc_list_codec_profiles,
             commands::qc_prepare_preview_session,
@@ -63,3 +72,5 @@ pub fn run() {
         std::process::exit(1);
     }
 }
+
+

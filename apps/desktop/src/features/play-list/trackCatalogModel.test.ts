@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CatalogListTracksResponse } from "../../services/tauriClient";
+import type { CatalogListTracksResponse } from "../../services/tauri/tauriClient";
 import {
   albumTitleDisplay,
   buildAlbumGroups,

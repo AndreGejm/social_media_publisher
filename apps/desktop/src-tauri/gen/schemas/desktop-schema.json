@@ -177,10 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`",
+          "description": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-video-render-validate`\n- `allow-video-render-start`\n- `allow-video-render-status`\n- `allow-video-render-cancel`\n- `allow-video-render-result`\n- `allow-video-render-get-environment-diagnostics`\n- `allow-video-render-check-source-path`\n- `allow-video-render-open-output-folder`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`"
+          "markdownDescription": "Default app permissions for the desktop publisher UI.\n#### This default permission set includes:\n\n- `allow-load-spec`\n- `allow-plan-release`\n- `allow-execute-release`\n- `allow-list-history`\n- `allow-get-report`\n- `allow-analyze-audio-file`\n- `allow-analyze-and-persist-release-track`\n- `allow-get-release-track-analysis`\n- `allow-init-exclusive-device`\n- `allow-set-volume`\n- `allow-set-playback-queue`\n- `allow-push-track-change-request`\n- `allow-set-playback-playing`\n- `allow-seek-playback-ratio`\n- `allow-toggle-queue-visibility`\n- `allow-get-playback-context`\n- `allow-get-playback-decode-error`\n- `allow-video-render-validate`\n- `allow-video-render-start`\n- `allow-video-render-status`\n- `allow-video-render-cancel`\n- `allow-video-render-result`\n- `allow-video-render-get-environment-diagnostics`\n- `allow-video-render-check-source-path`\n- `allow-video-render-open-output-folder`\n- `allow-qc-get-feature-flags`\n- `allow-qc-list-codec-profiles`\n- `allow-qc-prepare-preview-session`\n- `allow-qc-get-preview-session`\n- `allow-qc-set-preview-variant`\n- `allow-qc-reveal-blind-x`\n- `allow-qc-get-active-preview-media`\n- `allow-qc-start-batch-export`\n- `allow-qc-get-batch-export-job-status`\n- `allow-catalog-import-files`\n- `allow-catalog-list-tracks`\n- `allow-catalog-get-track`\n- `allow-publisher-create-draft-from-track`\n- `allow-catalog-update-track-metadata`\n- `allow-catalog-add-library-root`\n- `allow-catalog-list-library-roots`\n- `allow-catalog-remove-library-root`\n- `allow-catalog-reset-library-data`\n- `allow-catalog-scan-root`\n- `allow-catalog-get-ingest-job`\n- `allow-catalog-cancel-ingest-job`"
         },
         {
           "description": "Enables the analyze_and_persist_release_track command without any pre-configured scope.",
@@ -409,6 +409,54 @@
           "type": "string",
           "const": "allow-toggle-queue-visibility",
           "markdownDescription": "Enables the toggle_queue_visibility command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-cancel",
+          "markdownDescription": "Enables the video_render_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_check_source_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-check-source-path",
+          "markdownDescription": "Enables the video_render_check_source_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_get_environment_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-get-environment-diagnostics",
+          "markdownDescription": "Enables the video_render_get_environment_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_open_output_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-open-output-folder",
+          "markdownDescription": "Enables the video_render_open_output_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-result",
+          "markdownDescription": "Enables the video_render_result command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-start",
+          "markdownDescription": "Enables the video_render_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-status",
+          "markdownDescription": "Enables the video_render_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_render_validate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-render-validate",
+          "markdownDescription": "Enables the video_render_validate command without any pre-configured scope."
         },
         {
           "description": "Denies the analyze_and_persist_release_track command without any pre-configured scope.",

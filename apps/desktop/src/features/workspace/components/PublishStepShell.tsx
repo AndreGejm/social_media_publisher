@@ -1,4 +1,4 @@
-import type { PublisherOpsScreen } from "../../../App";
+import type { PublisherOpsScreen } from "../../publisher-ops/types";
 
 type PublishStepShellProps = {
   activeMode: "Listen" | "Publish";
@@ -34,3 +34,4 @@ export default function PublishStepShell(props: PublishStepShellProps) {
     </section>
   );
 }
+

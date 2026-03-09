@@ -1,10 +1,10 @@
-import { HelpTooltip } from "../../HelpTooltip";
+import { HelpTooltip } from "../../shared/ui/HelpTooltip";
 import SectionCollapseToggle from "../workspace/components/SectionCollapseToggle";
 import type {
   CatalogImportFailure,
   CatalogIngestJobResponse,
   LibraryRootResponse
-} from "../../services/tauriClient";
+} from "../../services/tauri/tauriClient";
 
 export type LibraryIngestTab = "scan_folders" | "import_files";
 
@@ -246,3 +246,4 @@ export default function LibraryIngestSidebar(props: LibraryIngestSidebarProps) {
     </section>
   );
 }
+

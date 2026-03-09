@@ -301,12 +301,11 @@ fn analyze_interleaved_samples_with_config(
         config.dbfs_floor,
     )?;
     // Single EBU R128 pass for both integrated LUFS and true peak.
-    let (loudness_lufs, true_peak_linear) =
-        compute_loudness_and_true_peak_from_chunks(
-            std::iter::once(Ok(interleaved_samples)),
-            sample_rate_hz,
-            channels,
-        )?;
+    let (loudness_lufs, true_peak_linear) = compute_loudness_and_true_peak_from_chunks(
+        std::iter::once(Ok(interleaved_samples)),
+        sample_rate_hz,
+        channels,
+    )?;
     let true_peak_dbfs = amplitude_to_dbfs(true_peak_linear as f32, config.dbfs_floor);
     let is_clipping = true_peak_dbfs >= TRUE_PEAK_CLIPPING_DBFS;
 

@@ -1,4 +1,4 @@
-import type { CatalogListTracksResponse } from "../../services/tauriClient";
+import type { CatalogListTracksResponse } from "../../services/tauri/tauriClient";
 
 export type TrackSortKey =
   | "updated_desc"
