@@ -2,12 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
-  catalogGetTrack,
-  catalogListTracks,
   type CatalogListTracksResponse,
   type CatalogTrackDetailResponse,
   type UiAppError
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 
 type UseCatalogSelectionStateArgs = {
   deferredTrackSearch: string;
@@ -19,6 +18,7 @@ const CATALOG_PAGE_SIZE = 100;
 
 export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
   const { deferredTrackSearch, mapUiError, setCatalogError } = args;
+  const { catalogListTracks, catalogGetTrack } = useTauriClient();
 
   const [catalogPage, setCatalogPage] = useState<CatalogListTracksResponse>({
     items: [],
@@ -58,7 +58,7 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
     } finally {
       setCatalogLoading(false);
     }
-  }, [mapUiError, setCatalogError]);
+  }, [catalogListTracks, mapUiError, setCatalogError]);
 
   const loadMoreCatalogTracks = useCallback(async (): Promise<CatalogListTracksResponse | null> => {
     if (catalogLoading || catalogLoadingMore) return null;
@@ -97,6 +97,7 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
     }
   }, [
     catalogActiveSearch,
+    catalogListTracks,
     catalogLoading,
     catalogLoadingMore,
     catalogPage.items,
@@ -134,7 +135,7 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
     return () => {
       cancelled = true;
     };
-  }, [mapUiError, selectedTrackId, setCatalogError]);
+  }, [catalogGetTrack, mapUiError, selectedTrackId, setCatalogError]);
 
   return {
     catalogPage,

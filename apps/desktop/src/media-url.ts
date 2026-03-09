@@ -63,9 +63,17 @@ export function localFilePathToMediaUrl(path: string): string {
   }
 
   const normalized = normalizeDisplayPath(trimmed);
-  if (/^[a-zA-Z]:\//.test(normalized)) return encodeURI(`file:///${normalized}`);
-  if (normalized.startsWith("/")) return encodeURI(`file://${normalized}`);
-  if (normalized.startsWith("file://")) return encodeURI(normalized);
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    // Encode each path segment individually to preserve '#', '%', and '?' in filenames.
+    // Skip index 0 (which is the drive letter, e.g. "C:") — it contains no special chars.
+    const encoded = normalized.split("/").map((seg, i) => i === 0 ? seg : encodeURIComponent(seg)).join("/");
+    return `file:///${encoded}`;
+  }
+  if (normalized.startsWith("/")) {
+    const encoded = normalized.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    return `file://${encoded}`;
+  }
+  if (normalized.startsWith("file://")) return normalized; // already a URL — don't double-encode
   return "";
 }
 

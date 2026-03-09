@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
-  catalogUpdateTrackMetadata,
   type CatalogListTracksResponse,
   type CatalogTrackDetailResponse,
   type UiAppError
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 
 export type TrackMetadataEditorState = {
   trackId: string;
@@ -81,6 +81,7 @@ export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArg
     setTrackDetailEditMode,
     mapUiError
   } = args;
+  const { catalogUpdateTrackMetadata } = useTauriClient();
   const [trackEditor, setTrackEditor] = useState<TrackMetadataEditorState>(EMPTY_TRACK_EDITOR_STATE);
   const [trackEditorDirty, setTrackEditorDirty] = useState(false);
   const [trackEditorSaving, setTrackEditorSaving] = useState(false);
@@ -141,6 +142,7 @@ export function useTrackMetadataEditorState(args: UseTrackMetadataEditorStateArg
       setTrackEditorSaving(false);
     }
   }, [
+    catalogUpdateTrackMetadata,
     selectedTrackDetail,
     trackEditor,
     setSelectedTrackDetail,

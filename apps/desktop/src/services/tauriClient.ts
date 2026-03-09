@@ -13,6 +13,7 @@ export {
   getPlaybackContext,
   getPlaybackDecodeError,
   initExclusiveDevice,
+  isUiAppError,
   pickDirectoryDialog,
   qcGetFeatureFlags,
   qcGetActivePreviewMedia,

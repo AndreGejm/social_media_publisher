@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
-import { catalogGetIngestJob, type CatalogIngestJobResponse } from "../services/tauriClient";
+import { type CatalogIngestJobResponse } from "../services/tauriClient";
+import { useTauriClient, type TauriClient } from "../services/TauriClientProvider";
 
 const INGEST_TERMINAL_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELED"]);
 const MAX_INGEST_JOB_POLL_PARALLELISM = 8;
@@ -16,7 +17,10 @@ type PollUpdate =
   | { trackedJobId: string; job: CatalogIngestJobResponse | null; errored: false }
   | { trackedJobId: string; job: null; errored: true };
 
-async function pollIngestJobUpdate(jobId: string): Promise<PollUpdate> {
+async function pollIngestJobUpdate(
+  jobId: string,
+  catalogGetIngestJob: TauriClient["catalogGetIngestJob"]
+): Promise<PollUpdate> {
   try {
     const job = await catalogGetIngestJob(jobId);
     return {
@@ -33,11 +37,16 @@ async function pollIngestJobUpdate(jobId: string): Promise<PollUpdate> {
   }
 }
 
-async function pollIngestJobUpdates(jobIds: string[]): Promise<PollUpdate[]> {
+async function pollIngestJobUpdates(
+  jobIds: string[],
+  catalogGetIngestJob: TauriClient["catalogGetIngestJob"]
+): Promise<PollUpdate[]> {
   const updates: PollUpdate[] = [];
   for (let offset = 0; offset < jobIds.length; offset += MAX_INGEST_JOB_POLL_PARALLELISM) {
     const chunk = jobIds.slice(offset, offset + MAX_INGEST_JOB_POLL_PARALLELISM);
-    const chunkUpdates = await Promise.all(chunk.map((jobId) => pollIngestJobUpdate(jobId)));
+    const chunkUpdates = await Promise.all(
+      chunk.map((jobId) => pollIngestJobUpdate(jobId, catalogGetIngestJob))
+    );
     updates.push(...chunkUpdates);
   }
   return updates;
@@ -45,6 +54,7 @@ async function pollIngestJobUpdates(jobIds: string[]): Promise<PollUpdate[]> {
 
 export function useIngestJobPolling(args: UseIngestJobPollingArgs) {
   const { activeScanJobs, setActiveScanJobs, onJobsCompleted } = args;
+  const { catalogGetIngestJob } = useTauriClient();
   const onJobsCompletedRef = useRef(onJobsCompleted);
   const completedJobStatusesRef = useRef<Map<string, string>>(new Map());
 
@@ -76,7 +86,7 @@ export function useIngestJobPolling(args: UseIngestJobPollingArgs) {
 
     let cancelled = false;
     const pollJobs = async () => {
-      const updates = await pollIngestJobUpdates(activeJobIds);
+      const updates = await pollIngestJobUpdates(activeJobIds, catalogGetIngestJob);
       if (cancelled) return;
 
       setActiveScanJobs((current) => {
@@ -142,5 +152,5 @@ export function useIngestJobPolling(args: UseIngestJobPollingArgs) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeJobIds, activeJobIdsKey, setActiveScanJobs]);
+  }, [activeJobIds, activeJobIdsKey, catalogGetIngestJob, setActiveScanJobs]);
 }

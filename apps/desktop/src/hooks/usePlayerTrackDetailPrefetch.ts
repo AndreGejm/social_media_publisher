@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
-import { catalogGetTrack, type CatalogTrackDetailResponse } from "../services/tauriClient";
+import { type CatalogTrackDetailResponse } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 
 type UsePlayerTrackDetailPrefetchArgs = {
   playerTrackId: string;
@@ -12,6 +13,7 @@ type UsePlayerTrackDetailPrefetchArgs = {
 
 export function usePlayerTrackDetailPrefetch(args: UsePlayerTrackDetailPrefetchArgs) {
   const { playerTrackId, selectedTrackDetail, trackDetailsById, setTrackDetailsById } = args;
+  const { catalogGetTrack } = useTauriClient();
 
   useEffect(() => {
     if (!playerTrackId) return;
@@ -30,5 +32,5 @@ export function usePlayerTrackDetailPrefetch(args: UsePlayerTrackDetailPrefetchA
     return () => {
       cancelled = true;
     };
-  }, [playerTrackId, selectedTrackDetail, setTrackDetailsById, trackDetailsById]);
+  }, [catalogGetTrack, playerTrackId, selectedTrackDetail, setTrackDetailsById, trackDetailsById]);
 }

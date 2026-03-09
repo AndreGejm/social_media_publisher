@@ -19,6 +19,7 @@ type SharedPlayerBarProps = {
   isMuted: boolean;
   onPrev: () => void;
   onTogglePlay: () => void;
+  onStop: () => void;
   onNext: () => void;
   onToggleQueueVisibility: () => void;
   onToggleMute: () => void;
@@ -73,6 +74,17 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
               disabled={!props.playerSource && props.queueLength === 0}
             >
               {props.playerIsPlaying ? "Pause" : "Play"}
+            </button>
+          </HelpTooltip>
+          <HelpTooltip content="Stop playback and return to the beginning of the track.">
+            <button
+              type="button"
+              className="media-button ghost"
+              onClick={props.onStop}
+              disabled={!props.playerSource && props.queueLength === 0}
+              data-testid="player-stop"
+            >
+              Stop
             </button>
           </HelpTooltip>
           <HelpTooltip content="Play the next track in the current queue order.">

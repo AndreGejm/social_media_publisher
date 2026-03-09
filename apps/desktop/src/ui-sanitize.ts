@@ -5,7 +5,12 @@ function isUnsafeDisplayCodePoint(codePoint: number): boolean {
     (codePoint >= 0x00 && codePoint <= 0x1f) ||
     codePoint === 0x7f ||
     (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2066 && codePoint <= 0x2069)
+    (codePoint >= 0x2066 && codePoint <= 0x2069) ||
+    // Zero-width characters — can cause invisible text injection or display anomalies.
+    codePoint === 0x200b || // ZERO WIDTH SPACE
+    codePoint === 0x200c || // ZERO WIDTH NON-JOINER
+    codePoint === 0x200d || // ZERO WIDTH JOINER
+    codePoint === 0xFEFF    // BOM / ZERO WIDTH NO-BREAK SPACE
   );
 }
 

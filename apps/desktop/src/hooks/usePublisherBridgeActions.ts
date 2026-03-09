@@ -1,17 +1,17 @@
 import { useState } from "react";
 
-import {
-  publisherCreateDraftFromTrack,
-  type CatalogTrackDetailResponse,
-  type UiAppError
+import type {
+  CatalogTrackDetailResponse,
+  UiAppError
 } from "../services/tauriClient";
+import { useTauriClient, type TauriClient } from "../services/TauriClientProvider";
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
 
 type UsePublisherBridgeActionsArgs = {
   setCatalogError: (error: UiAppError | null) => void;
-  addTrackToPublishSelection: (track: CatalogTrackDetailResponse, draft: Awaited<ReturnType<typeof publisherCreateDraftFromTrack>>) => void;
-  setPublisherDraftPrefill: (draft: Awaited<ReturnType<typeof publisherCreateDraftFromTrack>>) => void;
+  addTrackToPublishSelection: (track: CatalogTrackDetailResponse, draft: Awaited<ReturnType<TauriClient["publisherCreateDraftFromTrack"]>>) => void;
+  setPublisherDraftPrefill: (draft: Awaited<ReturnType<TauriClient["publisherCreateDraftFromTrack"]>>) => void;
   onNotice: (notice: AppNotice) => void;
   switchAppMode: (mode: "Listen" | "Publish") => void;
   mapUiError: (error: unknown) => UiAppError;
@@ -19,6 +19,7 @@ type UsePublisherBridgeActionsArgs = {
 
 export function usePublisherBridgeActions(args: UsePublisherBridgeActionsArgs) {
   const [publisherBridgeLoadingTrackId, setPublisherBridgeLoadingTrackId] = useState<string | null>(null);
+  const { publisherCreateDraftFromTrack } = useTauriClient();
 
   const handleOpenInPublisherOps = async (track: CatalogTrackDetailResponse) => {
     args.setCatalogError(null);

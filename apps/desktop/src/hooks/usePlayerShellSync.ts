@@ -32,6 +32,7 @@ type UsePlayerShellSyncArgs = {
   queue: CatalogListTracksResponse["items"];
   setPlayerTrackFromQueueIndex: (index: number, options?: { autoplay?: boolean; openTracksWorkspace?: boolean }) => void;
   setPlayerError: Dispatch<SetStateAction<string | null>>;
+  seekPlayer: (ratio: number) => void;
   onNotice: (notice: AppNotice) => void;
 };
 
@@ -49,6 +50,7 @@ export function usePlayerShellSync(args: UsePlayerShellSyncArgs) {
     queue,
     setPlayerTrackFromQueueIndex,
     setPlayerError,
+    seekPlayer,
     onNotice
   } = args;
 
@@ -86,5 +88,21 @@ export function usePlayerShellSync(args: UsePlayerShellSyncArgs) {
     });
   };
 
-  return { togglePlay };
+  const stopPlayer = () => {
+    if (!playerSource) return;
+    void setNativePlaybackPlaying(false)
+      .then(() => {
+        setPlayerTimeSec(0);
+      })
+      .catch((error) => {
+        const message =
+          error instanceof Error ? error.message : "Unable to stop playback.";
+        setPlayerError(message);
+      });
+    setPlayerIsPlaying(false);
+    setPlayerTimeSec(0);
+    seekPlayer(0);
+  };
+
+  return { togglePlay, stopPlayer };
 }

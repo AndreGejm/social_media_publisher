@@ -2,10 +2,10 @@ import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
-  catalogListTracks,
   type CatalogIngestJobResponse,
   type CatalogListTracksResponse
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 import { useIngestJobPolling } from "./useIngestJobPolling";
 import type { DropIngestResult } from "./useLibraryIngestActions";
 
@@ -35,6 +35,8 @@ function normalizePathForRootMatch(path: string): string {
   return normalized.toLowerCase();
 }
 
+// Windows-only assumption: path comparison is case-insensitive via .toLowerCase().
+// On a case-sensitive filesystem (Linux) this would produce false negatives.
 function filePathMatchesRoot(filePath: string, rootPath: string): boolean {
   const normalizedFilePath = normalizePathForRootMatch(filePath);
   const normalizedRootPath = normalizePathForRootMatch(rootPath);
@@ -56,12 +58,22 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
     handleIngestDroppedPaths
   } = args;
 
+  const { catalogListTracks } = useTauriClient();
+
+  const catalogListTracksRef = useRef(catalogListTracks);
+  useEffect(() => {
+    catalogListTracksRef.current = catalogListTracks;
+  }, [catalogListTracks]);
+
   const handleIngestDroppedPathsRef = useRef(handleIngestDroppedPaths);
   const playTrackNowRef = useRef(playTrackNow);
   const appendTracksToSessionQueueRef = useRef(appendTracksToSessionQueue);
   const setPlayListModeWithQueueSyncRef = useRef(setPlayListModeWithQueueSync);
   const pendingDroppedScanAutoplayJobsRef = useRef<Map<string, string>>(new Map());
   const handledDroppedScanAutoplayJobIdsRef = useRef<Set<string>>(new Set());
+  // Ref keeps trackSearch current inside async callbacks that outlive their render cycle.
+  const trackSearchRef = useRef(trackSearch);
+  useEffect(() => { trackSearchRef.current = trackSearch; }, [trackSearch]);
 
   useEffect(() => {
     handleIngestDroppedPathsRef.current = handleIngestDroppedPaths;
@@ -87,7 +99,7 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
         const pendingDropJobs = pendingDroppedScanAutoplayJobsRef.current;
         const handledDropJobs = handledDroppedScanAutoplayJobIdsRef.current;
         const hasPendingDropAutoplay = pendingDropJobs.size > 0;
-        const reloadResponse = await loadCatalogTracks(hasPendingDropAutoplay ? "" : trackSearch);
+        const reloadResponse = await loadCatalogTracks(hasPendingDropAutoplay ? "" : trackSearchRef.current);
         if (!hasPendingDropAutoplay) return;
         if (!reloadResponse) return;
 
@@ -95,7 +107,7 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
         let loadedItems = [...reloadResponse.items];
         let offset = loadedItems.length;
         while (offset < reloadResponse.total) {
-          const nextPage = await catalogListTracks({
+          const nextPage = await catalogListTracksRef.current({
             search: null,
             limit: 100,
             offset

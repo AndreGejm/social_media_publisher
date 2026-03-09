@@ -25,6 +25,8 @@ const DEFAULT_TARGET_PEAK_BINS: usize = 2_048;
 const DEFAULT_DBFS_FLOOR: f32 = -96.0;
 /// Accept tiny positive LUFS values from floating-point noise and clamp to `0.0`.
 const LOUDNESS_POSITIVE_EPSILON: f32 = 1e-6;
+/// True-peak threshold above which a track is considered clipping (inclusive).
+const TRUE_PEAK_CLIPPING_DBFS: f32 = -0.5;
 const NO_DECODABLE_PACKETS_MSG: &str = "no decodable audio packets were produced";
 
 /// Computed QC metrics for a decoded track.
@@ -38,6 +40,8 @@ pub struct TrackAnalysis {
     pub loudness_lufs: f32,
     /// Maximum true peak across channels in dBFS-equivalent scale (clamped to `<= 0.0`).
     pub true_peak_dbfs: f32,
+    /// Whether any channel's true peak meets or exceeds the clipping threshold (-0.5 dBFS).
+    pub is_clipping: bool,
     /// Decoded sample rate.
     pub sample_rate_hz: u32,
     /// Decoded channel count.
@@ -296,19 +300,22 @@ fn analyze_interleaved_samples_with_config(
         config.target_peak_bins,
         config.dbfs_floor,
     )?;
-    let loudness_lufs = compute_integrated_lufs(interleaved_samples, sample_rate_hz, channels)?;
-    let true_peak_dbfs = compute_true_peak_dbfs(
-        interleaved_samples,
-        sample_rate_hz,
-        channels,
-        config.dbfs_floor,
-    )?;
+    // Single EBU R128 pass for both integrated LUFS and true peak.
+    let (loudness_lufs, true_peak_linear) =
+        compute_loudness_and_true_peak_from_chunks(
+            std::iter::once(Ok(interleaved_samples)),
+            sample_rate_hz,
+            channels,
+        )?;
+    let true_peak_dbfs = amplitude_to_dbfs(true_peak_linear as f32, config.dbfs_floor);
+    let is_clipping = true_peak_dbfs >= TRUE_PEAK_CLIPPING_DBFS;
 
     Ok(TrackAnalysis {
         duration_ms,
         peak_data,
         loudness_lufs,
         true_peak_dbfs,
+        is_clipping,
         sample_rate_hz,
         channels,
     })
@@ -379,29 +386,17 @@ fn duration_ms_from_frames(total_frames: usize, sample_rate_hz: u32) -> Result<u
     Ok(duration_ms)
 }
 
-/// Computes EBU R128 integrated loudness from one contiguous interleaved PCM buffer.
-fn compute_integrated_lufs(
-    interleaved_samples: &[f32],
-    sample_rate_hz: u32,
-    channels: u16,
-) -> Result<f32, AudioError> {
-    compute_integrated_lufs_from_chunks(
-        std::iter::once(Ok(interleaved_samples)),
-        sample_rate_hz,
-        channels,
-    )
-}
-
-/// Computes integrated LUFS from a stream of interleaved chunks.
+/// Computes EBU R128 integrated loudness and maximum true peak in a **single pass**
+/// over the sample buffer, using `Mode::I | Mode::SAMPLE_PEAK | Mode::TRUE_PEAK`.
 ///
-/// The chunked form exists to support fault-injection tests (mid-stream I/O
-/// failures) while preserving the same validation and error semantics as the
-/// file-backed analyzer.
-fn compute_integrated_lufs_from_chunks<T, I>(
+/// Returns `(loudness_lufs, max_true_peak_linear)` where `max_true_peak_linear` is the
+/// maximum linear true-peak value across all channels (raw, not converted to dBFS).
+/// The caller is responsible for converting to dBFS via [`amplitude_to_dbfs`].
+fn compute_loudness_and_true_peak_from_chunks<T, I>(
     chunks: I,
     sample_rate_hz: u32,
     channels: u16,
-) -> Result<f32, AudioError>
+) -> Result<(f32, f64), AudioError>
 where
     T: AsRef<[f32]>,
     I: IntoIterator<Item = Result<T, AudioError>>,
@@ -417,7 +412,8 @@ where
         ));
     }
 
-    let mode = Mode::I | Mode::SAMPLE_PEAK;
+    // Single meter for both integrated loudness and true peak.
+    let mode = Mode::I | Mode::SAMPLE_PEAK | Mode::TRUE_PEAK;
     let mut meter = EbuR128::new(u32::from(channels), sample_rate_hz, mode)
         .map_err(|error| AudioError::Analysis(format!("ebur128 init failed: {error}")))?;
     let channels_usize = usize::from(channels);
@@ -462,59 +458,15 @@ where
             "integrated loudness is not finite".to_string(),
         ));
     }
-    if loudness > 0.0 && loudness <= LOUDNESS_POSITIVE_EPSILON {
-        return Ok(0.0);
-    }
-    if loudness > 0.0 {
+    let loudness = if loudness > 0.0 && loudness <= LOUDNESS_POSITIVE_EPSILON {
+        0.0
+    } else if loudness > 0.0 {
         return Err(AudioError::Analysis(format!(
             "integrated loudness must be <= 0.0 LUFS (got {loudness})"
         )));
-    }
-
-    Ok(loudness)
-}
-
-/// Computes true peak (dBFS-equivalent) using EBU R128 true-peak oversampling.
-fn compute_true_peak_dbfs(
-    interleaved_samples: &[f32],
-    sample_rate_hz: u32,
-    channels: u16,
-    dbfs_floor: f32,
-) -> Result<f32, AudioError> {
-    if sample_rate_hz == 0 {
-        return Err(AudioError::Analysis(
-            "true peak sample_rate_hz must be > 0".to_string(),
-        ));
-    }
-    if channels == 0 {
-        return Err(AudioError::Analysis(
-            "true peak channels must be > 0".to_string(),
-        ));
-    }
-    if interleaved_samples.is_empty() {
-        return Err(AudioError::Analysis(
-            "true peak received zero frames".to_string(),
-        ));
-    }
-    if !interleaved_samples
-        .len()
-        .is_multiple_of(usize::from(channels))
-    {
-        return Err(AudioError::Analysis(
-            "true peak chunk length must be divisible by channels".to_string(),
-        ));
-    }
-    if interleaved_samples.iter().any(|sample| !sample.is_finite()) {
-        return Err(AudioError::Analysis(
-            "true peak chunk contains non-finite samples".to_string(),
-        ));
-    }
-
-    let mut meter = EbuR128::new(u32::from(channels), sample_rate_hz, Mode::TRUE_PEAK)
-        .map_err(|error| AudioError::Analysis(format!("ebur128 true-peak init failed: {error}")))?;
-    meter.add_frames_f32(interleaved_samples).map_err(|error| {
-        AudioError::Analysis(format!("ebur128 true-peak add_frames_f32 failed: {error}"))
-    })?;
+    } else {
+        loudness
+    };
 
     let mut max_true_peak_linear = 0.0f64;
     for channel_idx in 0..u32::from(channels) {
@@ -533,7 +485,28 @@ fn compute_true_peak_dbfs(
         }
     }
 
-    Ok(amplitude_to_dbfs(max_true_peak_linear as f32, dbfs_floor))
+    Ok((loudness, max_true_peak_linear))
+}
+
+/// Computes integrated LUFS from a stream of interleaved chunks.
+///
+/// This is the public streaming entry point used for fault-injection tests
+/// (mid-stream I/O failures). True peak is computed internally but discarded;
+/// use [`analyze_interleaved_samples`] to obtain both metrics in a single pass.
+// Only called from #[cfg(test)] — suppress dead_code in release builds.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn compute_integrated_lufs_from_chunks<T, I>(
+    chunks: I,
+    sample_rate_hz: u32,
+    channels: u16,
+) -> Result<f32, AudioError>
+where
+    T: AsRef<[f32]>,
+    I: IntoIterator<Item = Result<T, AudioError>>,
+{
+    let (loudness, _true_peak_linear) =
+        compute_loudness_and_true_peak_from_chunks(chunks, sample_rate_hz, channels)?;
+    Ok(loudness)
 }
 
 /// Extracts a fixed-size dBFS peak envelope by taking max absolute sample per bin.
@@ -628,8 +601,8 @@ fn amplitude_to_dbfs(amplitude: f32, dbfs_floor: f32) -> f32 {
 mod tests {
     use super::{
         amplitude_to_dbfs, analyze_interleaved_samples, analyze_interleaved_samples_with_config,
-        compute_integrated_lufs_from_chunks, compute_peak_data_dbfs, compute_true_peak_dbfs,
-        decode_audio_file, AnalysisConfig, AudioError,
+        compute_integrated_lufs_from_chunks, compute_peak_data_dbfs, decode_audio_file,
+        AnalysisConfig, AudioError, TRUE_PEAK_CLIPPING_DBFS,
     };
     use std::f32::consts::TAU;
     use std::fs::{self, File};
@@ -903,14 +876,58 @@ mod tests {
     }
 
     #[test]
-    fn compute_true_peak_dbfs_reports_expected_dbfs_equivalent_peak() {
-        let samples = vec![0.0f32, 0.5, -0.5, 0.25, -0.25];
-        let peak = compute_true_peak_dbfs(&samples, TEST_SAMPLE_RATE, 1, -96.0)
-            .expect("true peak should compute");
-        assert!(peak <= 0.0);
+    fn true_peak_reported_around_minus_6_dbfs_for_half_amplitude_signal() {
+        // Previously tested via compute_true_peak_dbfs directly; now validated
+        // through the public analyze_interleaved_samples surface.
+        // 1.0s at 48 kHz gives EBU R128 integrated gating enough data and
+        // a nominal -6 dBFS true peak for amplitude=0.5.
+        let samples =
+            generate_sine_wave_interleaved(TEST_SAMPLE_RATE, 1.0, 440.0, 0.5, TEST_CHANNELS_MONO);
+        let analysis = analyze_interleaved_samples(&samples, TEST_SAMPLE_RATE, TEST_CHANNELS_MONO)
+            .expect("analysis should succeed");
+        assert!(analysis.true_peak_dbfs <= 0.0);
         assert!(
-            peak > -7.0 && peak < -5.0,
-            "expected around -6 dBFS, got {peak}"
+            analysis.true_peak_dbfs > -7.0 && analysis.true_peak_dbfs < -5.0,
+            "expected around -6 dBFS for amplitude=0.5, got {}",
+            analysis.true_peak_dbfs
+        );
+        // A half-amplitude signal is well below the -0.5 dBFS clipping threshold.
+        assert!(!analysis.is_clipping);
+    }
+
+    #[test]
+    fn is_clipping_true_for_full_scale_sine() {
+        // A 0 dBFS (amplitude 1.0) sine wave oversampled by EBU R128 true-peak
+        // will typically read >= -0.5 dBFS and must be flagged as clipping.
+        let samples = generate_sine_wave_interleaved(TEST_SAMPLE_RATE, 1.0, 440.0, 1.0, 1);
+        let analysis = analyze_interleaved_samples(&samples, TEST_SAMPLE_RATE, 1)
+            .expect("analysis should succeed");
+        assert!(
+            analysis.is_clipping,
+            "full-scale sine should be flagged as clipping (true_peak_dbfs={})",
+            analysis.true_peak_dbfs
+        );
+    }
+
+    #[test]
+    fn is_clipping_false_for_low_amplitude_sine() {
+        // A -6 dBFS sine (amplitude 0.5) is safely below the clipping threshold.
+        let samples = generate_sine_wave_interleaved(TEST_SAMPLE_RATE, 1.0, 440.0, 0.5, 1);
+        let analysis = analyze_interleaved_samples(&samples, TEST_SAMPLE_RATE, 1)
+            .expect("analysis should succeed");
+        assert!(
+            !analysis.is_clipping,
+            "half-amplitude sine should NOT be flagged as clipping (true_peak_dbfs={})",
+            analysis.true_peak_dbfs
+        );
+    }
+
+    #[test]
+    fn is_clipping_threshold_is_minus_half_dbfs() {
+        // Exported constant must match the documented -0.5 dBFS threshold.
+        assert!(
+            (TRUE_PEAK_CLIPPING_DBFS - (-0.5)).abs() < 1e-6,
+            "clipping threshold should be -0.5 dBFS, got {TRUE_PEAK_CLIPPING_DBFS}"
         );
     }
 

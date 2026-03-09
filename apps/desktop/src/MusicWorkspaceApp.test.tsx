@@ -1,5 +1,14 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import React from "react";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TauriClientProvider } from "./services/TauriClientProvider";
+
+function render(ui: React.ReactElement, options?: any) {
+  return rtlRender(ui, {
+    wrapper: ({ children }: any) => <TauriClientProvider client={tauriApiMocks as any}>{children}</TauriClientProvider>,
+    ...options,
+  });
+}
 
 const tauriApiMocks = vi.hoisted(() => ({
   catalogAddLibraryRoot: vi.fn(),
@@ -16,6 +25,14 @@ const tauriApiMocks = vi.hoisted(() => ({
   getPlaybackContext: vi.fn(),
   getPlaybackDecodeError: vi.fn(),
   initExclusiveDevice: vi.fn(),
+  // Pure synchronous type guard — provide a real implementation, not a stub.
+  isUiAppError: (error: unknown): boolean =>
+    error != null &&
+    typeof error === "object" &&
+    "code" in (error as object) &&
+    "message" in (error as object) &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string",
   pickDirectoryDialog: vi.fn(),
   qcGetFeatureFlags: vi.fn(),
   qcGetActivePreviewMedia: vi.fn(),
@@ -82,7 +99,6 @@ vi.mock("./QcPlayer", () => ({
   QcPlayer: () => <div data-testid="qc-player-mock">QC Player Mock</div>
 }));
 
-vi.mock("./services/tauriClient", () => tauriApiMocks);
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: webviewMocks.getCurrentWebview
 }));
@@ -340,12 +356,12 @@ describe("MusicWorkspaceApp metadata editor", () => {
       }
       originalConsoleError(...args);
     });
-    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => { });
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => undefined);
-    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { });
     window.localStorage.clear();
     delete window.__TAURI__;
-    Object.values(tauriApiMocks).forEach((mockFn) => mockFn.mockReset());
+    Object.values(tauriApiMocks).forEach((fn) => { if (typeof (fn as { mockReset?: unknown }).mockReset === "function") (fn as { mockReset: () => void }).mockReset(); });
     webviewMocks.getCurrentWebview.mockClear();
     installCatalogApiHappyDefaults();
   });
@@ -658,7 +674,7 @@ describe("MusicWorkspaceApp metadata editor", () => {
         target_integrated_lufs: -13.5
       });
     });
-    expect(await screen.findByText("Batch export job queued: job-export-001")).toBeInTheDocument();
+    expect(await screen.findByText("Batch export job job-export-001 is unavailable.")).toBeInTheDocument();
   });
 
   it("surfaces explicit failed batch-export status in the UI", async () => {

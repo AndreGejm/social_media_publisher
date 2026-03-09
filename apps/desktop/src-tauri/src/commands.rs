@@ -42,7 +42,9 @@ use tokio::sync::{OnceCell, Semaphore};
 #[cfg(target_os = "windows")]
 use windows::Win32::Media::Audio::{
     eMultimedia, eRender, IAudioClient, IAudioRenderClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_SHAREMODE_EXCLUSIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
+    MMDeviceEnumerator, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
+    WAVE_FORMAT_PCM,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::{
@@ -243,6 +245,22 @@ pub struct CatalogIngestJobResponse {
     pub error_count: u32,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum AudioLockState {
+    Released = 0,
+    SharedMode = 1,
+    ExclusiveMode = 2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDeviceContext {
+    pub current_lock_state: AudioLockState,
+    pub user_prefers_exclusive: bool,
+    pub is_app_in_focus: bool,
+    pub is_playing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2430,10 +2448,7 @@ fn install_fingerprint_path(base_dir: &Path) -> PathBuf {
     base_dir.join(INSTALL_FINGERPRINT_FILE_NAME)
 }
 
-async fn maybe_reset_catalog_on_install_change(
-    db: &Db,
-    base_dir: &Path,
-) -> Result<bool, AppError> {
+async fn maybe_reset_catalog_on_install_change(db: &Db, base_dir: &Path) -> Result<bool, AppError> {
     let Some(current_fingerprint) = current_install_fingerprint() else {
         return Ok(false);
     };
@@ -2464,9 +2479,13 @@ async fn maybe_reset_catalog_on_install_change(
             format!("failed to encode install fingerprint state: {error}"),
         )
     })?;
-    tokio::fs::write(fingerprint_path, encoded).await.map_err(|error| {
-        AppError::file_write_failed(format!("failed to write install fingerprint state: {error}"))
-    })?;
+    tokio::fs::write(fingerprint_path, encoded)
+        .await
+        .map_err(|error| {
+            AppError::file_write_failed(format!(
+                "failed to write install fingerprint state: {error}"
+            ))
+        })?;
 
     Ok(should_reset_catalog)
 }
@@ -2555,7 +2574,7 @@ struct TrackChangeRequest {
 #[derive(Debug)]
 struct PlaybackControlPlane {
     hardware_state: RwLock<Option<AudioHardwareState>>,
-    exclusive_engine: RwLock<Option<ExclusiveAudioEngine>>,
+    audio_engine: RwLock<Option<AudioEngineContext>>,
     volume_scalar_bits: AtomicU32,
     is_bit_perfect_bypassed: AtomicBool,
     transport_playing: AtomicBool,
@@ -2575,7 +2594,7 @@ impl PlaybackControlPlane {
     fn new() -> Arc<Self> {
         let control = Arc::new(Self {
             hardware_state: RwLock::new(None),
-            exclusive_engine: RwLock::new(None),
+            audio_engine: RwLock::new(None),
             volume_scalar_bits: AtomicU32::new(UNITY_GAIN_LEVEL.to_bits()),
             is_bit_perfect_bypassed: AtomicBool::new(true),
             transport_playing: AtomicBool::new(false),
@@ -2628,10 +2647,11 @@ impl PlaybackControlPlane {
         }
     }
 
-    fn init_exclusive_device(
+    fn acquire_audio_device_lock(
         &self,
         target_rate_hz: u32,
         target_bit_depth: u16,
+        prefer_exclusive: bool,
     ) -> Result<AudioHardwareState, AppError> {
         if target_rate_hz == 0 {
             return Err(AppError::invalid_argument(
@@ -2654,20 +2674,18 @@ impl PlaybackControlPlane {
         {
             return Err(AppError::new(
                 app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
-                "exclusive output initialization is currently supported only on Windows",
+                "audio device lock initialization is currently supported only on Windows",
             ));
         }
 
         #[cfg(target_os = "windows")]
         {
-            let candidates =
-                wasapi_exclusive_fallback_candidates(target_rate_hz, target_bit_depth);
+            let candidates = wasapi_exclusive_fallback_candidates(target_rate_hz, target_bit_depth);
             let mut startup_attempt_errors: Vec<String> = Vec::new();
-            let mut selected_config: Option<(ExclusiveAudioEngine, u32, u32, u16, usize)> = None;
+            let mut selected_config: Option<(AudioEngineContext, u32, u32, u16, usize)> = None;
 
-            for (attempt_index, (sample_rate_hz, bit_depth)) in candidates.into_iter().enumerate()
-            {
-                match start_wasapi_exclusive_engine(sample_rate_hz, bit_depth) {
+            for (attempt_index, (sample_rate_hz, bit_depth)) in candidates.into_iter().enumerate() {
+                match start_wasapi_engine(sample_rate_hz, bit_depth, prefer_exclusive) {
                     Ok((engine, buffer_size_frames)) => {
                         selected_config = Some((
                             engine,
@@ -2679,8 +2697,7 @@ impl PlaybackControlPlane {
                         break;
                     }
                     Err(error) => {
-                        if attempt_index == 0
-                            && !is_wasapi_unsupported_format_error(&error.message)
+                        if attempt_index == 0 && !is_wasapi_unsupported_format_error(&error.message)
                         {
                             return Err(error);
                         }
@@ -2698,7 +2715,7 @@ impl PlaybackControlPlane {
                 return Err(AppError::new(
                     app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
                     format!(
-                        "failed to initialize WASAPI exclusive output for all attempted formats: {}",
+                        "failed to acquire WASAPI audio lock for all attempted formats: {}",
                         startup_attempt_errors.join(" | ")
                     ),
                 ));
@@ -2711,14 +2728,14 @@ impl PlaybackControlPlane {
                     requested_bit_depth = target_bit_depth,
                     selected_sample_rate_hz = selected_rate_hz,
                     selected_bit_depth = selected_bit_depth,
-                    "WASAPI exclusive requested format unsupported; using fallback format"
+                    "WASAPI requested format unsupported; using fallback format"
                 );
             }
             let previous_engine = {
-                let mut guard = self.exclusive_engine.write().map_err(|_| {
+                let mut guard = self.audio_engine.write().map_err(|_| {
                     AppError::new(
                         app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
-                        "failed to update exclusive playback engine state",
+                        "failed to update audio playback engine state",
                     )
                 })?;
                 guard.replace(engine)
@@ -2731,7 +2748,7 @@ impl PlaybackControlPlane {
                 sample_rate_hz: selected_rate_hz,
                 bit_depth: selected_bit_depth,
                 buffer_size_frames,
-                is_exclusive_lock: true,
+                is_exclusive_lock: prefer_exclusive,
             };
 
             let mut guard = self.hardware_state.write().map_err(|_| {
@@ -2744,6 +2761,68 @@ impl PlaybackControlPlane {
 
             Ok(hardware)
         }
+    }
+
+    fn release_audio_device_lock(&self) -> Result<(), AppError> {
+        let previous_engine = {
+            let mut guard = self.audio_engine.write().map_err(|_| {
+                AppError::new(
+                    app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                    "failed to update audio playback engine state during release",
+                )
+            })?;
+            guard.take()
+        };
+
+        if let Some(engine) = previous_engine {
+            engine.shutdown();
+        }
+
+        {
+            let mut guard = self.hardware_state.write().map_err(|_| {
+                AppError::new(
+                    app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                    "failed to clear playback hardware state during release",
+                )
+            })?;
+            *guard = None;
+        }
+
+        tracing::info!(target: "desktop.player", "audio device lock released");
+        Ok(())
+    }
+
+    fn get_audio_device_context(&self) -> Result<AudioDeviceContext, AppError> {
+        let hardware = {
+            let guard = self.hardware_state.read().map_err(|_| {
+                AppError::new(
+                    app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                    "failed to read playback hardware state",
+                )
+            })?;
+            guard.clone()
+        };
+
+        let current_lock_state = match hardware {
+            Some(hw) => {
+                if hw.is_exclusive_lock {
+                    AudioLockState::ExclusiveMode
+                } else {
+                    AudioLockState::SharedMode
+                }
+            }
+            None => AudioLockState::Released,
+        };
+
+        let is_playing = self.transport_playing.load(Ordering::Acquire);
+        // Note: is_app_in_focus is a UI concept, so we will stub it here
+        // The React frontend track window focus
+        Ok(AudioDeviceContext {
+            current_lock_state,
+            user_prefers_exclusive: true,
+            is_app_in_focus: true,
+            is_playing,
+        })
     }
 
     fn set_volume(&self, level: f32) -> Result<(), AppError> {
@@ -3162,12 +3241,82 @@ fn decode_track_to_stereo_f32_pcm(
     if interleaved_stereo_f32.is_empty() {
         return Err("decoded playback track has no PCM frames".to_string());
     }
+
+    if sample_rate_hz != expected_sample_rate_hz {
+        tracing::info!(
+            target: "desktop.player",
+            source_hz = sample_rate_hz,
+            target_hz = expected_sample_rate_hz,
+            "sample rates differ, performing high-quality software SRC (Resampling)"
+        );
+        interleaved_stereo_f32 = resample_stereo_interleaved_frames(
+            &interleaved_stereo_f32,
+            sample_rate_hz,
+            expected_sample_rate_hz,
+        )?;
+    }
+
     let total_frames = interleaved_stereo_f32.len() / 2;
     Ok(DecodedPcmTrack {
         samples_stereo_f32: Arc::new(interleaved_stereo_f32),
         total_frames,
-        sample_rate_hz,
+        sample_rate_hz: expected_sample_rate_hz,
     })
+}
+
+fn resample_stereo_interleaved_frames(
+    interleaved: &[f32],
+    source_rate_hz: u32,
+    target_rate_hz: u32,
+) -> Result<Vec<f32>, String> {
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+    let frames = interleaved.len() / 2;
+    let mut resampler = SincFixedIn::<f32>::new(
+        target_rate_hz as f64 / source_rate_hz as f64,
+        2.0,
+        params,
+        frames,
+        2,
+    )
+    .map_err(|e| format!("failed to initialize resampler: {e}"))?;
+
+    let mut left = Vec::with_capacity(frames);
+    let mut right = Vec::with_capacity(frames);
+
+    for chunk in interleaved.chunks_exact(2) {
+        left.push(chunk[0]);
+        right.push(chunk[1]);
+    }
+
+    let waves_in = vec![left, right];
+    let waves_out = resampler
+        .process(&waves_in, None)
+        .map_err(|e| format!("resampling failed: {e}"))?;
+
+    if waves_out.len() != 2 {
+        return Err("resampler returned unexpected number of channels".to_string());
+    }
+
+    let out_frames = waves_out[0].len();
+    let mut out_interleaved = Vec::with_capacity(out_frames * 2);
+
+    for i in 0..out_frames {
+        out_interleaved.push(waves_out[0][i]);
+        out_interleaved.push(waves_out[1][i]);
+    }
+
+    Ok(out_interleaved)
 }
 
 fn append_interleaved_to_stereo_f32(interleaved: &[f32], channel_count: usize, out: &mut Vec<f32>) {
@@ -3193,7 +3342,7 @@ fn append_interleaved_to_stereo_f32(interleaved: &[f32], channel_count: usize, o
 }
 
 #[derive(Debug)]
-struct ExclusiveAudioEngine {
+struct AudioEngineContext {
     stop_requested: Arc<AtomicBool>,
     join_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -3222,10 +3371,11 @@ fn validate_audio_format_boundary(boundary: &AudioFormatBoundary) -> Result<(), 
         return Err("audio boundary sample-rate cannot be zero".to_string());
     }
     if boundary.decoder_sample_rate != boundary.dac_sample_rate {
-        return Err(format!(
-            "bit-perfect playback requires sample-rate match: decoder={}Hz dac={}Hz",
+        tracing::info!(
+            target: "desktop.player",
+            "audio boundary sample-rates do not match (decoder={}Hz dac={}Hz), will employ software SRC",
             boundary.decoder_sample_rate, boundary.dac_sample_rate
-        ));
+        );
     }
     if boundary.decoder_channels == 0 || boundary.dac_channels == 0 {
         return Err("audio boundary channel count cannot be zero".to_string());
@@ -3248,7 +3398,7 @@ fn validate_audio_format_boundary(boundary: &AudioFormatBoundary) -> Result<(), 
     Ok(())
 }
 
-impl ExclusiveAudioEngine {
+impl AudioEngineContext {
     fn shutdown(mut self) {
         self.stop_requested.store(true, Ordering::Release);
         if let Some(handle) = self.join_handle.take() {
@@ -3256,7 +3406,7 @@ impl ExclusiveAudioEngine {
                 tracing::warn!(
                     target: "desktop.player",
                     error = ?error,
-                    "exclusive audio thread join failed"
+                    "audio thread join failed"
                 );
             }
         }
@@ -3287,37 +3437,38 @@ struct WasapiExclusiveThreadContext {
 }
 
 #[cfg(target_os = "windows")]
-fn start_wasapi_exclusive_engine(
+fn start_wasapi_engine(
     target_rate_hz: u32,
     target_bit_depth: u16,
-) -> Result<(ExclusiveAudioEngine, u32), AppError> {
+    prefer_exclusive: bool,
+) -> Result<(AudioEngineContext, u32), AppError> {
     let stop_requested = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop_requested);
     let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel::<Result<u32, String>>(1);
 
     let join_handle = std::thread::Builder::new()
-        .name("rp-wasapi-exclusive-render".to_string())
-        .spawn(
-            move || match create_wasapi_exclusive_context(target_rate_hz, target_bit_depth) {
+        .name("rp-wasapi-render".to_string())
+        .spawn(move || {
+            match create_wasapi_context(target_rate_hz, target_bit_depth, prefer_exclusive) {
                 Ok(context) => {
                     let _ = startup_tx.send(Ok(context.buffer_size_frames));
-                    run_wasapi_exclusive_render_loop(context, stop_for_thread);
+                    run_wasapi_render_loop(context, stop_for_thread);
                 }
                 Err(message) => {
                     let _ = startup_tx.send(Err(message));
                 }
-            },
-        )
+            }
+        })
         .map_err(|error| {
             AppError::new(
                 app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
-                format!("failed to spawn WASAPI exclusive render thread: {error}"),
+                format!("failed to spawn WASAPI render thread: {error}"),
             )
         })?;
 
     match startup_rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(buffer_size_frames)) => Ok((
-            ExclusiveAudioEngine {
+            AudioEngineContext {
                 stop_requested,
                 join_handle: Some(join_handle),
             },
@@ -3335,25 +3486,31 @@ fn start_wasapi_exclusive_engine(
             let _ = join_handle.join();
             Err(AppError::new(
                 app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
-                "timed out while initializing WASAPI exclusive output",
+                "timed out while initializing WASAPI output",
             ))
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             let _ = join_handle.join();
             Err(AppError::new(
                 app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
-                "WASAPI exclusive render thread exited unexpectedly during startup",
+                "WASAPI render thread exited unexpectedly during startup",
             ))
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WasapiShareMode {
+    Exclusive,
+    Shared,
+}
+
 #[cfg(target_os = "windows")]
-fn create_wasapi_exclusive_context(
+fn create_wasapi_context(
     target_rate_hz: u32,
     target_bit_depth: u16,
+    prefer_exclusive: bool,
 ) -> Result<WasapiExclusiveThreadContext, String> {
-    // SAFETY: COM initialization is required before any WASAPI calls in this thread.
     // SAFETY: COM initialization is required before any WASAPI calls in this thread.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
@@ -3390,6 +3547,13 @@ fn create_wasapi_exclusive_context(
         wBitsPerSample: target_bit_depth,
         cbSize: 0,
     };
+
+    let share_mode = if prefer_exclusive {
+        WasapiShareMode::Exclusive
+    } else {
+        WasapiShareMode::Shared
+    };
+
     tracing::info!(
         target: "desktop.player",
         sample_rate_hz = target_rate_hz,
@@ -3397,29 +3561,58 @@ fn create_wasapi_exclusive_context(
         bit_depth = target_bit_depth,
         block_align = block_align,
         avg_bytes_per_sec = avg_bytes_per_sec,
-        "requesting WASAPI exclusive format"
+        share_mode = ?share_mode,
+        "requesting WASAPI format"
     );
 
-    // 50ms exclusive period/buffer. For exclusive mode, period must match buffer duration.
-    let hns_buffer_duration: i64 = 500_000;
-    // SAFETY: Parameters match WASAPI exclusive-mode requirements and valid WAVEFORMATEX data.
-    unsafe {
-        audio_client.Initialize(
-            AUDCLNT_SHAREMODE_EXCLUSIVE,
-            Default::default(),
-            hns_buffer_duration,
-            hns_buffer_duration,
-            &wave_format,
-            None,
+    let hns_buffer_duration: i64 = if share_mode == WasapiShareMode::Exclusive {
+        500_000 // 50ms exclusive
+    } else {
+        0 // Default shared buffer
+    };
+
+    let init_result = unsafe {
+        if share_mode == WasapiShareMode::Exclusive {
+            // SAFETY: Parameters match WASAPI exclusive-mode requirements and valid WAVEFORMATEX data.
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_EXCLUSIVE,
+                Default::default(),
+                hns_buffer_duration,
+                hns_buffer_duration,
+                &wave_format,
+                None,
+            )
+        } else {
+            // Use AUTOCONVERTPCM to allow Windows to natively SRC the mix format to match our wave_format
+            let flags =
+                AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            audio_client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                flags,
+                hns_buffer_duration,
+                0,
+                &wave_format,
+                None,
+            )
+        }
+    };
+
+    init_result.map_err(|error| {
+        format!(
+            "WASAPI {} Initialize failed: {error}",
+            if share_mode == WasapiShareMode::Exclusive {
+                "exclusive"
+            } else {
+                "shared"
+            }
         )
-    }
-    .map_err(|error| format!("WASAPI exclusive Initialize failed: {error}"))?;
+    })?;
 
     // SAFETY: queried after successful Initialize.
     let buffer_size_frames = unsafe { audio_client.GetBufferSize() }
         .map_err(|error| format!("GetBufferSize failed: {error}"))?;
     if buffer_size_frames == 0 {
-        return Err("WASAPI exclusive buffer size is zero".to_string());
+        return Err("WASAPI buffer size is zero".to_string());
     }
 
     // SAFETY: render service available for render-mode IAudioClient.
@@ -3440,10 +3633,7 @@ fn create_wasapi_exclusive_context(
 }
 
 #[cfg(target_os = "windows")]
-fn run_wasapi_exclusive_render_loop(
-    context: WasapiExclusiveThreadContext,
-    stop_requested: Arc<AtomicBool>,
-) {
+fn run_wasapi_render_loop(context: WasapiExclusiveThreadContext, stop_requested: Arc<AtomicBool>) {
     let control = shared_playback_control();
     while !stop_requested.load(Ordering::Acquire) {
         // SAFETY: render loop operates on initialized and started WASAPI interfaces.
@@ -4729,14 +4919,6 @@ pub async fn get_release_track_analysis(
 }
 
 #[tauri::command]
-pub async fn init_exclusive_device(
-    target_rate_hz: u32,
-    target_bit_depth: u16,
-) -> Result<AudioHardwareState, AppError> {
-    shared_playback_control().init_exclusive_device(target_rate_hz, target_bit_depth)
-}
-
-#[tauri::command]
 pub async fn set_volume(level: f32) -> Result<(), AppError> {
     shared_playback_control().set_volume(level)
 }
@@ -4765,6 +4947,29 @@ pub async fn seek_playback_ratio(ratio: f32) -> Result<(), AppError> {
 pub async fn toggle_queue_visibility() -> Result<(), AppError> {
     shared_playback_control().toggle_queue_visibility();
     Ok(())
+}
+
+#[tauri::command]
+pub async fn acquire_audio_device_lock(
+    target_rate_hz: u32,
+    target_bit_depth: u16,
+    prefer_exclusive: bool,
+) -> Result<AudioHardwareState, AppError> {
+    shared_playback_control().acquire_audio_device_lock(
+        target_rate_hz,
+        target_bit_depth,
+        prefer_exclusive,
+    )
+}
+
+#[tauri::command]
+pub async fn release_audio_device_lock() -> Result<(), AppError> {
+    shared_playback_control().release_audio_device_lock()
+}
+
+#[tauri::command]
+pub async fn get_audio_device_context() -> Result<AudioDeviceContext, AppError> {
+    shared_playback_control().get_audio_device_context()
 }
 
 #[tauri::command]
@@ -5688,7 +5893,7 @@ tags: ["mock"]"#,
     }
 
     #[test]
-    fn validate_audio_format_boundary_rejects_sample_rate_mismatch() {
+    fn validate_audio_format_boundary_accepts_sample_rate_mismatch_for_src() {
         let boundary = AudioFormatBoundary {
             decoder_sample_rate: 44_100,
             decoder_channels: 2,
@@ -5699,9 +5904,8 @@ tags: ["mock"]"#,
             dac_requires_interleaved: true,
             dac_bit_depth: 16,
         };
-        let err = validate_audio_format_boundary(&boundary)
-            .expect_err("sample-rate mismatch must be rejected");
-        assert!(err.contains("sample-rate match"));
+        validate_audio_format_boundary(&boundary)
+            .expect("sample-rate mismatch is now accepted for software SRC");
     }
 
     fn decode_plan_release_input_from_ipc_value_for_test(
@@ -8114,5 +8318,34 @@ tags: ["mock"]"#,
         );
         assert_eq!(wire["details"]["safe"], "keep");
         assert!(!wire_text.contains("store-secret-123"));
+    }
+    #[test]
+    fn resample_stereo_interleaved_frames_converts_44100_to_48000() {
+        let source_rate = 44100;
+        let target_rate = 48000;
+        let mut interleaved = Vec::with_capacity(source_rate * 2);
+        for i in 0..source_rate {
+            let t = i as f32 / source_rate as f32;
+            let sample = (t * 440.0 * 2.0 * std::f32::consts::PI).sin();
+            interleaved.push(sample); // Left
+            interleaved.push(sample); // Right
+        }
+
+        let resampled = super::resample_stereo_interleaved_frames(
+            &interleaved,
+            source_rate as u32,
+            target_rate as u32,
+        )
+        .expect("resampling should succeed");
+
+        // Should be roughly 48000 frames (96000 samples)
+        // Note: SincFixedIn has ~140 frames of algorithmic filter delay retained in the buffer.
+        let resampled_frames = resampled.len() / 2;
+        assert!(
+            (resampled_frames as isize - target_rate as isize).abs() < 300,
+            "expected roughly {} frames, got {}",
+            target_rate,
+            resampled_frames
+        );
     }
 }

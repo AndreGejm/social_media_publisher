@@ -2,6 +2,17 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { sanitizeUiText } from "./ui-sanitize";
 
 export type UiAppError = { code: string; message: string; details?: unknown };
+
+export function isUiAppError(error: unknown): error is UiAppError {
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    "message" in error &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string"
+  );
+}
 const DIRECTORY_PICKER_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_IPC_PATH_CHARS = 4096;
 const MAX_CATALOG_TRACK_SEARCH_CHARS = 512;
@@ -224,7 +235,10 @@ export type QcFeatureFlagsResponse = {
   qc_batch_export_v1: boolean;
 };
 
-export type QcPreviewVariant = "bypass" | "codec_a" | "codec_b" | "blind_x";
+// Single source of truth — both the TypeScript type and runtime validation
+// array are derived from this const so they can never drift apart.
+export const QC_PREVIEW_VARIANTS = ["bypass", "codec_a", "codec_b", "blind_x"] as const;
+export type QcPreviewVariant = (typeof QC_PREVIEW_VARIANTS)[number];
 
 export type QcCodecFamily = "opus" | "vorbis" | "aac" | "mp3";
 
@@ -703,7 +717,7 @@ export async function qcGetPreviewSession(): Promise<QcPreviewSessionStateRespon
 export async function qcSetPreviewVariant(
   variant: QcPreviewVariant
 ): Promise<QcPreviewSessionStateResponse> {
-  if (!["bypass", "codec_a", "codec_b", "blind_x"].includes(variant)) {
+  if (!QC_PREVIEW_VARIANTS.includes(variant)) {
     throw invalidArgument("variant must be one of: bypass, codec_a, codec_b, blind_x.");
   }
   const response = await invokeCommand<QcPreviewSessionStateResponse>("qc_set_preview_variant", {
@@ -786,15 +800,8 @@ export async function pickDirectoryDialog(
     ]);
     return typeof selected === "string" ? selected : null;
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      "message" in error &&
-      typeof (error as { code?: unknown }).code === "string" &&
-      typeof (error as { message?: unknown }).message === "string"
-    ) {
-      throw error as UiAppError;
+    if (isUiAppError(error)) {
+      throw error;
     }
     throw {
       code: "TAURI_DIALOG_UNAVAILABLE",

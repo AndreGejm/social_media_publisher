@@ -21,6 +21,7 @@ symphonia = { version = "0.5", default-features = false, features = ["all"] }
 release-publisher-core = { path = "../../../crates/core" }
 release-publisher-db = { path = "../../../crates/db" }
 release-publisher-mock-connector = { path = "../../../crates/connectors/mock" }
+rubato = "0.14"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Win32_Media_Audio", "Win32_System_Com"] }

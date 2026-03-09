@@ -2,18 +2,12 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
-  catalogAddLibraryRoot,
-  catalogCancelIngestJob,
-  catalogImportFiles,
-  catalogListLibraryRoots,
-  catalogRemoveLibraryRoot,
-  catalogScanRoot,
-  pickDirectoryDialog,
   type CatalogImportFailure,
   type CatalogIngestJobResponse,
   type LibraryRootResponse,
   type UiAppError
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
 export type DropScanJob = {
@@ -60,6 +54,9 @@ function parentDirectoryPath(path: string): string | null {
   if (!trimmed) return null;
   const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/, "");
   if (!withoutTrailingSeparators) return null;
+  // UNC paths (\\server\share\... or //server/share/...) — we cannot derive a
+  // meaningful library-root parent from a UNC path without OS-level resolution.
+  if (/^(\\\\|\/{2})/.test(withoutTrailingSeparators)) return null;
   const splitIndex = Math.max(
     withoutTrailingSeparators.lastIndexOf("/"),
     withoutTrailingSeparators.lastIndexOf("\\")
@@ -73,18 +70,24 @@ function parentDirectoryPath(path: string): string | null {
 }
 
 export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
+  const tauriClient = useTauriClient();
   const argsRef = useRef(args);
+  const tauriClientRef = useRef(tauriClient);
 
   useEffect(() => {
     argsRef.current = args;
   }, [args]);
+
+  useEffect(() => {
+    tauriClientRef.current = tauriClient;
+  }, [tauriClient]);
 
   const refreshLibraryRoots = useCallback(async () => {
     const currentArgs = argsRef.current;
     currentArgs.setLibraryRootsLoading(true);
     currentArgs.setCatalogError(null);
     try {
-      const roots = await catalogListLibraryRoots();
+      const roots = await tauriClientRef.current.catalogListLibraryRoots();
       currentArgs.setLibraryRoots(roots);
     } catch (error) {
       currentArgs.setCatalogError(currentArgs.mapUiError(error));
@@ -94,22 +97,23 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
   }, []);
 
   const handleImport = useCallback(async () => {
-    const paths = args.importPathsInput
+    const currentArgs = argsRef.current;
+    const paths = currentArgs.importPathsInput
       .split(/\r?\n|,/)
-      .map((value) => args.normalizePathForInput(value))
+      .map((value) => currentArgs.normalizePathForInput(value))
       .filter(Boolean);
     if (paths.length === 0) {
-      args.setCatalogError({ code: "INVALID_ARGUMENT", message: "Enter at least one local audio file path to import." });
+      currentArgs.setCatalogError({ code: "INVALID_ARGUMENT", message: "Enter at least one local audio file path to import." });
       return;
     }
-    args.setCatalogImporting(true);
-    args.setCatalogError(null);
+    currentArgs.setCatalogImporting(true);
+    currentArgs.setCatalogError(null);
     try {
-      const response = await catalogImportFiles(paths);
-      args.setCatalogFailures(response.failed);
-      args.setImportPathsInput("");
-      await args.onReloadCatalog(args.trackSearch);
-      args.onNotice({
+      const response = await tauriClientRef.current.catalogImportFiles(paths);
+      currentArgs.setCatalogFailures(response.failed);
+      currentArgs.setImportPathsInput("");
+      await currentArgs.onReloadCatalog(currentArgs.trackSearch);
+      currentArgs.onNotice({
         level: response.failed.length > 0 ? "warning" : "success",
         message:
           response.imported.length > 0
@@ -117,78 +121,82 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
             : "No tracks were imported."
       });
       if (response.imported[0]) {
-        args.setSelectedTrackId(response.imported[0].track_id);
+        currentArgs.setSelectedTrackId(response.imported[0].track_id);
       }
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
     } finally {
-      args.setCatalogImporting(false);
+      currentArgs.setCatalogImporting(false);
     }
-  }, [args]);
+  }, []);
 
   const handleAddLibraryRoot = useCallback(async () => {
-    const path = args.normalizePathForInput(args.libraryRootPathInput);
+    const currentArgs = argsRef.current;
+    const path = currentArgs.normalizePathForInput(currentArgs.libraryRootPathInput);
     if (!path) {
-      args.setCatalogError({ code: "INVALID_ARGUMENT", message: "Enter a local folder path to add a library root." });
+      currentArgs.setCatalogError({ code: "INVALID_ARGUMENT", message: "Enter a local folder path to add a library root." });
       return;
     }
-    args.setLibraryRootMutating(true);
-    args.setCatalogError(null);
+    currentArgs.setLibraryRootMutating(true);
+    currentArgs.setCatalogError(null);
     try {
-      const root = await catalogAddLibraryRoot(path);
-      args.setLibraryRootPathInput("");
-      args.setLibraryRoots((current) => {
+      const root = await tauriClientRef.current.catalogAddLibraryRoot(path);
+      currentArgs.setLibraryRootPathInput("");
+      currentArgs.setLibraryRoots((current) => {
         const deduped = current.filter((item) => item.root_id !== root.root_id);
         return [root, ...deduped];
       });
-      args.onNotice({ level: "success", message: "Library root added." });
+      currentArgs.onNotice({ level: "success", message: "Library root added." });
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
     } finally {
-      args.setLibraryRootMutating(false);
+      currentArgs.setLibraryRootMutating(false);
     }
-  }, [args]);
+  }, []);
 
   const handleBrowseLibraryRoot = useCallback(async () => {
-    if (args.libraryRootBrowsing) return;
-    args.setLibraryRootBrowsing(true);
-    args.setCatalogError(null);
+    const currentArgs = argsRef.current;
+    if (currentArgs.libraryRootBrowsing) return;
+    currentArgs.setLibraryRootBrowsing(true);
+    currentArgs.setCatalogError(null);
     try {
-      const selected = await pickDirectoryDialog({ title: "Select Library Root Folder" });
+      const selected = await tauriClientRef.current.pickDirectoryDialog({ title: "Select Library Root Folder" });
       if (!selected) return;
-      args.setLibraryRootPathInput(selected);
-      args.onNotice({ level: "info", message: "Library root path selected. Click Add Root to persist it." });
+      currentArgs.setLibraryRootPathInput(selected);
+      currentArgs.onNotice({ level: "info", message: "Library root path selected. Click Add Root to persist it." });
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
     } finally {
-      args.setLibraryRootBrowsing(false);
+      currentArgs.setLibraryRootBrowsing(false);
     }
-  }, [args]);
+  }, []);
 
   const handleRemoveLibraryRoot = useCallback(async (rootId: string): Promise<boolean> => {
-    args.setLibraryRootMutating(true);
-    args.setCatalogError(null);
+    const currentArgs = argsRef.current;
+    currentArgs.setLibraryRootMutating(true);
+    currentArgs.setCatalogError(null);
     try {
-      await catalogRemoveLibraryRoot(rootId);
-      args.setLibraryRoots((current) => current.filter((root) => root.root_id !== rootId));
-      args.setSelectedTrackId("");
-      await args.onReloadCatalog(args.trackSearch);
-      args.onNotice({ level: "info", message: "Library root removed." });
+      await tauriClientRef.current.catalogRemoveLibraryRoot(rootId);
+      currentArgs.setLibraryRoots((current) => current.filter((root) => root.root_id !== rootId));
+      currentArgs.setSelectedTrackId("");
+      await currentArgs.onReloadCatalog(currentArgs.trackSearch);
+      currentArgs.onNotice({ level: "info", message: "Library root removed." });
       return true;
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
       return false;
     } finally {
-      args.setLibraryRootMutating(false);
+      currentArgs.setLibraryRootMutating(false);
     }
-  }, [args]);
+  }, []);
 
   const handleScanLibraryRoot = useCallback(async (rootId: string) => {
-    args.setLibraryRootMutating(true);
-    args.setCatalogError(null);
+    const currentArgs = argsRef.current;
+    currentArgs.setLibraryRootMutating(true);
+    currentArgs.setCatalogError(null);
     try {
-      const job = await catalogScanRoot(rootId);
-      args.setActiveScanJobs((current) => ({
+      const job = await tauriClientRef.current.catalogScanRoot(rootId);
+      currentArgs.setActiveScanJobs((current) => ({
         ...current,
         [job.job_id]: {
           job_id: job.job_id,
@@ -201,23 +209,24 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
           updated_at: new Date().toISOString()
         }
       }));
-      args.onNotice({ level: "info", message: "Library root scan started." });
+      currentArgs.onNotice({ level: "info", message: "Library root scan started." });
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
     } finally {
-      args.setLibraryRootMutating(false);
+      currentArgs.setLibraryRootMutating(false);
     }
-  }, [args]);
+  }, []);
 
   const handleCancelIngestJob = useCallback(async (jobId: string): Promise<boolean> => {
-    args.setCatalogError(null);
+    const currentArgs = argsRef.current;
+    currentArgs.setCatalogError(null);
     try {
-      const canceled = await catalogCancelIngestJob(jobId);
+      const canceled = await tauriClientRef.current.catalogCancelIngestJob(jobId);
       if (!canceled) {
-        args.onNotice({ level: "info", message: "Scan is already in a terminal state." });
+        currentArgs.onNotice({ level: "info", message: "Scan is already in a terminal state." });
         return false;
       }
-      args.setActiveScanJobs((current) => {
+      currentArgs.setActiveScanJobs((current) => {
         const previous = current[jobId];
         if (!previous || previous.status === "CANCELED") {
           return current;
@@ -231,17 +240,17 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
           }
         };
       });
-      args.onNotice({ level: "info", message: "Scan cancellation requested." });
+      currentArgs.onNotice({ level: "info", message: "Scan cancellation requested." });
       return true;
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      currentArgs.setCatalogError(currentArgs.mapUiError(error));
       return false;
     }
-  }, [args]);
+  }, []);
 
   const handleIngestDroppedPaths = useCallback(async (rawPaths: string[]): Promise<DropIngestResult | null> => {
     const normalizedPaths = rawPaths
-      .map((value) => args.normalizePathForInput(value))
+      .map((value) => argsRef.current.normalizePathForInput(value))
       .filter(Boolean);
     if (normalizedPaths.length === 0) return null;
 
@@ -260,7 +269,7 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
     const scanJobsStarted: DropScanJob[] = [];
 
     const queueLibraryRoot = async (candidatePath: string): Promise<LibraryRootResponse | null> => {
-      const normalized = args.normalizePathForInput(candidatePath);
+      const normalized = argsRef.current.normalizePathForInput(candidatePath);
       if (!normalized) return null;
       const normalizedKey = normalized.toLowerCase();
       if (queuedRootPathSet.has(normalizedKey)) {
@@ -273,36 +282,38 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
 
       attemptedRootPathSet.add(normalizedKey);
       try {
-        const root = await catalogAddLibraryRoot(normalized);
+        const root = await tauriClientRef.current.catalogAddLibraryRoot(normalized);
         queuedRootPathSet.add(normalizedKey);
         queuedRootsById.set(root.root_id, root);
-        args.setLibraryRoots((current) => {
+        argsRef.current.setLibraryRoots((current) => {
           const deduped = current.filter((item) => item.root_id !== root.root_id);
           return [root, ...deduped];
         });
         return root;
       } catch {
+        // Root add failed — increment counter so the completion notice reflects the failure.
+        scanFailureCount += 1;
         return null;
       }
     };
 
-    args.setCatalogError(null);
-    args.setCatalogImporting(true);
-    args.setLibraryRootMutating(true);
+    argsRef.current.setCatalogError(null);
+    argsRef.current.setCatalogImporting(true);
+    argsRef.current.setLibraryRootMutating(true);
     try {
       for (const path of dedupedPaths) {
         const addedRoot = await queueLibraryRoot(path);
         if (addedRoot) continue;
 
         const parentDirectory = parentDirectoryPath(path);
-        if (args.addParentFoldersAsRootsOnDrop && parentDirectory) {
+        if (argsRef.current.addParentFoldersAsRootsOnDrop && parentDirectory) {
           await queueLibraryRoot(parentDirectory);
         }
         importPaths.push(path);
       }
 
       if (importPaths.length > 0) {
-        const response = await catalogImportFiles(importPaths);
+        const response = await tauriClientRef.current.catalogImportFiles(importPaths);
         importedCount = response.imported.length;
         importFailureCount = response.failed.length;
         importedTrackIds = response.imported.map((item) => item.track_id);
@@ -315,7 +326,7 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
 
       for (const [rootId, root] of queuedRootsById) {
         try {
-          const job = await catalogScanRoot(rootId);
+          const job = await tauriClientRef.current.catalogScanRoot(rootId);
           scansStartedCount += 1;
           scanJobsStarted.push({
             jobId: job.job_id,
@@ -341,7 +352,7 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       }
 
       await Promise.all([
-        args.onReloadCatalog(args.trackSearch),
+        argsRef.current.onReloadCatalog(argsRef.current.trackSearch),
         refreshLibraryRoots()
       ]);
 
@@ -364,12 +375,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       }
 
       if (summaryParts.length > 0) {
-        args.onNotice({
+        argsRef.current.onNotice({
           level: importFailureCount > 0 || scanFailureCount > 0 ? "warning" : "success",
           message: `Dropped media processed: ${summaryParts.join(", ")}.`
         });
       } else {
-        args.onNotice({
+        argsRef.current.onNotice({
           level: "warning",
           message: "Dropped media did not produce importable files or scannable folders."
         });
@@ -386,13 +397,14 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
         scanJobsStarted
       };
     } catch (error) {
-      args.setCatalogError(args.mapUiError(error));
+      argsRef.current.setCatalogError(argsRef.current.mapUiError(error));
       return null;
     } finally {
-      args.setCatalogImporting(false);
-      args.setLibraryRootMutating(false);
+      argsRef.current.setCatalogImporting(false);
+      argsRef.current.setLibraryRootMutating(false);
     }
-  }, [args, refreshLibraryRoots]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshLibraryRoots]);
 
   return {
     refreshLibraryRoots,

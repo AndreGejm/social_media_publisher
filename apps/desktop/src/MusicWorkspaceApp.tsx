@@ -43,23 +43,15 @@ import {
   type TrackSortKey
 } from "./features/play-list/trackCatalogModel";
 import {
-  catalogGetTrack,
-  catalogResetLibraryData,
-  qcRevealBlindX,
-  qcSetPreviewVariant,
-  qcStartBatchExport,
   type CatalogIngestJobResponse,
   type CatalogImportFailure,
   type CatalogListTracksResponse,
-  type QcCodecProfileResponse,
-  type QcFeatureFlagsResponse,
-  type QcPreviewSessionStateResponse,
-  type QcPreviewVariant,
   type CatalogTrackDetailResponse,
   type LibraryRootResponse,
   type PublisherCreateDraftFromTrackResponse,
   type UiAppError
 } from "./services/tauriClient";
+import { useTauriClient } from "./services/TauriClientProvider";
 import {
   DEFAULT_SHORTCUT_BINDINGS,
   findShortcutBindingConflicts,
@@ -251,6 +243,12 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
 }
 
 export default function MusicWorkspaceApp() {
+  const tauriClient = useTauriClient();
+  const tauriClientRef = useRef(tauriClient);
+  useEffect(() => {
+    tauriClientRef.current = tauriClient;
+  }, [tauriClient]);
+
   const shellState = useOptionalAppShellState();
   const [activeMode, setActiveMode] = useState<AppMode>(() =>
     readStorage<AppMode>(STORAGE_KEYS.activeMode, "Listen", isAppMode)
@@ -376,19 +374,6 @@ export default function MusicWorkspaceApp() {
   const [publisherOpsBooted, setPublisherOpsBooted] = useState(false);
 
   const [publisherDraftPrefill, setPublisherDraftPrefill] = useState<PublisherCreateDraftFromTrackResponse | null>(null);
-  const [qcFeatureFlags, setQcFeatureFlags] = useState<QcFeatureFlagsResponse | null>(null);
-  const [qcCodecProfiles, setQcCodecProfiles] = useState<QcCodecProfileResponse[]>([]);
-  const [qcPreviewProfileAId, setQcPreviewProfileAId] = useState("");
-  const [qcPreviewProfileBId, setQcPreviewProfileBId] = useState("");
-  const [qcPreviewBlindXEnabled, setQcPreviewBlindXEnabled] = useState(false);
-  const [qcPreviewSession, setQcPreviewSession] = useState<QcPreviewSessionStateResponse | null>(null);
-  const [qcCodecPreviewLoading, setQcCodecPreviewLoading] = useState(false);
-  const [qcBatchExportOutputDir, setQcBatchExportOutputDir] = useState("C:/Exports");
-  const [qcBatchExportTargetLufs, setQcBatchExportTargetLufs] = useState("-14.0");
-  const [qcBatchExportSelectedProfileIds, setQcBatchExportSelectedProfileIds] = useState<string[]>([]);
-  const [qcBatchExportSubmitting, setQcBatchExportSubmitting] = useState(false);
-  const [qcBatchExportStatusMessage, setQcBatchExportStatusMessage] = useState<string | null>(null);
-  const [qcBatchExportActiveJobId, setQcBatchExportActiveJobId] = useState<string | null>(null);
   const {
     modeWorkspaces,
     showLibraryIngestSidebar,
@@ -809,7 +794,7 @@ export default function MusicWorkspaceApp() {
     handleIngestDroppedPaths: handleIngestDroppedPathsAction
   });
 
-  const { togglePlay } = usePlayerShellSync({
+  const { togglePlay, stopPlayer } = usePlayerShellSync({
     shellState,
     playerTrackId,
     selectedTrackDetail,
@@ -822,17 +807,11 @@ export default function MusicWorkspaceApp() {
     queue,
     setPlayerTrackFromQueueIndex,
     setPlayerError,
+    seekPlayer,
     onNotice: showNotice
   });
   const {
-    qcCodecPreviewEnabled,
-    qcBatchExportEnabled,
-    applyQcPreviewPlaybackSource
-  } = useQcPreviewLifecycle({
-    qcFeatureFlags,
-    setQcFeatureFlags,
     qcCodecProfiles,
-    setQcCodecProfiles,
     qcPreviewProfileAId,
     setQcPreviewProfileAId,
     qcPreviewProfileBId,
@@ -840,8 +819,21 @@ export default function MusicWorkspaceApp() {
     qcPreviewBlindXEnabled,
     setQcPreviewBlindXEnabled,
     qcPreviewSession,
-    setQcPreviewSession,
-    setQcCodecPreviewLoading,
+    qcCodecPreviewLoading,
+    qcBatchExportOutputDir,
+    setQcBatchExportOutputDir,
+    qcBatchExportTargetLufs,
+    setQcBatchExportTargetLufs,
+    qcBatchExportSelectedProfileIds,
+    setQcBatchExportSelectedProfileIds,
+    qcBatchExportSubmitting,
+    qcBatchExportStatusMessage,
+    qcCodecPreviewEnabled,
+    qcBatchExportEnabled,
+    handleSetPreviewVariant,
+    handleRevealBlindX,
+    handleStartBatchExport
+  } = useQcPreviewLifecycle({
     selectedTrackId,
     selectedTrackDetail,
     playerIsPlaying,
@@ -851,11 +843,6 @@ export default function MusicWorkspaceApp() {
     setPlayerTimeSec,
     setAutoplayRequestSourceKey,
     ensureExternalPlayerSource,
-    setQcBatchExportSelectedProfileIds,
-    qcBatchExportActiveJobId,
-    setQcBatchExportStatusMessage,
-    setQcBatchExportSubmitting,
-    setQcBatchExportActiveJobId,
     setAppNotice,
     mapUiError: normalizeUiError,
     setCatalogError
@@ -884,7 +871,7 @@ export default function MusicWorkspaceApp() {
     await Promise.all(
       uniqueCandidateTrackIds.map(async (trackId) => {
         try {
-          const detail = await catalogGetTrack(trackId);
+          const detail = await tauriClientRef.current.catalogGetTrack(trackId);
           if (detail) {
             existingTrackIdSet.add(trackId);
           }
@@ -1037,162 +1024,6 @@ export default function MusicWorkspaceApp() {
     }
     seekPlayer(ratio);
   };
-  const handleQcPreviewSetVariant = (variant: QcPreviewVariant) => {
-    if (!qcCodecPreviewEnabled || !qcPreviewSession) return;
-    setQcCodecPreviewLoading(true);
-    void qcSetPreviewVariant(variant)
-      .then((session) => {
-        setQcPreviewSession(session);
-        return applyQcPreviewPlaybackSource(session);
-      })
-      .catch((error) => {
-        const normalized = normalizeUiError(error);
-        if (normalized.code === "FEATURE_DISABLED") {
-          setQcFeatureFlags((current) =>
-            current
-              ? {
-                  ...current,
-                  qc_codec_preview_v1: false
-                }
-              : current
-          );
-          return;
-        }
-        setCatalogError(normalized);
-      })
-      .finally(() => {
-        setQcCodecPreviewLoading(false);
-      });
-  };
-  const handleQcPreviewRevealBlindX = () => {
-    if (!qcCodecPreviewEnabled || !qcPreviewSession?.blind_x_enabled) return;
-    setQcCodecPreviewLoading(true);
-    void qcRevealBlindX()
-      .then((session) => {
-        setQcPreviewSession(session);
-        return applyQcPreviewPlaybackSource(session);
-      })
-      .catch((error) => {
-        const normalized = normalizeUiError(error);
-        if (normalized.code === "FEATURE_DISABLED") {
-          setQcFeatureFlags((current) =>
-            current
-              ? {
-                  ...current,
-                  qc_codec_preview_v1: false
-                }
-              : current
-          );
-          return;
-        }
-        setCatalogError(normalized);
-      })
-      .finally(() => {
-        setQcCodecPreviewLoading(false);
-      });
-  };
-  const handleQcBatchExportToggleProfile = (profileId: string) => {
-    setQcBatchExportSelectedProfileIds((current) =>
-      current.includes(profileId)
-        ? current.filter((item) => item !== profileId)
-        : [...current, profileId]
-    );
-  };
-  const handleQcStartBatchExport = () => {
-    if (!selectedTrackDetail) return;
-    if (!qcBatchExportEnabled) {
-      showNotice({
-        level: "warning",
-        message: "Batch export is disabled in this build."
-      });
-      return;
-    }
-
-    const outputDir = qcBatchExportOutputDir.trim();
-    if (!outputDir) {
-      setCatalogError({
-        code: "INVALID_ARGUMENT",
-        message: "Batch export output directory is required."
-      });
-      return;
-    }
-
-    const profileIds = qcBatchExportSelectedProfileIds.filter((profileId) =>
-      qcCodecProfiles.some((profile) => profile.profile_id === profileId && profile.available)
-    );
-    if (profileIds.length === 0) {
-      setCatalogError({
-        code: "INVALID_ARGUMENT",
-        message: "Select at least one available codec profile for batch export."
-      });
-      return;
-    }
-
-    let parsedTargetLufs: number | undefined;
-    const targetLufsRaw = qcBatchExportTargetLufs.trim();
-    if (targetLufsRaw.length > 0) {
-      const parsed = Number(targetLufsRaw);
-      if (!Number.isFinite(parsed)) {
-        setCatalogError({
-          code: "INVALID_ARGUMENT",
-          message: "Target LUFS must be a finite number."
-        });
-        return;
-      }
-      parsedTargetLufs = parsed;
-    }
-
-    setQcBatchExportSubmitting(true);
-    setQcBatchExportStatusMessage("Submitting batch export request...");
-    setQcBatchExportActiveJobId(null);
-    let queued = false;
-    void qcStartBatchExport({
-      source_track_id: selectedTrackDetail.track_id,
-      profile_ids: profileIds,
-      output_dir: outputDir,
-      target_integrated_lufs: parsedTargetLufs
-    })
-      .then((response) => {
-        queued = true;
-        setQcBatchExportActiveJobId(response.job_id);
-        setQcBatchExportStatusMessage(`Batch export queued: ${response.job_id} (${response.status})`);
-        showNotice({
-          level: "success",
-          message: `Batch export job queued: ${response.job_id}`
-        });
-      })
-      .catch((error) => {
-        const normalized = normalizeUiError(error);
-        if (normalized.code === "FEATURE_DISABLED") {
-          setQcFeatureFlags((current) =>
-            current
-              ? {
-                  ...current,
-                  qc_batch_export_v1: false
-                }
-              : current
-          );
-          setQcBatchExportStatusMessage("Batch export is disabled in this build.");
-          return;
-        }
-        if (normalized.code === "NOT_IMPLEMENTED") {
-          setQcBatchExportStatusMessage(normalized.message);
-          showNotice({
-            level: "warning",
-            message: normalized.message
-          });
-          return;
-        }
-        setCatalogError(normalized);
-        setQcBatchExportStatusMessage(`${normalized.code}: ${normalized.message}`);
-        setQcBatchExportSubmitting(false);
-      })
-      .finally(() => {
-        if (!queued) {
-          setQcBatchExportSubmitting(false);
-        }
-      });
-  };
   const handleShowFirstAlbumTrackInTracks = (group: AlbumGroup) => {
     if (group.trackIds[0]) {
       setSelectedTrackId(group.trackIds[0]);
@@ -1217,7 +1048,7 @@ export default function MusicWorkspaceApp() {
 
     void (async () => {
       try {
-        await catalogResetLibraryData();
+        await tauriClientRef.current.catalogResetLibraryData();
 
         setCatalogFailures([]);
         setLibraryRoots([]);
@@ -1239,10 +1070,6 @@ export default function MusicWorkspaceApp() {
         setPlayerTimeSec(0);
         setPlayerIsPlaying(false);
         setPlayListModeWithQueueSync("library");
-        setQcPreviewSession(null);
-        setQcBatchExportStatusMessage(null);
-        setQcBatchExportActiveJobId(null);
-        setQcBatchExportSubmitting(false);
         setSelectedAlbumKey("");
 
         await Promise.all([
@@ -1623,8 +1450,8 @@ export default function MusicWorkspaceApp() {
               onQcPreviewProfileAChange={setQcPreviewProfileAId}
               onQcPreviewProfileBChange={setQcPreviewProfileBId}
               onQcPreviewBlindXEnabledChange={setQcPreviewBlindXEnabled}
-              onQcPreviewSetVariant={handleQcPreviewSetVariant}
-              onQcPreviewRevealBlindX={handleQcPreviewRevealBlindX}
+              onQcPreviewSetVariant={handleSetPreviewVariant}
+              onQcPreviewRevealBlindX={handleRevealBlindX}
               qcBatchExportEnabled={qcBatchExportEnabled}
               qcBatchExportSubmitting={qcBatchExportSubmitting}
               qcBatchExportOutputDir={qcBatchExportOutputDir}
@@ -1633,8 +1460,14 @@ export default function MusicWorkspaceApp() {
               qcBatchExportStatusMessage={qcBatchExportStatusMessage}
               onQcBatchExportOutputDirChange={setQcBatchExportOutputDir}
               onQcBatchExportTargetLufsChange={setQcBatchExportTargetLufs}
-              onQcBatchExportToggleProfile={handleQcBatchExportToggleProfile}
-              onQcStartBatchExport={handleQcStartBatchExport}
+              onQcBatchExportToggleProfile={(profileId) => {
+                setQcBatchExportSelectedProfileIds((current) =>
+                  current.includes(profileId)
+                    ? current.filter((item) => item !== profileId)
+                    : [...current, profileId]
+                );
+              }}
+              onQcStartBatchExport={handleStartBatchExport}
             />
 
           </section>
@@ -1730,6 +1563,7 @@ export default function MusicWorkspaceApp() {
             isMuted={nowPlayingState.is_volume_muted}
             onPrev={handlePlayerPrev}
             onTogglePlay={togglePlay}
+            onStop={stopPlayer}
             onNext={handlePlayerNext}
             onToggleQueueVisibility={handleSharedPlayerQueueToggle}
             onToggleMute={toggleNowPlayingMute}

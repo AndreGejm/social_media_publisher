@@ -8,20 +8,12 @@ import {
 } from "../features/player/transportMath";
 import { localFilePathToMediaUrl } from "../media-url";
 import {
-  getPlaybackContext,
-  getPlaybackDecodeError,
-  initExclusiveDevice,
-  pushPlaybackTrackChangeRequest,
-  seekPlaybackRatio,
-  setPlaybackPlaying,
-  setPlaybackQueue,
-  setPlaybackVolume,
-  togglePlaybackQueueVisibility,
   type CatalogListTracksResponse,
   type CatalogTrackDetailResponse,
   type PlaybackContextState,
   type UiAppError
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 import { sanitizeUiErrorMessage, sanitizeUiText } from "../ui-sanitize";
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
@@ -62,6 +54,18 @@ type UsePlayerTransportStateArgs = {
 
 export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
   const { queue, selectedTrackDetail, trackDetailsById, onNotice } = args;
+  const {
+    getPlaybackContext,
+    getPlaybackDecodeError,
+    initExclusiveDevice,
+    isUiAppError,
+    pushPlaybackTrackChangeRequest,
+    seekPlaybackRatio,
+    setPlaybackPlaying,
+    setPlaybackQueue,
+    setPlaybackVolume,
+    togglePlaybackQueueVisibility
+  } = useTauriClient();
   const [playerTrackId, setPlayerTrackId] = useState<string>("");
   const [playerExternalSource, setPlayerExternalSource] = useState<ExternalPlayerSource | null>(null);
   const [autoplayRequestSourceKey, setAutoplayRequestSourceKey] = useState<string | null>(null);
@@ -123,7 +127,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
         setPlayerError(message);
       }
     },
-    [setPlayerError]
+    [setPlaybackVolume, setPlayerError]
   );
 
   const scheduleNativeVolumeSync = useCallback(
@@ -196,7 +200,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
         return currentVisible;
       }
     },
-    [applyPlaybackContextToNowPlayingState, nativeTransportEnabled]
+    [applyPlaybackContextToNowPlayingState, getPlaybackContext, nativeTransportEnabled, togglePlaybackQueueVisibility]
   );
 
   const toggleNowPlayingQueueVisibility = useCallback(() => {
@@ -220,9 +224,14 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     () => () => {
       if (volumeSyncTimerRef.current != null) {
         window.clearTimeout(volumeSyncTimerRef.current);
+        volumeSyncTimerRef.current = null;
+        volumeSyncThrottleActiveRef.current = false;
+        pendingVolumeScalarRef.current = null;
       }
     },
-    []
+    // Also re-run cleanup when nativeTransportEnabled toggles so that an
+    // orphaned timer from the previous enable cycle is always cleared.
+    [nativeTransportEnabled]
   );
 
   const playerTrackDetail = useMemo(() => {
@@ -261,22 +270,13 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
   const desiredBitDepth = 16;
   const queueFilePaths = useMemo(() => queue.map((item) => item.file_path), [queue]);
 
-  const normalizeUiError = (error: unknown): UiAppError => {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      "message" in error &&
-      typeof (error as { code?: unknown }).code === "string" &&
-      typeof (error as { message?: unknown }).message === "string"
-    ) {
-      return error as UiAppError;
-    }
+  const normalizeUiError = useCallback((error: unknown): UiAppError => {
+    if (isUiAppError(error)) return error;
     return {
       code: "UNEXPECTED_UI_ERROR",
       message: error instanceof Error ? error.message : "Unknown UI error"
     };
-  };
+  }, [isUiAppError]);
 
   const shouldUseLegacyAudioFallback = (error: UiAppError) =>
     error.code === "TAURI_UNAVAILABLE" || error.code === "UNKNOWN_COMMAND";
@@ -308,7 +308,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     return () => {
       cancelled = true;
     };
-  }, [desiredBitDepth, desiredSampleRateHz]);
+  }, [desiredBitDepth, desiredSampleRateHz, initExclusiveDevice, normalizeUiError, setPlaybackVolume]);
 
   useEffect(() => {
     if (nativeTransportEnabled) return;
@@ -336,7 +336,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     return () => {
       cancelled = true;
     };
-  }, [nativeTransportEnabled, queueFilePaths]);
+  }, [nativeTransportEnabled, queueFilePaths, setPlaybackQueue]);
 
   useEffect(() => {
     if (!playerSource) return;
@@ -363,7 +363,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     }
     setPlayerTimeSec((current) => (current === 0 ? current : 0));
     setPlayerIsPlaying((current) => (current ? false : current));
-  }, [nativeTransportEnabled, playerSource]);
+  }, [nativeTransportEnabled, playerSource, setPlaybackPlaying]);
 
   useEffect(() => {
     if (!nativeTransportEnabled) return;
@@ -396,7 +396,10 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     playerSource,
     playerTrackId,
     queueFilePaths,
-    queueIndex
+    queueIndex,
+    pushPlaybackTrackChangeRequest,
+    setPlaybackPlaying,
+    setPlaybackQueue
   ]);
 
   useEffect(() => {
@@ -447,8 +450,11 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
     onNotice,
     playerAudioSrc,
     playerSource,
+    pushPlaybackTrackChangeRequest,
     queueFilePaths,
-    queueIndex
+    queueIndex,
+    setPlaybackPlaying,
+    setPlaybackQueue
   ]);
 
   useEffect(() => {
@@ -491,7 +497,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [applyPlaybackContextToNowPlayingState, nativeTransportEnabled]);
+  }, [applyPlaybackContextToNowPlayingState, getPlaybackContext, getPlaybackDecodeError, nativeTransportEnabled, normalizeUiError]);
 
   const ensureExternalPlayerSource = useCallback(
     (source: ExternalPlayerSource, options?: { autoplay?: boolean }) => {
@@ -546,7 +552,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
         setPlayerError("Unable to seek the current track.");
       }
     },
-    [nativeTransportEnabled, playerSource]
+    [nativeTransportEnabled, playerSource, seekPlaybackRatio]
   );
 
   const setNativePlaybackPlaying = useCallback(
@@ -570,7 +576,7 @@ export function usePlayerTransportState(args: UsePlayerTransportStateArgs) {
       await setPlaybackPlaying(isPlaying);
       setPlayerIsPlaying(isPlaying);
     },
-    [nativeTransportEnabled, setPlayerError]
+    [nativeTransportEnabled, setPlaybackPlaying, setPlayerError]
   );
 
   publisherOpsTransportStateRef.current = {

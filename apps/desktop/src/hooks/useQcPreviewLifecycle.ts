@@ -1,38 +1,21 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { ExternalPlayerSource } from "./usePlayerTransportState";
 import {
-  qcGetActivePreviewMedia,
-  qcGetBatchExportJobStatus,
-  qcGetFeatureFlags,
-  qcGetPreviewSession,
-  qcListCodecProfiles,
-  qcPreparePreviewSession,
   type CatalogTrackDetailResponse,
   type QcBatchExportJobStatusResponse,
   type QcCodecProfileResponse,
   type QcFeatureFlagsResponse,
   type QcPreviewSessionStateResponse,
+  type QcPreviewVariant,
   type UiAppError
 } from "../services/tauriClient";
+import { useTauriClient } from "../services/TauriClientProvider";
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
 
 type UseQcPreviewLifecycleArgs = {
-  qcFeatureFlags: QcFeatureFlagsResponse | null;
-  setQcFeatureFlags: Dispatch<SetStateAction<QcFeatureFlagsResponse | null>>;
-  qcCodecProfiles: QcCodecProfileResponse[];
-  setQcCodecProfiles: Dispatch<SetStateAction<QcCodecProfileResponse[]>>;
-  qcPreviewProfileAId: string;
-  setQcPreviewProfileAId: Dispatch<SetStateAction<string>>;
-  qcPreviewProfileBId: string;
-  setQcPreviewProfileBId: Dispatch<SetStateAction<string>>;
-  qcPreviewBlindXEnabled: boolean;
-  setQcPreviewBlindXEnabled: Dispatch<SetStateAction<boolean>>;
-  qcPreviewSession: QcPreviewSessionStateResponse | null;
-  setQcPreviewSession: Dispatch<SetStateAction<QcPreviewSessionStateResponse | null>>;
-  setQcCodecPreviewLoading: Dispatch<SetStateAction<boolean>>;
   selectedTrackId: string;
   selectedTrackDetail: CatalogTrackDetailResponse | null;
   playerIsPlaying: boolean;
@@ -42,11 +25,6 @@ type UseQcPreviewLifecycleArgs = {
   setPlayerTimeSec: Dispatch<SetStateAction<number>>;
   setAutoplayRequestSourceKey: Dispatch<SetStateAction<string | null>>;
   ensureExternalPlayerSource: (source: ExternalPlayerSource, options?: { autoplay?: boolean }) => void;
-  setQcBatchExportSelectedProfileIds: Dispatch<SetStateAction<string[]>>;
-  qcBatchExportActiveJobId: string | null;
-  setQcBatchExportStatusMessage: Dispatch<SetStateAction<string | null>>;
-  setQcBatchExportSubmitting: Dispatch<SetStateAction<boolean>>;
-  setQcBatchExportActiveJobId: Dispatch<SetStateAction<string | null>>;
   setAppNotice: Dispatch<SetStateAction<AppNotice | null>>;
   mapUiError: (error: unknown) => UiAppError;
   setCatalogError: Dispatch<SetStateAction<UiAppError | null>>;
@@ -65,19 +43,6 @@ function selectDefaultCodecPreviewPair(
 
 export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
   const {
-    qcFeatureFlags,
-    setQcFeatureFlags,
-    qcCodecProfiles,
-    setQcCodecProfiles,
-    qcPreviewProfileAId,
-    setQcPreviewProfileAId,
-    qcPreviewProfileBId,
-    setQcPreviewProfileBId,
-    qcPreviewBlindXEnabled,
-    setQcPreviewBlindXEnabled,
-    qcPreviewSession,
-    setQcPreviewSession,
-    setQcCodecPreviewLoading,
     selectedTrackId,
     selectedTrackDetail,
     playerIsPlaying,
@@ -87,15 +52,30 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
     setPlayerTimeSec,
     setAutoplayRequestSourceKey,
     ensureExternalPlayerSource,
-    setQcBatchExportSelectedProfileIds,
-    qcBatchExportActiveJobId,
-    setQcBatchExportStatusMessage,
-    setQcBatchExportSubmitting,
-    setQcBatchExportActiveJobId,
     setAppNotice,
     mapUiError,
     setCatalogError
   } = args;
+
+  const tauriClient = useTauriClient();
+  const tauriClientRef = useRef(tauriClient);
+  useEffect(() => {
+    tauriClientRef.current = tauriClient;
+  }, [tauriClient]);
+
+  const [qcFeatureFlags, setQcFeatureFlags] = useState<QcFeatureFlagsResponse | null>(null);
+  const [qcCodecProfiles, setQcCodecProfiles] = useState<QcCodecProfileResponse[]>([]);
+  const [qcPreviewProfileAId, setQcPreviewProfileAId] = useState("");
+  const [qcPreviewProfileBId, setQcPreviewProfileBId] = useState("");
+  const [qcPreviewBlindXEnabled, setQcPreviewBlindXEnabled] = useState(false);
+  const [qcPreviewSession, setQcPreviewSession] = useState<QcPreviewSessionStateResponse | null>(null);
+  const [qcCodecPreviewLoading, setQcCodecPreviewLoading] = useState(false);
+  const [qcBatchExportOutputDir, setQcBatchExportOutputDir] = useState("C:/Exports");
+  const [qcBatchExportTargetLufs, setQcBatchExportTargetLufs] = useState("-14.0");
+  const [qcBatchExportSelectedProfileIds, setQcBatchExportSelectedProfileIds] = useState<string[]>([]);
+  const [qcBatchExportSubmitting, setQcBatchExportSubmitting] = useState(false);
+  const [qcBatchExportStatusMessage, setQcBatchExportStatusMessage] = useState<string | null>(null);
+  const [qcBatchExportActiveJobId, setQcBatchExportActiveJobId] = useState<string | null>(null);
 
   const qcCodecPreviewEnabled = Boolean(qcFeatureFlags?.qc_codec_preview_v1);
   const qcBatchExportEnabled = Boolean(qcFeatureFlags?.qc_batch_export_v1);
@@ -109,7 +89,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
       if (!qcCodecPreviewEnabled) return;
       if (!selectedTrackDetail || session.source_track_id !== selectedTrackDetail.track_id) return;
 
-      const activeMedia = await qcGetActivePreviewMedia();
+      const activeMedia = await tauriClientRef.current.qcGetActivePreviewMedia();
       const previewSourceKeyPrefix = "qc-preview:";
       const shouldAutoplay = playerIsPlaying;
 
@@ -200,7 +180,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
     let cancelled = false;
     const loadCodecPreviewContracts = async () => {
       try {
-        const flags = await qcGetFeatureFlags();
+        const flags = await tauriClientRef.current.qcGetFeatureFlags();
         if (cancelled) return;
         setQcFeatureFlags(flags);
         if (!flags.qc_codec_preview_v1) {
@@ -210,8 +190,8 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
         }
 
         const [profilesRaw, persistedSession] = await Promise.all([
-          qcListCodecProfiles(),
-          qcGetPreviewSession()
+          tauriClientRef.current.qcListCodecProfiles(),
+          tauriClientRef.current.qcGetPreviewSession()
         ]);
         if (cancelled) return;
 
@@ -278,7 +258,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
 
     let cancelled = false;
     setQcCodecPreviewLoading(true);
-    void qcPreparePreviewSession({
+    void tauriClientRef.current.qcPreparePreviewSession({
       source_track_id: selectedTrackId,
       profile_a_id: qcPreviewProfileAId,
       profile_b_id: qcPreviewProfileBId,
@@ -294,9 +274,9 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
             setQcFeatureFlags((current) =>
               current
                 ? {
-                    ...current,
-                    qc_codec_preview_v1: false
-                  }
+                  ...current,
+                  qc_codec_preview_v1: false
+                }
                 : current
             );
             return;
@@ -311,9 +291,9 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
           setQcFeatureFlags((current) =>
             current
               ? {
-                  ...current,
-                  qc_codec_preview_v1: false
-                }
+                ...current,
+                qc_codec_preview_v1: false
+              }
               : current
           );
           setAppNotice({
@@ -368,7 +348,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
 
     const pollStatus = async () => {
       try {
-        const status = await qcGetBatchExportJobStatus(qcBatchExportActiveJobId);
+        const status = await tauriClientRef.current.qcGetBatchExportJobStatus(qcBatchExportActiveJobId);
         if (cancelled) return;
 
         if (!status) {
@@ -433,10 +413,128 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
     setQcBatchExportSubmitting
   ]);
 
+  const handlePreparePreviewSession = useCallback(async () => {
+    if (!qcCodecPreviewEnabled || !selectedTrackId || qcCodecPreviewLoading) return;
+    setQcCodecPreviewLoading(true);
+    const cancelled = false;
+    try {
+      const session = await tauriClientRef.current.qcPreparePreviewSession({
+        source_track_id: selectedTrackId,
+        profile_a_id: qcPreviewProfileAId,
+        profile_b_id: qcPreviewProfileBId,
+        blind_x_enabled: qcPreviewBlindXEnabled
+      });
+      if (cancelled) return;
+      setQcPreviewSession(session);
+      await applyQcPreviewPlaybackSourceRef.current(session);
+    } catch (error) {
+      if (cancelled) return;
+      setCatalogError(mapUiError(error));
+    } finally {
+      if (!cancelled) setQcCodecPreviewLoading(false);
+    }
+  }, [
+    mapUiError,
+    qcCodecPreviewEnabled,
+    qcCodecPreviewLoading,
+    qcPreviewBlindXEnabled,
+    qcPreviewProfileAId,
+    qcPreviewProfileBId,
+    selectedTrackId,
+    setCatalogError,
+    setQcCodecPreviewLoading,
+    setQcPreviewSession
+  ]);
+
+  const handleSetPreviewVariant = useCallback(
+    async (variant: QcPreviewVariant) => {
+      try {
+        await tauriClientRef.current.qcSetPreviewVariant(variant);
+        if (qcPreviewSession) {
+          await applyQcPreviewPlaybackSourceRef.current(qcPreviewSession);
+        }
+      } catch (error) {
+        setCatalogError(mapUiError(error));
+      }
+    },
+    [mapUiError, qcPreviewSession, setCatalogError]
+  );
+
+  const handleRevealBlindX = useCallback(async () => {
+    try {
+      const session = await tauriClientRef.current.qcRevealBlindX();
+      setQcPreviewSession(session);
+      setQcPreviewBlindXEnabled(session.blind_x_enabled);
+    } catch (error) {
+      setCatalogError(mapUiError(error));
+    }
+  }, [mapUiError, setCatalogError, setQcPreviewSession, setQcPreviewBlindXEnabled]);
+
+  const handleStartBatchExport = useCallback(async () => {
+    if (!qcBatchExportEnabled || !selectedTrackId || qcBatchExportSelectedProfileIds.length === 0) return;
+    setQcBatchExportSubmitting(true);
+    setQcBatchExportStatusMessage("Starting batch export...");
+    try {
+      const response = await tauriClientRef.current.qcStartBatchExport({
+        source_track_id: selectedTrackId,
+        output_dir: qcBatchExportOutputDir,
+        target_integrated_lufs: parseFloat(qcBatchExportTargetLufs),
+        profile_ids: qcBatchExportSelectedProfileIds
+      });
+      setQcBatchExportActiveJobId(response.job_id);
+    } catch (error) {
+      setCatalogError(mapUiError(error));
+      setQcBatchExportSubmitting(false);
+      setQcBatchExportStatusMessage(null);
+    }
+  }, [
+    mapUiError,
+    qcBatchExportEnabled,
+    qcBatchExportOutputDir,
+    qcBatchExportSelectedProfileIds,
+    qcBatchExportTargetLufs,
+    selectedTrackId,
+    setCatalogError,
+    setQcBatchExportActiveJobId,
+    setQcBatchExportStatusMessage,
+    setQcBatchExportSubmitting
+  ]);
+
+  const resumeBatchExportPolling = useCallback(
+    (jobId: string) => {
+      setQcBatchExportActiveJobId(jobId);
+    },
+    [setQcBatchExportActiveJobId]
+  );
+
   return {
+    qcFeatureFlags,
+    qcCodecProfiles,
+    qcPreviewProfileAId,
+    setQcPreviewProfileAId,
+    qcPreviewProfileBId,
+    setQcPreviewProfileBId,
+    qcPreviewBlindXEnabled,
+    setQcPreviewBlindXEnabled,
+    qcPreviewSession,
+    qcCodecPreviewLoading,
+    qcBatchExportOutputDir,
+    setQcBatchExportOutputDir,
+    qcBatchExportTargetLufs,
+    setQcBatchExportTargetLufs,
+    qcBatchExportSelectedProfileIds,
+    setQcBatchExportSelectedProfileIds,
+    qcBatchExportSubmitting,
+    qcBatchExportStatusMessage,
+    qcBatchExportActiveJobId,
     qcCodecPreviewEnabled,
     qcBatchExportEnabled,
     qcPreviewProfileIdsDistinct,
-    applyQcPreviewPlaybackSource
+    applyQcPreviewPlaybackSource,
+    handlePreparePreviewSession,
+    handleSetPreviewVariant,
+    handleRevealBlindX,
+    handleStartBatchExport,
+    resumeBatchExportPolling
   };
 }
