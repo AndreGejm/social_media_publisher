@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+﻿import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { CatalogListTracksResponse } from "../../../services/tauri/tauriClient";
@@ -37,16 +37,17 @@ export function useQueueState(args: UseQueueStateArgs) {
 
   const setSessionQueueFromTrackIds = useCallback(
     (trackIds: string[]) => {
+      // Keep imported track IDs even if the catalog list has not rerendered yet.
       const seen = new Set<string>();
       const next = trackIds.filter((trackId) => {
         if (seen.has(trackId)) return false;
         seen.add(trackId);
-        return queueTracksById.has(trackId);
+        return true;
       });
       setSessionQueueTrackIds(next);
       return next;
     },
-    [setSessionQueueTrackIds, queueTracksById]
+    [setSessionQueueTrackIds]
   );
 
   const appendTracksToSessionQueue = useCallback(
@@ -167,3 +168,4 @@ export function useQueueState(args: UseQueueStateArgs) {
     shuffleSessionQueue
   };
 }
+

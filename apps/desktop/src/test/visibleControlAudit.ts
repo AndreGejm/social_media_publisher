@@ -7,6 +7,7 @@ const DEFAULT_AUDIT_ROLES = [
   "combobox",
   "radio",
   "searchbox",
+  "slider",
   "spinbutton",
   "switch",
   "tab",
@@ -25,6 +26,10 @@ export type VisibleControlAuditItem = {
 export type EnumeratedVisibleControl = {
   role: string;
   name: string;
+};
+
+type EnumeratedVisibleControlDetail = EnumeratedVisibleControl & {
+  element: HTMLElement;
 };
 
 type VisibleControlAuditOptions = {
@@ -55,6 +60,42 @@ function extractLabelText(label: HTMLLabelElement): string {
   return normalizeText(clone.textContent);
 }
 
+function contextualizeGenericName(element: HTMLElement, baseName: string): string {
+  if (baseName === "Clear") {
+    const shortcutRow = element.closest(".settings-shortcut-row");
+    if (shortcutRow instanceof HTMLElement) {
+      const shortcutLabel = normalizeText(
+        shortcutRow.querySelector(".settings-shortcut-meta strong")?.textContent
+      );
+      if (shortcutLabel) {
+        return `Clear ${shortcutLabel} shortcut`;
+      }
+    }
+
+    const mediaCard = element.closest(".video-media-card");
+    if (mediaCard instanceof HTMLElement) {
+      const mediaLabel = normalizeText(mediaCard.querySelector("h5")?.textContent);
+      if (mediaLabel) {
+        return `Clear ${mediaLabel}`;
+      }
+    }
+  }
+
+  if (baseName === "Dismiss") {
+    const notification = element.closest(".app-notification");
+    if (notification instanceof HTMLElement) {
+      const notificationLabel = normalizeText(
+        notification.querySelector(".app-notification-label")?.textContent
+      );
+      if (notificationLabel) {
+        return `Dismiss ${notificationLabel}`;
+      }
+    }
+  }
+
+  return baseName;
+}
+
 function normalizeName(element: HTMLElement): string {
   const ariaLabel = normalizeText(element.getAttribute("aria-label"));
   if (ariaLabel) {
@@ -80,7 +121,8 @@ function normalizeName(element: HTMLElement): string {
   ) {
     if (element.id) {
       const explicitLabel = Array.from(document.querySelectorAll("label")).find(
-        (label): label is HTMLLabelElement => label instanceof HTMLLabelElement && label.htmlFor === element.id
+        (label): label is HTMLLabelElement =>
+          label instanceof HTMLLabelElement && label.htmlFor === element.id
       );
       if (explicitLabel) {
         const text = extractLabelText(explicitLabel);
@@ -100,7 +142,11 @@ function normalizeName(element: HTMLElement): string {
   }
 
   const textContent = normalizeText(element.textContent);
-  return textContent.length > 0 ? textContent : "<unnamed>";
+  if (textContent.length > 0) {
+    return contextualizeGenericName(element, textContent);
+  }
+
+  return "<unnamed>";
 }
 
 function matchesControl(contract: VisibleControlAuditItem, control: EnumeratedVisibleControl): boolean {
@@ -117,24 +163,40 @@ function formatControl(control: EnumeratedVisibleControl): string {
   return `${control.role}: ${control.name}`;
 }
 
-export function enumerateVisibleControls(options?: VisibleControlAuditOptions): EnumeratedVisibleControl[] {
+function collectVisibleControls(options?: VisibleControlAuditOptions): EnumeratedVisibleControlDetail[] {
   const scope = options?.root ? within(options.root) : screen;
   const includeRoles = options?.includeRoles ?? DEFAULT_AUDIT_ROLES;
-  const deduped = new Map<string, EnumeratedVisibleControl>();
+  const controls: EnumeratedVisibleControlDetail[] = [];
 
   includeRoles.forEach((role) => {
     scope
       .queryAllByRole(role as never)
       .filter(isVisibleElement)
       .forEach((element) => {
-        const control = { role, name: normalizeName(element) };
-        deduped.set(`${control.role}::${control.name}`, control);
+        controls.push({
+          role,
+          name: normalizeName(element),
+          element
+        });
       });
   });
 
-  return Array.from(deduped.values()).sort(
+  return controls.sort(
     (left, right) => left.role.localeCompare(right.role) || left.name.localeCompare(right.name)
   );
+}
+
+export function enumerateVisibleControls(options?: VisibleControlAuditOptions): EnumeratedVisibleControl[] {
+  const deduped = new Map<string, EnumeratedVisibleControl>();
+
+  collectVisibleControls(options).forEach((control) => {
+    deduped.set(`${control.role}::${control.name}`, {
+      role: control.role,
+      name: control.name
+    });
+  });
+
+  return Array.from(deduped.values());
 }
 
 export async function assertVisibleActionableControls(
@@ -142,36 +204,40 @@ export async function assertVisibleActionableControls(
   scopeLabel: string,
   options?: VisibleControlAuditOptions
 ): Promise<void> {
-  const discoveredControls = enumerateVisibleControls(options);
+  const discoveredControls = collectVisibleControls(options);
   const uncoveredControls = discoveredControls.filter(
     (control) => !controls.some((contract) => matchesControl(contract, control))
   );
 
   expect(
-    uncoveredControls.map(formatControl),
+    [...new Set(uncoveredControls.map(formatControl))],
     `${scopeLabel}: every visible actionable control in scope needs an explicit contract`
   ).toEqual([]);
 
-  const scope = options?.root ? within(options.root) : screen;
+  const remainingControls = [...discoveredControls];
 
   for (const control of controls) {
-    const element = scope.getByRole(control.role as never, { name: control.name as never }) as HTMLElement;
+    const controlIndex = remainingControls.findIndex((candidate) => matchesControl(control, candidate));
+    expect(controlIndex, `${scopeLabel}: missing ${control.role} ${String(control.name)}`).toBeGreaterThan(-1);
+
+    const [matchedControl] = remainingControls.splice(controlIndex, 1);
+    const element = matchedControl.element;
     expect(element, `${scopeLabel}: missing ${control.role} ${String(control.name)}`).toBeVisible();
 
     if (control.expectation === "disabled") {
-      expect(element, `${scopeLabel}: ${String(control.name)} should be disabled`).toBeDisabled();
+      expect(element, `${scopeLabel}: ${matchedControl.name} should be disabled`).toBeDisabled();
       continue;
     }
 
     if (control.expectation === "noop") {
       expect(
         control.rationale?.trim().length ?? 0,
-        `${scopeLabel}: ${String(control.name)} needs a no-op rationale`
+        `${scopeLabel}: ${matchedControl.name} needs a no-op rationale`
       ).toBeGreaterThan(0);
       continue;
     }
 
-    expect(element, `${scopeLabel}: ${String(control.name)} should be enabled`).not.toBeDisabled();
+    expect(element, `${scopeLabel}: ${matchedControl.name} should be enabled`).not.toBeDisabled();
     if (control.act) {
       await control.act(element);
     } else {

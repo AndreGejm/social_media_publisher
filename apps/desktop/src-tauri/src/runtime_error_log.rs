@@ -6,17 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use tracing_subscriber::{
-    filter::LevelFilter,
-    fmt,
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter,
-    Layer,
+    filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
 };
 
 const RUNTIME_ERROR_LOG_FILE_NAME: &str = "runtime-errors.log";
 const RUNTIME_ERROR_LOG_ARCHIVE_FILE_NAME: &str = "runtime-errors.previous.log";
 const MAX_RUNTIME_ERROR_LOG_BYTES: u64 = 5 * 1024 * 1024;
+const DEFAULT_RUNTIME_ERROR_LOG_TAIL_BYTES: usize = 16 * 1024;
+const MAX_RUNTIME_ERROR_LOG_TAIL_BYTES: usize = 256 * 1024;
 const MAX_STRING_CHARS: usize = 2048;
 const MAX_OBJECT_PROPERTIES: usize = 32;
 const MAX_ARRAY_ITEMS: usize = 32;
@@ -38,7 +35,9 @@ pub(crate) fn initialize(app: &AppHandle) {
 
     let env_filter = EnvFilter::from_default_env();
     let stdout_layer = fmt::layer().with_target(false);
-    let subscriber = tracing_subscriber::registry().with(env_filter).with(stdout_layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer);
 
     if let Some(log_path) = maybe_log_path {
         let file_path = log_path.clone();
@@ -94,13 +93,28 @@ pub(crate) fn append_frontend_runtime_error(
         "details": details.map(|value| sanitize_json_value(value, 0))
     });
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     serde_json::to_writer(&mut file, &payload)?;
     file.write_all(b"\n")?;
     Ok(path)
+}
+
+pub(crate) fn read_runtime_error_log_tail(
+    path: &Path,
+    max_bytes: Option<usize>,
+) -> io::Result<String> {
+    let tail_bytes = max_bytes
+        .unwrap_or(DEFAULT_RUNTIME_ERROR_LOG_TAIL_BYTES)
+        .clamp(1, MAX_RUNTIME_ERROR_LOG_TAIL_BYTES);
+
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => return Err(error),
+    };
+
+    let start = bytes.len().saturating_sub(tail_bytes);
+    Ok(String::from_utf8_lossy(&bytes[start..]).to_string())
 }
 
 fn install_panic_hook() {
@@ -205,4 +219,40 @@ impl Write for RuntimeErrorLogWriter {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
+    #[test]
+    fn read_runtime_error_log_tail_returns_empty_when_file_is_missing() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("missing.log");
+
+        let tail = read_runtime_error_log_tail(&path, Some(128)).expect("tail");
+
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn read_runtime_error_log_tail_returns_only_the_trailing_bytes() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("runtime-errors.log");
+        fs::write(&path, b"0123456789abcdef").expect("write log");
+
+        let tail = read_runtime_error_log_tail(&path, Some(6)).expect("tail");
+
+        assert_eq!(tail, "abcdef");
+    }
+
+    #[test]
+    fn read_runtime_error_log_tail_clamps_zero_to_a_single_byte() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("runtime-errors.log");
+        fs::write(&path, b"abc").expect("write log");
+
+        let tail = read_runtime_error_log_tail(&path, Some(0)).expect("tail");
+
+        assert_eq!(tail, "c");
+    }
+}

@@ -63,6 +63,7 @@ const tauriApiMocks = vi.hoisted(() => ({
   setPlaybackVolume: vi.fn(),
   togglePlaybackQueueVisibility: vi.fn(),
   publisherCreateDraftFromTrack: vi.fn(),
+  runtimeGetErrorLogPath: vi.fn(),
   videoRenderGetEnvironmentDiagnostics: vi.fn()
 }));
 
@@ -70,6 +71,11 @@ const webviewMocks = vi.hoisted(() => ({
   getCurrentWebview: vi.fn(() => ({
     onDragDropEvent: vi.fn(async () => () => undefined)
   }))
+}));
+
+
+const runtimeEventMocks = vi.hoisted(() => ({
+  listen: vi.fn(async () => () => undefined)
 }));
 
 vi.mock("../../features/publisher-ops", async (importOriginal) => {
@@ -84,6 +90,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: webviewMocks.getCurrentWebview
 }));
 
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: runtimeEventMocks.listen
+}));
 const firstTrack = {
   track_id: "a".repeat(64),
   title: "Authoring Track",
@@ -215,6 +225,9 @@ function installHappyDefaults() {
     media_path: firstTrack.file_path,
     spec_path: "C:/Drafts/authoring-track.yaml"
   });
+  tauriApiMocks.runtimeGetErrorLogPath.mockResolvedValue(
+    "C:/Users/test/AppData/Roaming/Skald QC/logs/runtime-errors.log"
+  );
   tauriApiMocks.pickDirectoryDialog.mockResolvedValue(null);
   tauriApiMocks.videoRenderGetEnvironmentDiagnostics.mockResolvedValue({
     ffmpeg: {
@@ -255,11 +268,14 @@ describe("WorkspaceApp Pass 2 coverage", () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLAudioElement.prototype, "load").mockImplementation(() => {});
+    vi.spyOn(HTMLAudioElement.prototype, "play").mockImplementation(async () => undefined);
+    vi.spyOn(HTMLAudioElement.prototype, "pause").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("keeps About informational and mode-independent while its visible controls remain actionable", async () => {
@@ -273,51 +289,58 @@ describe("WorkspaceApp Pass 2 coverage", () => {
       ignoreConsole: [/Not implemented: HTMLMediaElement\.prototype\.load/i]
     });
 
-    try {
-      render(<WorkspaceApp />);
-      fireEvent.click(screen.getByRole("button", { name: "About" }));
+    render(<WorkspaceApp />);
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
 
-      await waitFor(() => {
-        expect(tauriApiMocks.videoRenderGetEnvironmentDiagnostics).toHaveBeenCalledTimes(1);
-      });
+    await waitFor(() => {
+      expect(tauriApiMocks.videoRenderGetEnvironmentDiagnostics).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(tauriApiMocks.runtimeGetErrorLogPath).toHaveBeenCalledTimes(1);
+    });
 
-      expect(screen.getByRole("heading", { level: 3, name: "Skald QC" })).toBeInTheDocument();
-      expect(screen.queryByRole("tablist", { name: "Publish workflow steps" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Reset Library Data" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Skald QC" })).toBeInTheDocument();
+    expect(
+      screen.getByText("C:/Users/test/AppData/Roaming/Skald QC/logs/runtime-errors.log")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tablist", { name: "Publish workflow steps" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset Library Data" })).not.toBeInTheDocument();
 
-      const aboutResources = screen.getByRole("region", { name: "Resources" });
-      await assertVisibleActionableControls(
-        [
-          {
-            role: "button",
-            name: "Copy System Info",
-            expectation: "action",
-            assertAfter: async () => {
-              await waitFor(() => {
-                expect(clipboardWrite).toHaveBeenCalledTimes(1);
-              });
-              expect(screen.getByText("System info copied.")).toBeInTheDocument();
-            }
-          },
-          {
-            role: "button",
-            name: "Refresh Diagnostics",
-            expectation: "disabled"
+    const aboutResources = screen.getByRole("region", { name: "Resources" });
+    await assertVisibleActionableControls(
+      [
+        {
+          role: "button",
+          name: "Copy System Info",
+          expectation: "action",
+          assertAfter: async () => {
+            await waitFor(() => {
+              expect(clipboardWrite).toHaveBeenCalledTimes(1);
+            });
+            expect(clipboardWrite).toHaveBeenLastCalledWith(
+              expect.stringContaining(
+                "Runtime Error Log: C:/Users/test/AppData/Roaming/Skald QC/logs/runtime-errors.log"
+              )
+            );
+            expect(screen.getByText("System info copied.")).toBeInTheDocument();
           }
-        ],
-        "About workspace resources",
-        { root: aboutResources }
-      );
+        },
+        {
+          role: "button",
+          name: "Refresh Diagnostics",
+          expectation: "disabled"
+        }
+      ],
+      "About workspace resources",
+      { root: aboutResources }
+    );
 
-      fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
-      expect(await screen.findByRole("button", { name: "Copy System Info" })).toBeInTheDocument();
-      expect(screen.queryByRole("tablist", { name: "Publish workflow steps" })).not.toBeInTheDocument();
-      expect(screen.queryByLabelText("Queue and session state")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    expect(await screen.findByRole("button", { name: "Copy System Info" })).toBeInTheDocument();
+    expect(screen.queryByRole("tablist", { name: "Publish workflow steps" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Queue and session state")).not.toBeInTheDocument();
 
-      uiSignals.expectClean();
-    } finally {
-      uiSignals.restore();
-    }
+    uiSignals.expectClean();
   });
 
   it("keeps track search isolated from queue, preview, and publish side effects", async () => {
@@ -325,43 +348,39 @@ describe("WorkspaceApp Pass 2 coverage", () => {
       ignoreConsole: [/Not implemented: HTMLMediaElement\.prototype\.load/i]
     });
 
-    try {
-      render(<WorkspaceApp />);
-      openPlaylistsWorkspace();
+    render(<WorkspaceApp />);
+    openPlaylistsWorkspace();
 
-      const setPlaybackQueueCallsBefore = tauriApiMocks.setPlaybackQueue.mock.calls.length;
-      const playbackChangeCallsBefore = tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls.length;
-      const setPlaybackPlayingCallsBefore = tauriApiMocks.setPlaybackPlaying.mock.calls.length;
-      const seekCallsBefore = tauriApiMocks.seekPlaybackRatio.mock.calls.length;
-      const previewPrepareCallsBefore = tauriApiMocks.qcPreparePreviewSession.mock.calls.length;
-      const previewVariantCallsBefore = tauriApiMocks.qcSetPreviewVariant.mock.calls.length;
-      const previewMediaCallsBefore = tauriApiMocks.qcGetActivePreviewMedia.mock.calls.length;
-      const publisherDraftCallsBefore = tauriApiMocks.publisherCreateDraftFromTrack.mock.calls.length;
+    const setPlaybackQueueCallsBefore = tauriApiMocks.setPlaybackQueue.mock.calls.length;
+    const playbackChangeCallsBefore = tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls.length;
+    const setPlaybackPlayingCallsBefore = tauriApiMocks.setPlaybackPlaying.mock.calls.length;
+    const seekCallsBefore = tauriApiMocks.seekPlaybackRatio.mock.calls.length;
+    const previewPrepareCallsBefore = tauriApiMocks.qcPreparePreviewSession.mock.calls.length;
+    const previewVariantCallsBefore = tauriApiMocks.qcSetPreviewVariant.mock.calls.length;
+    const previewMediaCallsBefore = tauriApiMocks.qcGetActivePreviewMedia.mock.calls.length;
+    const publisherDraftCallsBefore = tauriApiMocks.publisherCreateDraftFromTrack.mock.calls.length;
 
-      fireEvent.change(screen.getByRole("searchbox", { name: "Search tracks" }), {
-        target: { value: "Queue Candidate" }
-      });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search tracks" }), {
+      target: { value: "Queue Candidate" }
+    });
 
-      await waitFor(() => {
-        expect(screen.getByRole("list", { name: "Library tracks" })).toHaveTextContent("Queue Candidate");
-      });
+    await waitFor(() => {
+      expect(screen.getByRole("list", { name: "Library tracks" })).toHaveTextContent("Queue Candidate");
+    });
 
-      expect(tauriApiMocks.setPlaybackQueue.mock.calls.length).toBe(setPlaybackQueueCallsBefore);
-      expect(tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls.length).toBe(playbackChangeCallsBefore);
-      expect(tauriApiMocks.setPlaybackPlaying.mock.calls.length).toBe(setPlaybackPlayingCallsBefore);
-      expect(tauriApiMocks.seekPlaybackRatio.mock.calls.length).toBe(seekCallsBefore);
-      expect(tauriApiMocks.qcPreparePreviewSession.mock.calls.length).toBe(previewPrepareCallsBefore);
-      expect(tauriApiMocks.qcSetPreviewVariant.mock.calls.length).toBe(previewVariantCallsBefore);
-      expect(tauriApiMocks.qcGetActivePreviewMedia.mock.calls.length).toBe(previewMediaCallsBefore);
-      expect(tauriApiMocks.publisherCreateDraftFromTrack.mock.calls.length).toBe(publisherDraftCallsBefore);
+    expect(tauriApiMocks.setPlaybackQueue.mock.calls.length).toBe(setPlaybackQueueCallsBefore);
+    expect(tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls.length).toBe(playbackChangeCallsBefore);
+    expect(tauriApiMocks.setPlaybackPlaying.mock.calls.length).toBe(setPlaybackPlayingCallsBefore);
+    expect(tauriApiMocks.seekPlaybackRatio.mock.calls.length).toBe(seekCallsBefore);
+    expect(tauriApiMocks.qcPreparePreviewSession.mock.calls.length).toBe(previewPrepareCallsBefore);
+    expect(tauriApiMocks.qcSetPreviewVariant.mock.calls.length).toBe(previewVariantCallsBefore);
+    expect(tauriApiMocks.qcGetActivePreviewMedia.mock.calls.length).toBe(previewMediaCallsBefore);
+    expect(tauriApiMocks.publisherCreateDraftFromTrack.mock.calls.length).toBe(publisherDraftCallsBefore);
 
-      uiSignals.expectClean();
-    } finally {
-      uiSignals.restore();
-    }
+    uiSignals.expectClean();
   });
 
-  it.fails("keeps the shared player visible when navigating to About", async () => {
+  it("keeps the shared player visible when navigating to About", async () => {
     render(<WorkspaceApp />);
 
     expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
@@ -369,11 +388,11 @@ describe("WorkspaceApp Pass 2 coverage", () => {
     expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
   });
 
-  it.fails("disables Settings banner-clear controls when there is nothing to clear", async () => {
+  it("disables Settings banner-clear controls when there is nothing to clear", async () => {
     render(<WorkspaceApp />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
-    const maintenanceActions = screen.getByRole("button", { name: "Clear Notice" }).parentElement as HTMLElement;
+    const maintenanceActions = screen.getByRole("button", { name: "Clear Notice" }).closest(".settings-actions") as HTMLElement;
 
     await assertVisibleActionableControls(
       [
@@ -398,6 +417,5 @@ describe("WorkspaceApp Pass 2 coverage", () => {
     );
   });
 });
-
 
 

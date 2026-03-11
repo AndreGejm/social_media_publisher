@@ -48,6 +48,7 @@ import {
 import { usePlayerTransportController } from "../../features/player-transport/api";
 import { useAudioOutputController } from "../../features/audio-output/api";
 import { VideoWorkspaceFeature } from "../../features/video-workspace/api";
+import { ErrorBoundary } from "../../shared/components/error/ErrorBoundary";
 import { useWorkspaceModeState } from "./hooks/useWorkspaceModeState";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
 import { useWorkspaceUiEffects } from "./hooks/useWorkspaceUiEffects";
@@ -372,6 +373,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   const [libraryRootBrowsing, setLibraryRootBrowsing] = useState(false);
   const [resetLibraryDataPending, setResetLibraryDataPending] = useState(false);
   const [activeScanJobs, setActiveScanJobs] = useState<Record<string, CatalogIngestJobResponse>>({});
+  const [importedTrackFallbacks, setImportedTrackFallbacks] = useState<Record<string, CatalogListTracksResponse["items"][number]>>({});
 
   const [batchSelectedTrackIds, setBatchSelectedTrackIds] = useState<string[]>([]);
   const [queueDragTrackId, setQueueDragTrackId] = useState<string | null>(null);
@@ -441,13 +443,13 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     () => rankCatalogTracksBySearch(queueSourceTracks, deferredTrackSearch, trackSort, trackGroupMode),
     [deferredTrackSearch, queueSourceTracks, trackSort, trackGroupMode]
   );
-  const catalogTracksById = useMemo(
-    () => new Map(catalogPage.items.map((item) => [item.track_id, item] as const)),
-    [catalogPage.items]
-  );
   const queueSourceTracksById = useMemo(
     () => new Map(queueSourceTracks.map((item) => [item.track_id, item] as const)),
     [queueSourceTracks]
+  );
+  const importedTrackFallbacksById = useMemo(
+    () => new Map(Object.values(importedTrackFallbacks).map((item) => [item.track_id, item] as const)),
+    [importedTrackFallbacks]
   );
   const visibleTracksById = useMemo(
     () => new Map(visibleTracks.map((item) => [item.track_id, item] as const)),
@@ -463,10 +465,11 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   );
   const queue = useMemo(() => {
     const sessionQueue = sessionQueueTrackIds
-      .map((trackId) => queueSourceTracksById.get(trackId))
+      .map((trackId) => queueSourceTracksById.get(trackId) ?? importedTrackFallbacksById.get(trackId))
       .filter((item): item is CatalogListTracksResponse["items"][number] => Boolean(item));
     return sessionQueue.length > 0 ? sessionQueue : queueSourceTracks;
-  }, [queueSourceTracks, queueSourceTracksById, sessionQueueTrackIds]);
+  }, [importedTrackFallbacksById, queueSourceTracks, queueSourceTracksById, sessionQueueTrackIds]);
+
   const isQueueMode = playListMode === "queue";
   const activePlayListItems = useMemo(
     () => (isQueueMode ? queue : visibleTracks),
@@ -539,6 +542,17 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
 
   const notePublishSelectionAction = useCallback((message: string) => {
     setPublishSelectionFeedback(message);
+  }, []);
+
+  const cacheImportedTracks = useCallback((tracks: CatalogListTracksResponse["items"]) => {
+    if (tracks.length === 0) return;
+    setImportedTrackFallbacks((current) => {
+      const next = { ...current };
+      for (const track of tracks) {
+        next[track.track_id] = track;
+      }
+      return next;
+    });
   }, []);
 
   const {
@@ -701,9 +715,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     themeVariantPreference,
     albumGroups,
     setSelectedAlbumKey,
-    catalogTracksById,
     visibleTracksById,
-    setSessionQueueTrackIds,
     setBatchSelectedTrackIds,
     setTrackRowContextMenu
   });
@@ -805,6 +817,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setCatalogError,
     setCatalogImporting,
     setCatalogFailures,
+    cacheImportedTracks,
     setSelectedTrackId,
     setLibraryRoots,
     setLibraryRootsLoading,
@@ -935,6 +948,9 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setTrackDetailsById((current) =>
       Object.fromEntries(Object.entries(current).filter(([trackId]) => existingTrackIdSet.has(trackId)))
     );
+    setImportedTrackFallbacks((current) =>
+      Object.fromEntries(Object.entries(current).filter(([trackId]) => existingTrackIdSet.has(trackId)))
+    );
 
     if (!selectedTrackStillExists) {
       setSelectedTrackId("");
@@ -969,6 +985,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setSelectedTrackId,
     setSessionQueueTrackIds,
     setTrackDetailsById,
+    setImportedTrackFallbacks,
     setTrackRowContextMenu,
     favoriteTrackIds,
     playerTrackId,
@@ -978,6 +995,12 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     sessionQueueTrackIds,
     trackRowContextMenu
   ]);
+  const hasPrunedInitialPersistedTrackStateRef = useRef(false);
+  useEffect(() => {
+    if (hasPrunedInitialPersistedTrackStateRef.current) return;
+    hasPrunedInitialPersistedTrackStateRef.current = true;
+    void pruneStalePersistedTrackState();
+  }, [pruneStalePersistedTrackState]);
   const openAlbumsWorkspace = () => {
     setQualityControlMode("album");
     setActiveWorkspace("Quality Control");
@@ -1098,6 +1121,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
         setSelectedTrackId("");
         setSelectedTrackDetail(null);
         setTrackDetailsById({});
+        setImportedTrackFallbacks({});
         setSessionQueueTrackIds([]);
         setBatchSelectedTrackIds([]);
         setFavoriteTrackIds([]);
@@ -1794,11 +1818,17 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
           </section>
 
           <section hidden={activeMode !== "Listen" || activeWorkspace !== "Video Workspace"} className="workspace-section">
-            <VideoWorkspaceFeature />
+            <ErrorBoundary fallbackMessage="The Video Workspace crashed. Other panels are still active.">
+              <VideoWorkspaceFeature
+                nativeDropEventsEnabled={activeMode === "Listen" && activeWorkspace === "Video Workspace"}
+              />
+            </ErrorBoundary>
           </section>
 
           <SettingsPanel
             hidden={activeWorkspace !== "Settings"}
+            hasNotice={Boolean(appNotice)}
+            hasErrorBanner={Boolean(catalogError)}
             settingsPreferencesCollapsed={settingsPreferencesCollapsed}
             onToggleSettingsPreferencesCollapsed={toggleSettingsPreferencesCollapsed}
             themePreference={themePreference}
@@ -1934,50 +1964,54 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
 
           {publisherOpsBooted || activeWorkspace === "Publisher Ops" ? (
             <section hidden={activeMode !== "Publish" || activeWorkspace !== "Publisher Ops"} className="workspace-section publisher-ops-host">
-              <PublisherOpsWorkspace
-                prefillMediaPath={publisherDraftPrefill?.media_path ?? null}
-                prefillSpecPath={publisherDraftPrefill?.spec_path ?? null}
-                sharedTransport={publisherOpsSharedTransportBridge}
-                externalRequestedScreen={publishShellStep}
-                onScreenChange={handlePublishShellStepChange}
-                showInternalWorkflowTabs={false}
-              />
+              <ErrorBoundary fallbackMessage="The Publisher engine crashed. Release previews are still active.">
+                <PublisherOpsWorkspace
+                  prefillMediaPath={publisherDraftPrefill?.media_path ?? null}
+                  prefillSpecPath={publisherDraftPrefill?.spec_path ?? null}
+                  sharedTransport={publisherOpsSharedTransportBridge}
+                  externalRequestedScreen={publishShellStep}
+                  onScreenChange={handlePublishShellStepChange}
+                  showInternalWorkflowTabs={false}
+                />
+              </ErrorBoundary>
             </section>
           ) : null}
         </main>
 
-        {activeMode === "Listen" && activeWorkspace !== "About" ? (
-          <SharedPlayerBar
-            playerSource={playerSource}
-            playerIsPlaying={playerIsPlaying}
-            playerTimeSec={playerTimeSec}
-            queueIndex={queueIndex}
-            queueLength={queue.length}
-            queueVisible={playListMode === "queue"}
-            volumePercent={Math.round(nowPlayingState.volume_scalar * 100)}
-            isMuted={nowPlayingState.is_volume_muted}
-            outputMode={audioOutputController.state.effectiveMode}
-            outputModeSwitching={audioOutputController.state.outputModeSwitching}
-            bitPerfectEligible={Boolean(audioOutputController.state.status.bit_perfect_eligible)}
-            bitPerfectReasons={audioOutputController.state.status.reasons}
-            onOutputModeChange={handleSharedPlayerOutputModeChange}
-            onPrev={handlePlayerPrev}
-            onTogglePlay={togglePlay}
-            onStop={stopPlayer}
-            onNext={handlePlayerNext}
-            onToggleQueueVisibility={handleSharedPlayerQueueToggle}
-            onToggleMute={toggleNowPlayingMute}
-            onVolumePercentChange={handleSharedPlayerVolumeChange}
-            onSeekRatio={seekPlayer}
-            formatClock={formatClock}
-            renderAudioElement={!nativeTransportEnabled}
-            audioRef={playerAudioRef}
-            audioSrc={playerAudioSrc}
-            onAudioTimeUpdate={handlePlayerAudioTimeUpdate}
-            onAudioPlay={handlePlayerAudioPlay}
-            onAudioPause={handlePlayerAudioPause}
-            onAudioEnded={handlePlayerAudioEnded}
-          />
+        {activeMode === "Listen" ? (
+          <ErrorBoundary fallbackMessage="The persistent player crashed. Workspace views are still active.">
+            <SharedPlayerBar
+              playerSource={playerSource}
+              playerIsPlaying={playerIsPlaying}
+              playerTimeSec={playerTimeSec}
+              queueIndex={queueIndex}
+              queueLength={queue.length}
+              queueVisible={playListMode === "queue"}
+              volumePercent={Math.round(nowPlayingState.volume_scalar * 100)}
+              isMuted={nowPlayingState.is_volume_muted}
+              outputMode={audioOutputController.state.effectiveMode}
+              outputModeSwitching={audioOutputController.state.outputModeSwitching}
+              bitPerfectEligible={Boolean(audioOutputController.state.status.bit_perfect_eligible)}
+              bitPerfectReasons={audioOutputController.state.status.reasons}
+              onOutputModeChange={handleSharedPlayerOutputModeChange}
+              onPrev={handlePlayerPrev}
+              onTogglePlay={togglePlay}
+              onStop={stopPlayer}
+              onNext={handlePlayerNext}
+              onToggleQueueVisibility={handleSharedPlayerQueueToggle}
+              onToggleMute={toggleNowPlayingMute}
+              onVolumePercentChange={handleSharedPlayerVolumeChange}
+              onSeekRatio={seekPlayer}
+              formatClock={formatClock}
+              renderAudioElement={!nativeTransportEnabled}
+              audioRef={playerAudioRef}
+              audioSrc={playerAudioSrc}
+              onAudioTimeUpdate={handlePlayerAudioTimeUpdate}
+              onAudioPlay={handlePlayerAudioPlay}
+              onAudioPause={handlePlayerAudioPause}
+              onAudioEnded={handlePlayerAudioEnded}
+            />
+          </ErrorBoundary>
         ) : null}
       </div>
 

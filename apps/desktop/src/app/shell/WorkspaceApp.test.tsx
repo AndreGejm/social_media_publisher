@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TauriClientProvider } from "../../services/tauri/TauriClientProvider";
 import type { TauriClient } from "../../services/tauri/TauriClientProvider";
+import { createUiSignalRecorder } from "../../test/uiSignalRecorder";
 
 function render(ui: React.ReactElement, options?: Omit<RenderOptions, "wrapper">) {
   return rtlRender(ui, {
@@ -36,7 +37,7 @@ const tauriApiMocks = vi.hoisted(() => ({
   getPlaybackContext: vi.fn(),
   getPlaybackDecodeError: vi.fn(),
   initExclusiveDevice: vi.fn(),
-  // Pure synchronous type guard — provide a real implementation, not a stub.
+  // Pure synchronous type guard â€” provide a real implementation, not a stub.
   isUiAppError: (error: unknown): boolean =>
     error != null &&
     typeof error === "object" &&
@@ -64,25 +65,44 @@ const tauriApiMocks = vi.hoisted(() => ({
 }));
 
 const webviewMocks = vi.hoisted(() => {
-  let dragDropHandler: ((event: { payload: { type: string; paths: string[] } }) => void) | null = null;
+  const dragDropHandlers = new Set<(event: { payload: { type: string; paths: string[] } }) => void>();
   return {
     getCurrentWebview: vi.fn(() => ({
       onDragDropEvent: vi.fn(async (handler: (event: { payload: { type: string; paths: string[] } }) => void) => {
-        dragDropHandler = handler;
+        dragDropHandlers.add(handler);
         return () => {
-          if (dragDropHandler === handler) {
-            dragDropHandler = null;
-          }
+          dragDropHandlers.delete(handler);
         };
       })
     })),
     emitDrop: (paths: string[]) => {
-      dragDropHandler?.({
+      dragDropHandlers.forEach((handler) => handler({
         payload: {
           type: "drop",
           paths
         }
-      });
+      }));
+    },
+    getDragDropHandlerCount: () => dragDropHandlers.size,
+    resetDragDropHandler: () => {
+      dragDropHandlers.clear();
+    }
+  };
+});
+
+
+const runtimeEventMocks = vi.hoisted(() => {
+  const runtimeDropHandlers = new Set<(event: { payload: { paths?: string[] } }) => void>();
+  return {
+    listen: vi.fn(async (_eventName: string, handler: (event: { payload: { paths?: string[] } }) => void) => {
+      runtimeDropHandlers.add(handler);
+      return () => {
+        runtimeDropHandlers.delete(handler);
+      };
+    }),
+    resetRuntimeDropHandlers: () => {
+      runtimeDropHandlers.clear();
+      runtimeEventMocks.listen.mockClear();
     }
   };
 });
@@ -118,6 +138,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: webviewMocks.getCurrentWebview
 }));
 
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: runtimeEventMocks.listen
+}));
 import WorkspaceApp from "./WorkspaceApp";
 import { DEFAULT_SHORTCUT_BINDINGS } from "../../shared/input/shortcuts";
 
@@ -381,12 +405,14 @@ describe("WorkspaceApp metadata editor", () => {
     delete window.__TAURI__;
     Object.values(tauriApiMocks).forEach((fn) => { if (typeof (fn as { mockReset?: unknown }).mockReset === "function") (fn as { mockReset: () => void }).mockReset(); });
     webviewMocks.getCurrentWebview.mockClear();
+    webviewMocks.resetDragDropHandler();
+    runtimeEventMocks.resetRuntimeDropHandlers();
     installCatalogApiHappyDefaults();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("saves track metadata and shows a success notice", async () => {
@@ -999,6 +1025,23 @@ describe("WorkspaceApp metadata editor", () => {
     expect(await screen.findByRole("button", { name: "Video Workspace" })).toBeInTheDocument();
   });
 
+  it("recovers to Publisher Ops when restart state restores Publish mode with a listen-only workspace", async () => {
+    window.localStorage.setItem("rp.music.activeMode.v1", JSON.stringify("Publish"));
+    window.localStorage.setItem("rp.music.activeWorkspace.v1", JSON.stringify("Playlists"));
+    window.localStorage.setItem("rp.publish.shellStep.v1", JSON.stringify("Execute"));
+
+    render(<WorkspaceApp />);
+
+    expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Library" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("publisher-ops-requested-screen")).toHaveTextContent("Execute");
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("rp.music.activeMode.v1")).toBe(JSON.stringify("Publish"));
+      expect(window.localStorage.getItem("rp.music.activeWorkspace.v1")).toBe(JSON.stringify("Publisher Ops"));
+    });
+  });
+
   it("opens Video Workspace with the Stage 1 static section shell", async () => {
     render(<WorkspaceApp />);
 
@@ -1128,6 +1171,56 @@ describe("WorkspaceApp metadata editor", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
     expect(await screen.findByRole("region", { name: "Shared transport" })).toBeInTheDocument();
+  });
+
+  it("keeps shared playback stable when switching release-preview workspaces", async () => {
+    installTwoTrackCatalog();
+    const uiSignals = createUiSignalRecorder({
+      ignoreConsole: [/Not implemented: HTMLMediaElement\.prototype\.load/i]
+    });
+
+    render(<WorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    const playSpy = vi.mocked(HTMLMediaElement.prototype.play);
+    playSpy.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play Now" }));
+
+    await waitFor(() => {
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    const expectSharedTransportToStayLoaded = () => {
+      const sharedTransport = screen.getByRole("region", { name: "Shared transport" });
+      expect(sharedTransport).toHaveTextContent(baseTrackListItem.title);
+      expect(sharedTransport).toHaveTextContent(baseTrackListItem.artist_name);
+      expect(within(sharedTransport).getByRole("button", { name: "Pause" })).toBeEnabled();
+    };
+
+    expectSharedTransportToStayLoaded();
+    expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(await screen.findByRole("button", { name: "Copy System Info" })).toBeInTheDocument();
+    expectSharedTransportToStayLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("button", { name: "Reset Library Data" })).toBeInTheDocument();
+    expectSharedTransportToStayLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
+    expect(await screen.findByRole("searchbox", { name: "Search tracks" })).toBeInTheDocument();
+    expectSharedTransportToStayLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+    expect(screen.getByText("No audio selected.")).toBeVisible();
+    expectSharedTransportToStayLoaded();
+
+    uiSignals.expectClean({
+      allowAlerts: [/Output directory path is required./i, /Tauri runtime is not available in the browser preview./i]
+    });
   });
 
   it("starts in shared output mode by default", async () => {
@@ -1428,6 +1521,110 @@ describe("WorkspaceApp metadata editor", () => {
     );
     expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
   });
+  it("keeps rapid native transport actions deterministic and toast-free", async () => {
+    installTwoTrackCatalog();
+    const uiSignals = createUiSignalRecorder({
+      ignoreConsole: [/Not implemented: HTMLMediaElement\.prototype\.load/i]
+    });
+
+    tauriApiMocks.initExclusiveDevice.mockResolvedValue({
+      sample_rate_hz: 48_000,
+      bit_depth: 16,
+      buffer_size_frames: 256,
+      is_exclusive_lock: false
+    });
+    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+      volume_scalar: 1,
+      is_bit_perfect_bypassed: true,
+      active_queue_index: 0,
+      is_queue_ui_expanded: false,
+      queued_track_change_requests: 0,
+      is_playing: false,
+      position_seconds: 0,
+      track_duration_seconds: 1.5
+    });
+
+    render(<WorkspaceApp />);
+
+    const sharedTransport = screen.getByRole("region", { name: "Shared transport" });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Play" })).toBeEnabled();
+    });
+
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Play" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Pause" })).toBeEnabled();
+    });
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    const nextButton = within(sharedTransport).getByRole("button", { name: "Next" });
+    const prevButton = within(sharedTransport).getByRole("button", { name: "Prev" });
+
+    if (nextButton.hasAttribute("disabled")) {
+      await waitFor(() => {
+        expect(prevButton).toBeEnabled();
+      });
+      fireEvent.click(prevButton);
+      await waitFor(() => {
+        expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+      });
+      tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+      tauriApiMocks.setPlaybackPlaying.mockClear();
+    }
+
+    await waitFor(() => {
+      expect(nextButton).toBeEnabled();
+    });
+    fireEvent.click(nextButton);
+    await waitFor(() => {
+      expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(1);
+    });
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Pause" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(false);
+    });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Play" })).toBeEnabled();
+    });
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    await waitFor(() => {
+      expect(prevButton).toBeEnabled();
+    });
+    fireEvent.click(prevButton);
+    await waitFor(() => {
+      expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(0);
+    });
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Pause" })).toBeEnabled();
+    });
+
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Pause" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(false);
+    });
+
+    expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
+    uiSignals.expectClean();
+  });
+
   it("sends normalized volume scalar from the shared transport slider", async () => {
     tauriApiMocks.initExclusiveDevice.mockResolvedValue({
       sample_rate_hz: 48_000,
@@ -2067,6 +2264,7 @@ describe("WorkspaceApp metadata editor", () => {
     render(<WorkspaceApp />);
     await waitFor(() => {
       expect(webviewMocks.getCurrentWebview).toHaveBeenCalled();
+      expect(webviewMocks.getDragDropHandlerCount()).toBe(1);
     });
     const playSpy = vi.mocked(HTMLMediaElement.prototype.play);
     playSpy.mockClear();
@@ -2081,7 +2279,7 @@ describe("WorkspaceApp metadata editor", () => {
     }, { timeout: 3000 });
   });
 
-  it("autoplays and queues the first imported track after dropping audio files", async () => {
+  it("autoplays dropped audio in Library without mutating the hidden Video Workspace", async () => {
     const droppedFilePath = "C:/Dropped Files/Imported Track.wav";
     const importedTrack = {
       ...baseTrackListItem,
@@ -2142,6 +2340,7 @@ describe("WorkspaceApp metadata editor", () => {
     render(<WorkspaceApp />);
     await waitFor(() => {
       expect(webviewMocks.getCurrentWebview).toHaveBeenCalled();
+      expect(webviewMocks.getDragDropHandlerCount()).toBe(1);
     });
     const playSpy = vi.mocked(HTMLMediaElement.prototype.play);
     playSpy.mockClear();
@@ -2155,8 +2354,74 @@ describe("WorkspaceApp metadata editor", () => {
       expect(playSpy).toHaveBeenCalled();
     });
     expect(await screen.findByText("Added track to queue.")).toBeInTheDocument();
+    expect(screen.queryByText(/Dropped media processed: .*error/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
+    expect(screen.getByText("No audio selected.")).toBeVisible();
   });
 
+  it("keeps dropped-import playback alive when catalog refresh lags behind the imported track", async () => {
+    const droppedFilePath = "C:/Dropped Files/Slow Catalog Track.wav";
+    const importedTrack = {
+      ...baseTrackListItem,
+      track_id: "7".repeat(64),
+      title: "Slow Catalog Track",
+      file_path: droppedFilePath,
+      media_fingerprint: "6".repeat(64),
+      updated_at: "2026-03-01T00:00:00Z"
+    };
+
+    tauriApiMocks.catalogListTracks.mockResolvedValue({
+      items: [baseTrackListItem],
+      total: 1,
+      limit: 100,
+      offset: 0
+    });
+    tauriApiMocks.catalogGetTrack.mockImplementation(async (trackId: string) => {
+      if (trackId === importedTrack.track_id) {
+        return null;
+      }
+      return { ...baseTrackDetail };
+    });
+    tauriApiMocks.catalogAddLibraryRoot.mockRejectedValue({
+      code: "INVALID_ARGUMENT",
+      message: "Path is not a directory"
+    });
+    tauriApiMocks.catalogImportFiles.mockResolvedValue({
+      imported: [importedTrack],
+      failed: []
+    });
+    window.__TAURI__ = {
+      core: {
+        invoke: vi.fn(async () => null) as NonNullable<NonNullable<typeof window.__TAURI__>["core"]>["invoke"]
+      }
+    };
+
+    render(<WorkspaceApp />);
+    await waitFor(() => {
+      expect(webviewMocks.getCurrentWebview).toHaveBeenCalled();
+      expect(webviewMocks.getDragDropHandlerCount()).toBe(1);
+    });
+    const playSpy = vi.mocked(HTMLMediaElement.prototype.play);
+    playSpy.mockClear();
+
+    webviewMocks.emitDrop([droppedFilePath]);
+
+    await waitFor(() => {
+      expect(tauriApiMocks.catalogImportFiles).toHaveBeenCalledWith([droppedFilePath]);
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Shared transport" })).toHaveTextContent(importedTrack.title);
+    });
+    await waitFor(() => {
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
+    expect(screen.getByText("No audio selected.")).toBeVisible();
+  });
   it("adds dropped file parent folder as a scan root when the toggle is enabled", async () => {
     const droppedFilePath = "C:/Drop Parent/track.wav";
     const parentRootPath = "C:/Drop Parent";
@@ -2202,6 +2467,7 @@ describe("WorkspaceApp metadata editor", () => {
     render(<WorkspaceApp />);
     await waitFor(() => {
       expect(webviewMocks.getCurrentWebview).toHaveBeenCalled();
+      expect(webviewMocks.getDragDropHandlerCount()).toBe(1);
     });
 
     webviewMocks.emitDrop([droppedFilePath]);
@@ -2300,6 +2566,95 @@ describe("WorkspaceApp metadata editor", () => {
       expect(window.localStorage.getItem("rp.music.favorites.v1")).toBe("[]");
       expect(window.localStorage.getItem("rp.music.sessionQueue.v1")).toBe("[]");
       expect(window.localStorage.getItem("rp.publish.selectionQueue.v1")).toBe("[]");
+    });
+  });
+
+  it("prunes stale persisted queue, favorites, and publish selection on cold start restore", async () => {
+    const staleTrackId = "3".repeat(64);
+    window.localStorage.setItem("rp.music.favorites.v1", JSON.stringify([staleTrackId]));
+    window.localStorage.setItem("rp.music.sessionQueue.v1", JSON.stringify([staleTrackId]));
+    window.localStorage.setItem("rp.publish.selectionQueue.v1", JSON.stringify([
+      {
+        trackId: staleTrackId,
+        title: "Missing Restart Track",
+        artistName: "Ghost Artist",
+        mediaPath: "C:/Missing/ghost.wav",
+        specPath: "C:/Missing/ghost.yaml",
+        draftId: "4".repeat(64)
+      }
+    ]));
+
+    tauriApiMocks.catalogListTracks.mockResolvedValue({
+      items: [baseTrackListItem],
+      total: 1,
+      limit: 100,
+      offset: 0
+    });
+    tauriApiMocks.catalogGetTrack.mockImplementation(async (trackId: string) => {
+      if (trackId === staleTrackId) return null;
+      return { ...baseTrackDetail };
+    });
+
+    render(<WorkspaceApp />);
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("rp.music.favorites.v1")).toBe("[]");
+      expect(window.localStorage.getItem("rp.music.sessionQueue.v1")).toBe("[]");
+      expect(window.localStorage.getItem("rp.publish.selectionQueue.v1")).toBe("[]");
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
+  });
+
+  it("normalizes corrupted persisted restart state without spurious shell signals", async () => {
+    const uiSignals = createUiSignalRecorder({
+      ignoreConsole: [/Not implemented: HTMLMediaElement\.prototype\.load/i]
+    });
+
+    window.localStorage.setItem("rp.music.activeMode.v1", "{not-json");
+    window.localStorage.setItem("rp.music.activeWorkspace.v1", JSON.stringify("Ghost Workspace"));
+    window.localStorage.setItem("rp.music.qualityControlMode.v1", JSON.stringify("ghost"));
+    window.localStorage.setItem("rp.publish.shellStep.v1", JSON.stringify("Ghost Step"));
+    window.localStorage.setItem("rp.music.trackGroupMode.v1", JSON.stringify("ghost"));
+    window.localStorage.setItem("rp.music.playListMode.v1", JSON.stringify("ghost"));
+    window.localStorage.setItem("rp.music.favorites.v1", "{bad-json");
+    window.localStorage.setItem("rp.music.sessionQueue.v1", JSON.stringify({ trackId: baseTrackListItem.track_id }));
+    window.localStorage.setItem("rp.publish.selectionQueue.v1", JSON.stringify([{ trackId: 42 }]));
+
+    render(<WorkspaceApp />);
+
+    expect(await screen.findByRole("button", { name: "Refresh Folders" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Release Preview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: "Shared transport" })).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("rp.music.activeMode.v1")).toBe(JSON.stringify("Listen"));
+      expect(window.localStorage.getItem("rp.music.activeWorkspace.v1")).toBe(JSON.stringify("Library"));
+      expect(window.localStorage.getItem("rp.music.qualityControlMode.v1")).toBe(JSON.stringify("track"));
+      expect(window.localStorage.getItem("rp.publish.shellStep.v1")).toBe(JSON.stringify("New Release"));
+      expect(window.localStorage.getItem("rp.music.trackGroupMode.v1")).toBe(JSON.stringify("none"));
+      expect(window.localStorage.getItem("rp.music.playListMode.v1")).toBe(JSON.stringify("library"));
+      expect(window.localStorage.getItem("rp.music.favorites.v1")).toBe("[]");
+      expect(window.localStorage.getItem("rp.music.sessionQueue.v1")).toBe("[]");
+      expect(window.localStorage.getItem("rp.publish.selectionQueue.v1")).toBe("[]");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
+    expect(await screen.findByRole("tab", { name: "Library" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+    expect(screen.getByText("No audio selected.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
+    const queueDock = screen.getByLabelText("Queue and session state");
+    expect(within(queueDock).getByText("0 draft(s)")).toBeInTheDocument();
+    expect(within(queueDock).getByText(/No tracks prepared yet\./i)).toBeInTheDocument();
+
+    uiSignals.expectClean({
+      allowAlerts: [/Output directory path is required./i, /Tauri runtime is not available in the browser preview./i]
     });
   });
 

@@ -1,0 +1,9 @@
+
+C:\Dev\testing chtgpt\apps\desktop\src\features\workspace\WorkspaceRuntime.tsx
+  446:9  error  'catalogTracksById' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+C:\Dev\testing chtgpt\apps\desktop\src\test\ui-controls.spec.tsx
+    8:3   error  'within' is defined but never used  @typescript-eslint/no-unused-vars
+  205:18  error  'btn' is defined but never used     @typescript-eslint/no-unused-vars
+
+✖ 3 problems (3 errors, 0 warnings)

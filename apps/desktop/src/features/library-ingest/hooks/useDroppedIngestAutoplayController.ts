@@ -12,6 +12,17 @@ import type { DropIngestResult } from "./useLibraryIngestActions";
 
 type PlayListMode = "library" | "queue";
 
+declare global {
+  interface Window {
+    __RELEASE_PUBLISHER_DROP_AUTOPLAY_DEBUG__?: {
+      dispatchCount: number;
+      lastDroppedPaths: string[];
+      lastResult: DropIngestResult | null;
+      lastError: string | null;
+    };
+  }
+}
+
 type UseDroppedIngestAutoplayControllerArgs = {
   activeScanJobs: Record<string, CatalogIngestJobResponse>;
   setActiveScanJobs: Dispatch<SetStateAction<Record<string, CatalogIngestJobResponse>>>;
@@ -35,6 +46,21 @@ function normalizePathForRootMatch(path: string): string {
     normalized = normalized.slice(0, -1);
   }
   return normalized.toLowerCase();
+}
+
+function updateDropAutoplayDebugState(
+  update: Partial<NonNullable<Window["__RELEASE_PUBLISHER_DROP_AUTOPLAY_DEBUG__"]>>
+): void {
+  const current = window.__RELEASE_PUBLISHER_DROP_AUTOPLAY_DEBUG__ ?? {
+    dispatchCount: 0,
+    lastDroppedPaths: [],
+    lastResult: null,
+    lastError: null
+  };
+  window.__RELEASE_PUBLISHER_DROP_AUTOPLAY_DEBUG__ = {
+    ...current,
+    ...update
+  };
 }
 
 // Windows-only assumption: path comparison is case-insensitive via .toLowerCase().
@@ -76,7 +102,9 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
   const handledDroppedScanAutoplayJobIdsRef = useRef<Set<string>>(new Set());
   // Ref keeps trackSearch current inside async callbacks that outlive their render cycle.
   const trackSearchRef = useRef(trackSearch);
-  useEffect(() => { trackSearchRef.current = trackSearch; }, [trackSearch]);
+  useEffect(() => {
+    trackSearchRef.current = trackSearch;
+  }, [trackSearch]);
 
   useEffect(() => {
     handleIngestDroppedPathsRef.current = handleIngestDroppedPaths;
@@ -157,25 +185,45 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
 
     const attachDropListener = async () => {
       const maybeUnlisten = await subscribeToFileDropEvents((droppedPaths) => {
-        void handleIngestDroppedPathsRef.current(droppedPaths).then((result) => {
-          if (result?.importedTrackIds && result.importedTrackIds.length > 0) {
-            pendingDroppedScanAutoplayJobsRef.current.clear();
-            handledDroppedScanAutoplayJobIdsRef.current.clear();
-            const importedTrackIds = result.importedTrackIds;
-            setTrackSearch((current) => (current === "" ? current : ""));
-            setShowFavoritesOnly((current) => (current ? false : current));
-            setPlayListModeWithQueueSyncRef.current((current) => (current === "library" ? current : "library"));
-            appendTracksToSessionQueueRef.current(importedTrackIds);
-            playTrackNowRef.current(result.firstImportedTrackId ?? importedTrackIds[0]);
-            return;
-          }
-          if (result?.scanJobsStarted && result.scanJobsStarted.length > 0) {
-            for (const scanJob of result.scanJobsStarted) {
-              handledDroppedScanAutoplayJobIdsRef.current.delete(scanJob.jobId);
-              pendingDroppedScanAutoplayJobsRef.current.set(scanJob.jobId, scanJob.rootPath);
-            }
-          }
+        const dispatchCount =
+          window.__RELEASE_PUBLISHER_DROP_AUTOPLAY_DEBUG__?.dispatchCount ?? 0;
+        updateDropAutoplayDebugState({
+          dispatchCount: dispatchCount + 1,
+          lastDroppedPaths: [...droppedPaths],
+          lastResult: null,
+          lastError: null
         });
+
+        void handleIngestDroppedPathsRef.current(droppedPaths)
+          .then((result) => {
+            updateDropAutoplayDebugState({
+              lastResult: result ?? null,
+              lastError: null
+            });
+
+            if (result?.importedTrackIds && result.importedTrackIds.length > 0) {
+              pendingDroppedScanAutoplayJobsRef.current.clear();
+              handledDroppedScanAutoplayJobIdsRef.current.clear();
+              const importedTrackIds = result.importedTrackIds;
+              setTrackSearch((current) => (current === "" ? current : ""));
+              setShowFavoritesOnly((current) => (current ? false : current));
+              setPlayListModeWithQueueSyncRef.current((current) => (current === "library" ? current : "library"));
+              appendTracksToSessionQueueRef.current(importedTrackIds);
+              playTrackNowRef.current(result.firstImportedTrackId ?? importedTrackIds[0]);
+              return;
+            }
+            if (result?.scanJobsStarted && result.scanJobsStarted.length > 0) {
+              for (const scanJob of result.scanJobsStarted) {
+                handledDroppedScanAutoplayJobIdsRef.current.delete(scanJob.jobId);
+                pendingDroppedScanAutoplayJobsRef.current.set(scanJob.jobId, scanJob.rootPath);
+              }
+            }
+          })
+          .catch((error) => {
+            updateDropAutoplayDebugState({
+              lastError: error instanceof Error ? error.message : String(error)
+            });
+          });
       });
 
       if (cancelled) {
@@ -193,5 +241,3 @@ export function useDroppedIngestAutoplayController(args: UseDroppedIngestAutopla
     };
   }, [enabled, setShowFavoritesOnly, setTrackSearch]);
 }
-
-

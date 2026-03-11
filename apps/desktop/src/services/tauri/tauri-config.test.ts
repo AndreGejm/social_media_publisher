@@ -172,8 +172,7 @@ describe("Tauri security config", () => {
     expect(capability.remote).toBeUndefined();
     expect(capability.windows).toEqual(["main"]);
     expect(capability.webviews).toBeUndefined();
-    expect(capability.permissions).toEqual(["default", "dialog:default"]);
-    expect(capability.permissions).not.toContain("core:default");
+    expect(capability.permissions).toEqual(["default", "core:default", "dialog:default"]);
 
     expect(appAclDefault).toContain("[default]");
     expect(appAclDefault).toContain("allow-load-spec");

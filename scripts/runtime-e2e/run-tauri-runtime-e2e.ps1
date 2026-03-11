@@ -26,19 +26,28 @@ function Invoke-Checked {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $repoRoot
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+$corepackShimDir = if ($nodeCommand) {
+  Join-Path (Split-Path $nodeCommand.Source -Parent) "node_modules\corepack\shims"
+} else {
+  $null
+}
 $extraBins = @(
   "$env:USERPROFILE\.cargo\bin",
   "$env:APPDATA\npm",
+  $corepackShimDir,
   "${env:ProgramFiles(x86)}\NSIS",
   "$env:ProgramFiles\NSIS",
   "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
   "$env:ProgramFiles\WiX Toolset v3.14\bin"
 ) | Where-Object { $_ -and (Test-Path $_) }
 $env:PATH = (($extraBins + @($env:PATH)) -join ";")
-
+if (-not (Get-Command pnpm.cmd -ErrorAction SilentlyContinue)) {
+  throw "pnpm.cmd was not found on PATH after adding the Corepack shims directory."
+}
 if (-not $SkipBuild) {
   if ($NoBundleBuild) {
-    Invoke-Checked pnpm.cmd tauri build --bundles none
+    Invoke-Checked pnpm.cmd tauri build --no-bundle
   } else {
     Invoke-Checked pnpm.cmd tauri build --bundles nsis
   }
@@ -62,6 +71,7 @@ New-Item -ItemType Directory -Force $DataDir | Out-Null
 $fixtureSpec = (Resolve-Path "fixtures/specs/valid_release.yaml").Path
 $fixtureInvalidSpec = (Resolve-Path "fixtures/specs/invalid_release_missing_title.yaml").Path
 $fixtureMedia = (Resolve-Path "fixtures/media/mock_media.bin").Path
+$fixtureDropAudio = (Resolve-Path "fixtures/runtime-e2e/runtime-drop.wav").Path
 
 $env:RELEASE_PUBLISHER_DATA_DIR = $DataDir
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$CdpPort"
@@ -71,6 +81,7 @@ $env:TAURI_E2E_DATA_DIR = $DataDir
 $env:TAURI_E2E_FIXTURE_SPEC_PATH = $fixtureSpec
 $env:TAURI_E2E_FIXTURE_INVALID_SPEC_PATH = $fixtureInvalidSpec
 $env:TAURI_E2E_FIXTURE_MEDIA_PATH = $fixtureMedia
+$env:TAURI_E2E_FIXTURE_AUDIO_DROP_PATH = $fixtureDropAudio
 $env:TAURI_E2E_EXPECT_CAP = "1"
 $env:RUN_TAURI_E2E = "1"
 
@@ -121,3 +132,6 @@ try {
     }
   }
 }
+
+
+

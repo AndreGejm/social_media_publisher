@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-runtime-emit-test-file-drop"
+description = "Enables the runtime_emit_test_file_drop command without any pre-configured scope."
+commands.allow = ["runtime_emit_test_file_drop"]
+
+[[permission]]
+identifier = "deny-runtime-emit-test-file-drop"
+description = "Denies the runtime_emit_test_file_drop command without any pre-configured scope."
+commands.deny = ["runtime_emit_test_file_drop"]

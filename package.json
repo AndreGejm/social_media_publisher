@@ -16,6 +16,7 @@
     "test:e2e:runtime": "playwright test -c playwright.runtime.config.ts",
     "lint": "pnpm --filter @release-publisher/desktop lint",
     "check:boundaries": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-boundaries.ps1",
+    "validate:frontend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-frontend.ps1",
     "tauri:dev": "pnpm --filter @release-publisher/desktop tauri dev",
     "tauri:build": "pnpm --filter @release-publisher/desktop tauri build",
     "bootstrap:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-windows.ps1",
@@ -29,5 +30,6 @@
     "@tauri-apps/cli": "2.5.0"
   }
 }
+
 
 

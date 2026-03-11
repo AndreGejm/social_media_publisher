@@ -1,6 +1,7 @@
-﻿# Expected Behavior Matrix
+# Expected Behavior Matrix
 
 Status: Pass 1 complete.
+Review note (2026-03-11): Rechecked after dedicated runtime error logging was added to the About workspace.
 
 Purpose:
 - Define intended behavior before fixes.
@@ -13,7 +14,8 @@ Behavior assumptions to verify in Pass 2:
 - A3. Search and filter inputs may drive local filtering or backend-backed catalog search only. They must not trigger playback mutations, codec preparation, publish mutations, or render jobs.
 - A4. Normal successful actions should be silent unless they save data, start or stop a long-running process, or resolve an error condition.
 - A5. Any visible enabled control must have meaningful behavior. If no meaningful behavior exists yet, it should be disabled or removed rather than pretending to succeed.
-- A6. The bottom player is a global shell element for Release Preview workspaces. Visibility in `Publish` and `About` is a known design ambiguity to verify because repo notes say "global transport" while the current shell hides it there.
+- A6. The bottom player is a global shell element for Release Preview workspaces, including `About`. Pass 2 reproduced the current `About` omission as a defect; `Publish` remains the only mode where the player may legitimately be absent.
+- A7. The `About` workspace may expose diagnostic-only values such as `Runtime Error Log`, but those fields must remain read-only and must never mutate runtime state.
 
 ## Global Shell
 
@@ -138,7 +140,8 @@ Behavior assumptions to verify in Pass 2:
 
 | Control | Should happen | Should not happen | Feedback | Allowed state changes | Related UI updates | Must remain unaffected |
 | --- | --- | --- | --- | --- | --- | --- |
-| `Copy System Info` | Copy current version/platform/runtime diagnostics text to clipboard. | Must not navigate, switch modes, or mutate workflow state. | Small copy status is acceptable. | Copy-feedback text only. | Feedback line under resources. | Queue, playback, publish state, settings, catalog. |
+| `Runtime Error Log` (read-only field) | Show the resolved runtime error log path, or a truthful unavailable-state message when the path cannot be resolved in the current runtime. | Must not be clickable, editable, or trigger logging work by merely rendering. | Silent. | Informational display value only. | System information card and copied diagnostics text. | Queue, playback, publish state, settings, catalog. |
+| `Copy System Info` | Copy current version/platform/runtime diagnostics text, including the runtime error log path shown in About, to clipboard. | Must not navigate, switch modes, or mutate workflow state. | Small copy status is acceptable. | Copy-feedback text only. | Feedback line under resources. | Queue, playback, publish state, settings, catalog. |
 | `Refresh Diagnostics` | Re-fetch diagnostics for informational/support use. | Must not trigger publish/render/playback actions or change mode. | Silent or light status only. | Diagnostics loading/ready/error state. | System information values and helper text. | Queue, playback, publish selection, catalog, settings. |
 
 ## Publish Workflow Shell and Embedded Publisher Ops
@@ -160,3 +163,4 @@ Behavior assumptions to verify in Pass 2:
 | `Open Release Report` | Load the report for the currently selected history row. | Must not execute or change selection implicitly. | Silent or status text. | Report state/loading state. | Report summary and actions list. | Listening queue, settings. |
 | `Resume Release` | Resume execution for the selected release using persisted state. | Must not resume a different release than the selected row. | Explicit status text is appropriate. | Execute/result/history/report state. | Same areas as `Execute`. | Listening queue, settings. |
 | History radio rows | Change the selected history target for report/resume actions. | Must not open a report or resume automatically on selection alone. | Silent. | Selected release id. | Enabled/disabled state of report/resume buttons. | Listening queue, queue state, settings. |
+

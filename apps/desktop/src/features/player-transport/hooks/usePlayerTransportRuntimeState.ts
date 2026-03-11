@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   clampVolumeScalar,
@@ -324,6 +324,11 @@ export function usePlayerTransportRuntimeState(args: UsePlayerTransportStateArgs
     return trackDetailsById[playerTrackId] ?? null;
   }, [playerTrackId, selectedTrackDetail, trackDetailsById]);
 
+  const playerQueueItem = useMemo(
+    () => queue.find((item) => item.track_id === playerTrackId) ?? null,
+    [queue, playerTrackId]
+  );
+
   const playerSource = useMemo<ResolvedPlayerSource | null>(() => {
     if (playerExternalSource) {
       return {
@@ -334,15 +339,24 @@ export function usePlayerTransportRuntimeState(args: UsePlayerTransportStateArgs
         durationMs: playerExternalSource.durationMs
       };
     }
-    if (!playerTrackDetail) return null;
+    if (playerTrackDetail) {
+      return {
+        key: `catalog:${playerTrackDetail.track_id}`,
+        filePath: playerTrackDetail.file_path,
+        title: sanitizeUiText(playerTrackDetail.title, 256),
+        artist: sanitizeUiText(playerTrackDetail.artist_name, 256),
+        durationMs: playerTrackDetail.track.duration_ms
+      };
+    }
+    if (!playerQueueItem) return null;
     return {
-      key: `catalog:${playerTrackDetail.track_id}`,
-      filePath: playerTrackDetail.file_path,
-      title: sanitizeUiText(playerTrackDetail.title, 256),
-      artist: sanitizeUiText(playerTrackDetail.artist_name, 256),
-      durationMs: playerTrackDetail.track.duration_ms
+      key: `catalog:${playerQueueItem.track_id}`,
+      filePath: playerQueueItem.file_path,
+      title: sanitizeUiText(playerQueueItem.title, 256),
+      artist: sanitizeUiText(playerQueueItem.artist_name, 256),
+      durationMs: playerQueueItem.duration_ms
     };
-  }, [playerExternalSource, playerTrackDetail]);
+  }, [playerExternalSource, playerQueueItem, playerTrackDetail]);
 
   const playerAudioSrc = playerSource ? localFilePathToMediaUrl(playerSource.filePath) : undefined;
   const queueIndex = useMemo(
@@ -519,6 +533,7 @@ export function usePlayerTransportRuntimeState(args: UsePlayerTransportStateArgs
     publisherOpsSharedTransportBridge
   };
 }
+
 
 
 

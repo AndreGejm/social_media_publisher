@@ -24,6 +24,8 @@ pub fn run() {
             commands::get_release_track_analysis,
             commands::runtime_log_error,
             commands::runtime_get_error_log_path,
+            commands::runtime_read_error_log_tail,
+            commands::runtime_emit_test_file_drop,
             commands::init_exclusive_device,
             commands::acquire_audio_device_lock,
             commands::release_audio_device_lock,

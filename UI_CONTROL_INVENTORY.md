@@ -1,6 +1,7 @@
-﻿# UI Control Inventory
+# UI Control Inventory
 
 Status: Pass 1 complete.
+Review note (2026-03-11): Rechecked after dedicated runtime error logging was added to the About workspace.
 
 Scope: Current desktop shell in `apps/desktop/src/features/workspace/WorkspaceRuntime.tsx` and mounted feature surfaces.
 
@@ -14,6 +15,7 @@ Assumptions logged for later verification:
 - Inline help icons/popovers are informational controls; they are not individually expanded below unless they materially affect workflow.
 - Context-menu actions and per-row controls are contextual controls and repeat for each visible row.
 - The same `PlayListPanel` control surface is reused in `Quality Control > Track QC` and `Playlists`.
+- `Runtime Error Log` in `About` is a read-only diagnostic field; it should surface the resolved log location or a truthful unavailable state.
 
 ## Shell Map
 
@@ -40,16 +42,16 @@ Workspace availability by mode:
 | Topbar summary | Non-Publisher, non-About workspace | `<n> favorite(s)` | Button | Yes | Open track-oriented workspace for favorites follow-up | Yes | Global |
 | Topbar summary | Non-Publisher, non-About workspace | `<n> queue item(s)` | Button | Yes | Open track-oriented workspace for queue follow-up | Yes | Global |
 | Topbar summary | Non-Publisher, non-About workspace | `<n> import error(s)` | Button | Yes | Return to `Library` | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Shared` | Button | Yes | Request shared output mode | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Exclusive` | Button | Yes | Request exclusive output mode | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Playlist` / `Queue` | Button | Yes | Toggle list view between visible library list and session queue | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Prev` | Button | Yes | Jump to previous queue item | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Play` / `Pause` | Button | Yes | Toggle transport playback | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Stop` | Button | Yes | Stop playback and reset current track position | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Next` | Button | Yes | Jump to next queue item | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Playback volume` | Range input | Yes | Change output volume scalar | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Mute` / `Unmute` | Button | Yes | Toggle muted state without losing previous volume | Yes | Global |
-| Shared player | Any Release Preview workspace except `About` | `Shared player seek` | Range input | Yes | Seek within the active track | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Shared` | Button | Yes | Request shared output mode | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Exclusive` | Button | Yes | Request exclusive output mode | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Playlist` / `Queue` | Button | Yes | Toggle list view between visible library list and session queue | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Prev` | Button | Yes | Jump to previous queue item | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Play` / `Pause` | Button | Yes | Toggle transport playback | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Stop` | Button | Yes | Stop playback and reset current track position | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Next` | Button | Yes | Jump to next queue item | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Playback volume` | Range input | Yes | Change output volume scalar | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Mute` / `Unmute` | Button | Yes | Toggle muted state without losing previous volume | Yes | Global |
+| Shared player | Any Release Preview workspace except `About` (current implementation; expected to persist into `About`, see bug audit) | `Shared player seek` | Range input | Yes | Seek within the active track | Yes | Global |
 
 ## Library Workspace
 
@@ -285,8 +287,9 @@ Navigation path:
 
 | Section | Control | Type | Appears actionable | Expected purpose | Mode-dependent | Scope |
 | --- | --- | --- | --- | --- | --- | --- |
-| Resources | `Copy System Info` | Button | Yes | Copy version/platform/diagnostic summary to clipboard | No | Local |
-| Resources | `Refresh Diagnostics` | Button | Yes | Re-fetch runtime diagnostics for support/information purposes | No | Local |
+| System Information | `Runtime Error Log` | Read-only diagnostic value | No | Surface the resolved runtime error log path for debugging/support workflows | No | Local |
+| Resources | `Copy System Info` | Button | Yes | Copy version/platform/diagnostic summary, including the runtime error log path, to clipboard | No | Local |
+| Resources | `Refresh Diagnostics` | Button | Yes | Re-fetch runtime diagnostics for support/information purposes without mutating workflow state | No | Local |
 
 ## Publish Workflow Shell
 
@@ -333,3 +336,4 @@ Internal workflow tabs are hidden in the embedded shell, so the step bar above i
 | `Open Release Report` | Button | Yes | Load report for selected release row | Local |
 | `Resume Release` | Button | Yes | Re-run execution using selected release state | Local |
 | History radio rows | Radio input | Yes | Select history target for report/resume actions | Contextual |
+

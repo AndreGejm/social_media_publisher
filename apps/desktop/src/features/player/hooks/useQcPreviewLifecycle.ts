@@ -41,6 +41,16 @@ function selectDefaultCodecPreviewPair(
   return { profileAId, profileBId };
 }
 
+const BROWSER_PREVIEW_DISABLED_QC_FEATURE_FLAGS: QcFeatureFlagsResponse = {
+  qc_codec_preview_v1: false,
+  qc_realtime_meters_v1: false,
+  qc_batch_export_v1: false
+};
+
+function isBrowserPreviewRuntimeUnavailable(error: UiAppError): boolean {
+  return error.code === "TAURI_UNAVAILABLE" || error.code === "UNKNOWN_COMMAND";
+}
+
 export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
   const {
     selectedTrackId,
@@ -226,7 +236,18 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
         );
       } catch (error) {
         if (cancelled) return;
-        setCatalogError(mapUiError(error));
+        const normalized = mapUiError(error);
+        if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+          setQcFeatureFlags(BROWSER_PREVIEW_DISABLED_QC_FEATURE_FLAGS);
+          setQcCodecProfiles([]);
+          setQcPreviewProfileAId("");
+          setQcPreviewProfileBId("");
+          setQcPreviewBlindXEnabled(false);
+          setQcPreviewSession(null);
+          setQcBatchExportSelectedProfileIds([]);
+          return;
+        }
+        setCatalogError(normalized);
       }
     };
 
@@ -538,3 +559,4 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
     resumeBatchExportPolling
   };
 }
+

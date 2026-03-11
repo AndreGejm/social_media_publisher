@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+﻿import type { Dispatch, SetStateAction } from "react";
 
 import type { ExternalPlayerSource } from "../../player-transport/api";
 import type { CatalogListTracksResponse } from "../../../services/tauri/tauriClient";
@@ -110,7 +110,7 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
       return next.filter((id) => {
         if (seen.has(id)) return false;
         seen.add(id);
-        return args.queueTracksById.has(id);
+        return true;
       });
     });
     args.setPlayerExternalSource(null);
@@ -219,3 +219,4 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
     playAlbumGroup
   };
 }
+

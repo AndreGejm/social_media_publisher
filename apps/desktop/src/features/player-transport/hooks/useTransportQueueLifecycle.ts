@@ -176,6 +176,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           if (maybePromise && typeof maybePromise.then === "function") {
             await maybePromise;
           }
+          setPlayerIsPlaying(true);
         }
 
         setPlayerError(null);

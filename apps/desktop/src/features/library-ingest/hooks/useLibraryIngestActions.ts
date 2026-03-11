@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   type CatalogImportFailure,
   type CatalogIngestJobResponse,
+  type CatalogListTracksResponse,
   type LibraryRootResponse,
   type UiAppError
 } from "../../../services/tauri/tauriClient";
@@ -41,6 +42,7 @@ type UseLibraryIngestActionsArgs = {
   setCatalogError: Dispatch<SetStateAction<UiAppError | null>>;
   setCatalogImporting: Dispatch<SetStateAction<boolean>>;
   setCatalogFailures: Dispatch<SetStateAction<CatalogImportFailure[]>>;
+  cacheImportedTracks?: (tracks: CatalogListTracksResponse["items"]) => void;
   setSelectedTrackId: Dispatch<SetStateAction<string>>;
   setLibraryRoots: Dispatch<SetStateAction<LibraryRootResponse[]>>;
   setLibraryRootsLoading: Dispatch<SetStateAction<boolean>>;
@@ -69,6 +71,10 @@ function parentDirectoryPath(path: string): string | null {
   return withoutTrailingSeparators.slice(0, splitIndex);
 }
 
+function isBrowserPreviewRuntimeUnavailable(error: UiAppError): boolean {
+  return error.code === "TAURI_UNAVAILABLE" || error.code === "UNKNOWN_COMMAND";
+}
+
 export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
   const tauriClient = useTauriClient();
   const argsRef = useRef(args);
@@ -90,7 +96,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       const roots = await tauriClientRef.current.catalogListLibraryRoots();
       currentArgs.setLibraryRoots(roots);
     } catch (error) {
-      currentArgs.setCatalogError(currentArgs.mapUiError(error));
+      const normalized = currentArgs.mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        currentArgs.setLibraryRoots([]);
+      } else {
+        currentArgs.setCatalogError(normalized);
+      }
     } finally {
       currentArgs.setLibraryRootsLoading(false);
     }
@@ -111,6 +122,7 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
     try {
       const response = await tauriClientRef.current.catalogImportFiles(paths);
       currentArgs.setCatalogFailures(response.failed);
+      currentArgs.cacheImportedTracks?.(response.imported);
       currentArgs.setImportPathsInput("");
       await currentArgs.onReloadCatalog(currentArgs.trackSearch);
       currentArgs.onNotice({
@@ -124,7 +136,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
         currentArgs.setSelectedTrackId(response.imported[0].track_id);
       }
     } catch (error) {
-      currentArgs.setCatalogError(currentArgs.mapUiError(error));
+      const normalized = currentArgs.mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        currentArgs.setLibraryRoots([]);
+      } else {
+        currentArgs.setCatalogError(normalized);
+      }
     } finally {
       currentArgs.setCatalogImporting(false);
     }
@@ -148,7 +165,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       });
       currentArgs.onNotice({ level: "success", message: "Library root added." });
     } catch (error) {
-      currentArgs.setCatalogError(currentArgs.mapUiError(error));
+      const normalized = currentArgs.mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        currentArgs.setLibraryRoots([]);
+      } else {
+        currentArgs.setCatalogError(normalized);
+      }
     } finally {
       currentArgs.setLibraryRootMutating(false);
     }
@@ -165,7 +187,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       currentArgs.setLibraryRootPathInput(selected);
       currentArgs.onNotice({ level: "info", message: "Library root path selected. Click Add Root to persist it." });
     } catch (error) {
-      currentArgs.setCatalogError(currentArgs.mapUiError(error));
+      const normalized = currentArgs.mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        currentArgs.setLibraryRoots([]);
+      } else {
+        currentArgs.setCatalogError(normalized);
+      }
     } finally {
       currentArgs.setLibraryRootBrowsing(false);
     }
@@ -211,7 +238,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
       }));
       currentArgs.onNotice({ level: "info", message: "Library root scan started." });
     } catch (error) {
-      currentArgs.setCatalogError(currentArgs.mapUiError(error));
+      const normalized = currentArgs.mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        currentArgs.setLibraryRoots([]);
+      } else {
+        currentArgs.setCatalogError(normalized);
+      }
     } finally {
       currentArgs.setLibraryRootMutating(false);
     }
@@ -255,6 +287,14 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
     if (normalizedPaths.length === 0) return null;
 
     const dedupedPaths = [...new Set(normalizedPaths)];
+    if (dedupedPaths.length > 200) {
+      argsRef.current.onNotice({
+        level: "warning",
+        message: `Cannot process ${dedupedPaths.length} items at once. Please drop 200 or fewer files/folders.`
+      });
+      return null;
+    }
+
     const attemptedRootPathSet = new Set<string>();
     const queuedRootPathSet = new Set<string>();
     const queuedRootsById = new Map<string, LibraryRootResponse>();
@@ -290,9 +330,12 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
           return [root, ...deduped];
         });
         return root;
-      } catch {
-        // Root add failed -- increment counter so the completion notice reflects the failure.
-        scanFailureCount += 1;
+      } catch (error) {
+        const normalized = argsRef.current.mapUiError(error);
+        // Dropped files commonly probe the root-add path before falling back to direct import.
+        if (normalized.code !== "INVALID_ARGUMENT") {
+          scanFailureCount += 1;
+        }
         return null;
       }
     };
@@ -317,6 +360,7 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
         importedCount = response.imported.length;
         importFailureCount = response.failed.length;
         importedTrackIds = response.imported.map((item) => item.track_id);
+        argsRef.current.cacheImportedTracks?.(response.imported);
         argsRef.current.setCatalogFailures(response.failed);
         if (response.imported[0]) {
           firstImportedTrackId = response.imported[0].track_id;
@@ -416,4 +460,6 @@ export function useLibraryIngestActions(args: UseLibraryIngestActionsArgs) {
     handleIngestDroppedPaths
   };
 }
+
+
 

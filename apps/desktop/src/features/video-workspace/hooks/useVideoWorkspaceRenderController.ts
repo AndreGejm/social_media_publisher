@@ -133,6 +133,16 @@ export function useVideoWorkspaceRenderController(
         diagnosticsErrorMessage: null
       }));
     } catch (error) {
+      if (isUiAppError(error) && error.code === "TAURI_UNAVAILABLE") {
+        setState((current) => ({
+          ...current,
+          diagnostics: null,
+          diagnosticsCheckedAtUtc: null,
+          diagnosticsErrorMessage: null
+        }));
+        return;
+      }
+
       setState((current) => ({
         ...current,
         diagnosticsErrorMessage: formatUiError(error, "Environment diagnostics failed.")
@@ -444,4 +454,5 @@ export function useVideoWorkspaceRenderController(
     ]
   );
 }
+
 

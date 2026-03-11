@@ -1,5 +1,6 @@
 import { sanitizeUiText } from "../../../shared/lib/ui-sanitize";
 import { invokeCommand } from "../core";
+import { invokeWithTimeout } from "../core/ipcTimeout";
 import {
   assertHexId,
   assertInteger,
@@ -138,7 +139,11 @@ export async function catalogListTracks(
     }
   }
 
-  const response = await invokeCommand<CatalogListTracksResponse>("catalog_list_tracks", { query });
+  const response = await invokeWithTimeout<CatalogListTracksResponse>(
+    "catalog_list_tracks",
+    { query },
+    15000 // 15-second timeout
+  );
   return {
     ...response,
     items: response.items.map(sanitizeCatalogTrackListItem)
@@ -205,7 +210,11 @@ export async function catalogAddLibraryRoot(path: string): Promise<LibraryRootRe
 }
 
 export async function catalogListLibraryRoots(): Promise<LibraryRootResponse[]> {
-  const response = await invokeCommand<LibraryRootResponse[]>("catalog_list_library_roots");
+  const response = await invokeWithTimeout<LibraryRootResponse[]>(
+    "catalog_list_library_roots",
+    undefined,
+    5000 // 5-second timeout
+  );
   return response.map(sanitizeLibraryRoot);
 }
 

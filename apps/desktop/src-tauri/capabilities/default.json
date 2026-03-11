@@ -5,6 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "default",
+    "core:default",
     "dialog:default"
   ]
 }
+

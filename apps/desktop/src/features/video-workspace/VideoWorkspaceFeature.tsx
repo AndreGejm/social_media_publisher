@@ -28,6 +28,7 @@ import { subscribeToFileDropEvents } from "../../infrastructure/tauri/dragDrop";
 
 export type VideoWorkspaceFeatureProps = {
   className?: string;
+  nativeDropEventsEnabled?: boolean;
 };
 
 function formatClockSeconds(seconds: number): string {
@@ -213,6 +214,7 @@ function MediaAssetSummary(props: {
 
 export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps) {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeDropEventsEnabled = props.nativeDropEventsEnabled ?? true;
   const audioInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
@@ -519,6 +521,8 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
   }, [refreshRenderDiagnostics]);
 
   useEffect(() => {
+    if (!nativeDropEventsEnabled) return;
+
     let canceled = false;
     let unlisten: (() => void) | null = null;
 
@@ -552,7 +556,7 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
       canceled = true;
       unlisten?.();
     };
-  }, [importNativePathForKind]);
+  }, [importNativePathForKind, nativeDropEventsEnabled]);
 
   const previewStateLabel =
     previewController.state.playbackState === "idle"
@@ -1097,7 +1101,11 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
                     Output file preview: {outputSettingsController.outputFilePreviewPath}
                   </p>
 
-                  {outputSettingsController.issues.length > 0 ? (
+                  {outputSettingsController.issues.length > 0 && (
+                    outputSettingsController.state.outputDirectoryPath.trim().length > 0 ||
+                    renderController.state.phase === "preflight_invalid" ||
+                    renderController.state.phase === "failed"
+                  ) ? (
                     <p className="helper-text" role="alert">
                       {outputSettingsController.issues[0].message}
                     </p>
@@ -1399,68 +1407,4 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

@@ -1,4 +1,4 @@
-# Default app ACL for the desktop renderer.
+﻿# Default app ACL for the desktop renderer.
 # This scopes frontend IPC to the audited Tauri command surface only.
 [default]
 description = "Default app permissions for the desktop publisher UI."
@@ -11,6 +11,10 @@ permissions = [
   "allow-analyze-audio-file",
   "allow-analyze-and-persist-release-track",
   "allow-get-release-track-analysis",
+  "allow-runtime-log-error",
+  "allow-runtime-get-error-log-path",
+  "allow-runtime-read-error-log-tail",
+  "allow-runtime-emit-test-file-drop",
   "allow-init-exclusive-device",
   "allow-set-volume",
   "allow-set-playback-queue",
@@ -89,3 +93,4 @@ commands.allow = ["video_render_check_source_path"]
 identifier = "allow-video-render-open-output-folder"
 description = "Enables the video_render_open_output_folder command without any pre-configured scope."
 commands.allow = ["video_render_open_output_folder"]
+

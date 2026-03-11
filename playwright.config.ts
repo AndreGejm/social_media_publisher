@@ -1,6 +1,20 @@
+import path from "node:path";
+
 import { defineConfig } from "@playwright/test";
 
 const pnpmBin = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const pathSeparator = process.platform === "win32" ? ";" : ":";
+const corepackShimDir = path.join(
+  path.dirname(process.execPath),
+  "node_modules",
+  "corepack",
+  "shims"
+);
+const playwrightPath = [corepackShimDir, process.env.PATH ?? ""]
+  .filter((entry) => entry.length > 0)
+  .join(pathSeparator);
+
+process.env.PATH = playwrightPath;
 
 export default defineConfig({
   testDir: "./playwright/tests",
@@ -13,8 +27,14 @@ export default defineConfig({
   },
   webServer: {
     command: `${pnpmBin} --filter @release-publisher/desktop build && ${pnpmBin} --filter @release-publisher/desktop preview --host 127.0.0.1`,
+    env: {
+      ...process.env,
+      PATH: playwrightPath
+    },
     port: 4173,
     reuseExistingServer: true,
     timeout: 120_000
   }
 });
+
+

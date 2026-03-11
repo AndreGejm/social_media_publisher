@@ -31,9 +31,7 @@ type UseWorkspaceUiEffectsArgs = {
   themeVariantPreference: ThemeVariantId;
   albumGroups: AlbumGroup[];
   setSelectedAlbumKey: Dispatch<SetStateAction<string>>;
-  catalogTracksById: Map<string, unknown>;
   visibleTracksById: Map<string, unknown>;
-  setSessionQueueTrackIds: Dispatch<SetStateAction<string[]>>;
   setBatchSelectedTrackIds: Dispatch<SetStateAction<string[]>>;
   setTrackRowContextMenu: Dispatch<SetStateAction<TrackRowContextMenuState | null>>;
 };
@@ -58,9 +56,7 @@ export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
     themeVariantPreference,
     albumGroups,
     setSelectedAlbumKey,
-    catalogTracksById,
     visibleTracksById,
-    setSessionQueueTrackIds,
     setBatchSelectedTrackIds,
     setTrackRowContextMenu
   } = args;
@@ -108,14 +104,9 @@ export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
   }, [albumGroups, setSelectedAlbumKey]);
 
   useEffect(() => {
-    setSessionQueueTrackIds((current) => current.filter((id) => catalogTracksById.has(id)));
-  }, [catalogTracksById, setSessionQueueTrackIds]);
-
-  useEffect(() => {
     setBatchSelectedTrackIds((current) => current.filter((id) => visibleTracksById.has(id)));
     setTrackRowContextMenu((current) =>
       current && !visibleTracksById.has(current.trackId) ? null : current
     );
   }, [setBatchSelectedTrackIds, setTrackRowContextMenu, visibleTracksById]);
 }
-

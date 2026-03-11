@@ -15,17 +15,22 @@ type UseCatalogSelectionStateArgs = {
 };
 
 const CATALOG_PAGE_SIZE = 100;
+const EMPTY_CATALOG_PAGE: CatalogListTracksResponse = {
+  items: [],
+  total: 0,
+  limit: CATALOG_PAGE_SIZE,
+  offset: 0
+};
+
+function isBrowserPreviewRuntimeUnavailable(error: UiAppError): boolean {
+  return error.code === "TAURI_UNAVAILABLE" || error.code === "UNKNOWN_COMMAND";
+}
 
 export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
   const { deferredTrackSearch, mapUiError, setCatalogError } = args;
   const { catalogListTracks, catalogGetTrack } = useTauriClient();
 
-  const [catalogPage, setCatalogPage] = useState<CatalogListTracksResponse>({
-    items: [],
-    total: 0,
-    limit: 100,
-    offset: 0
-  });
+  const [catalogPage, setCatalogPage] = useState<CatalogListTracksResponse>(EMPTY_CATALOG_PAGE);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogLoadingMore, setCatalogLoadingMore] = useState(false);
   const [catalogActiveSearch, setCatalogActiveSearch] = useState("");
@@ -57,7 +62,19 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
       });
       return response;
     } catch (error) {
-      setCatalogError(mapUiError(error));
+      const normalized = mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        const emptyResponse = {
+          ...EMPTY_CATALOG_PAGE,
+          limit: CATALOG_PAGE_SIZE
+        };
+        setCatalogPage(emptyResponse);
+        setCatalogActiveSearch(trimmedSearch);
+        setSelectedTrackId("");
+        setSelectedTrackDetail(null);
+        return emptyResponse;
+      }
+      setCatalogError(normalized);
       return null;
     } finally {
       setCatalogLoading(false);
@@ -94,7 +111,11 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
       });
       return response;
     } catch (error) {
-      setCatalogError(mapUiError(error));
+      const normalized = mapUiError(error);
+      if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+        return catalogPage;
+      }
+      setCatalogError(normalized);
       return null;
     } finally {
       setCatalogLoadingMore(false);
@@ -104,8 +125,7 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
     catalogListTracks,
     catalogLoading,
     catalogLoadingMore,
-    catalogPage.items,
-    catalogPage.total,
+    catalogPage,
     mapUiError,
     setCatalogError
   ]);
@@ -131,7 +151,14 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
           setTrackDetailsById((current) => ({ ...current, [detail.track_id]: detail }));
         }
       } catch (error) {
-        if (!cancelled) setCatalogError(mapUiError(error));
+        if (!cancelled) {
+          const normalized = mapUiError(error);
+          if (isBrowserPreviewRuntimeUnavailable(normalized)) {
+            setSelectedTrackDetail(null);
+          } else {
+            setCatalogError(normalized);
+          }
+        }
       } finally {
         if (!cancelled) setSelectedTrackLoading(false);
       }
@@ -158,3 +185,5 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
     loadMoreCatalogTracks
   };
 }
+
+

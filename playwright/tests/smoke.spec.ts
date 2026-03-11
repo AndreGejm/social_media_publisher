@@ -1,153 +1,123 @@
 import { expect, test } from "@playwright/test";
 
-test("homepage renders release publisher shell", async ({ page }) => {
-  await page.goto("/");
+import {
+  attachUiSignalMonitor,
+  expectNoHorizontalOverflow,
+  gotoCurrentShell,
+  openApplicationMode,
+  openWorkspace,
+  readShellGeometry
+} from "../support/currentShell";
 
-  await expect(page.getByRole("heading", { name: "Release Publisher" })).toBeVisible();
-  await expect(page.getByText("Phase 6 workflow UI")).toBeVisible();
-  await expect(page.getByTestId("screen-list")).toContainText("New Release");
-  await expect(page.getByTestId("screen-list")).toContainText("Report / History");
-});
+const viewportCases = [
+  { label: "wide", width: 1800, height: 1200, tier: "wide" },
+  { label: "standard", width: 1360, height: 1024, tier: "standard" },
+  { label: "compact", width: 900, height: 960, tier: "compact" }
+] as const;
 
-test("prototype validation shows failure path for empty spec path", async ({ page }) => {
-  await page.goto("/");
-
-  await page.getByTestId("validate-plan-button").click();
-
-  await expect(page.getByRole("alert")).toContainText("Spec file path is required for planning.");
-});
-
-test("browser preview shows structured backend error when Tauri runtime is unavailable", async ({ page }) => {
-  await page.goto("/");
-
-  await page.getByTestId("spec-path-input").fill("C:\\spec.yaml");
-  await page.getByTestId("media-path-input").fill("C:\\media.bin");
-  await page.getByTestId("validate-plan-button").click();
-
-  await expect(page.getByTestId("backend-error")).toContainText(
-    "TAURI_UNAVAILABLE: Tauri runtime is not available in the browser preview."
-  );
-});
-
-test("browser preview can run workflow with injected Tauri mock and no external network", async ({
+test("browser preview renders the current shell and keeps About informational", async ({
   page
 }) => {
-  const externalRequests: string[] = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (!["127.0.0.1", "localhost"].includes(url.hostname)) {
-      externalRequests.push(request.url());
-    }
-  });
+  const signals = attachUiSignalMonitor(page);
 
-  await page.addInitScript(() => {
-    type PlannedAction = { platform: string; action: string; simulated: boolean };
-    type HistoryRow = { release_id: string; state: string; title: string; updated_at: string };
-    type ReleaseReport = {
-      release_id: string;
-      summary: string;
-      actions: PlannedAction[];
-    };
+  await gotoCurrentShell(page);
 
-    const state: {
-      releaseId: string | null;
-      history: HistoryRow[];
-      report: ReleaseReport | null;
-    } = {
-      releaseId: null,
-      history: [],
-      report: null
-    };
+  const workspaceNav = page.getByRole("navigation", { name: "Workspaces" });
+  for (const workspace of [
+    "Library",
+    "Quality Control",
+    "Playlists",
+    "Video Workspace",
+    "Settings",
+    "About"
+  ]) {
+    await expect(workspaceNav.getByRole("button", { name: workspace })).toBeVisible();
+  }
 
-    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
-      core: {
-        invoke: async (command: string, args?: Record<string, unknown>) => {
-          switch (command) {
-            case "load_spec":
-              return {
-                ok: true,
-                spec: {
-                  title: "Playwright Track",
-                  artist: "QA Bot",
-                  description: "test",
-                  tags: ["mock"]
-                },
-                errors: [],
-                canonical_path: "C:/fixtures/spec.yaml"
-              };
-            case "plan_release": {
-              const env = ((args?.input as { env?: string } | undefined)?.env ?? "TEST") as string;
-              state.releaseId = "b".repeat(64);
-              state.history = [
-                {
-                  release_id: state.releaseId,
-                  state: "PLANNED",
-                  title: "Playwright Track",
-                  updated_at: "2026-02-24T00:00:00Z"
-                }
-              ];
-              return {
-                release_id: state.releaseId,
-                run_id: "pw-run-1",
-                env,
-                planned_actions: [{ platform: "mock", action: "mock.plan", simulated: true }],
-                planned_request_files: { mock: "artifacts/planned_requests/mock.json" }
-              };
-            }
-            case "execute_release": {
-              const releaseId =
-                (((args as { releaseId?: string; release_id?: string } | undefined)?.releaseId ??
-                  (args as { releaseId?: string; release_id?: string } | undefined)
-                    ?.release_id) as string | undefined) ??
-                state.releaseId ??
-                "unknown";
-              state.history = [
-                {
-                  release_id: releaseId,
-                  state: "COMMITTED",
-                  title: "Playwright Track",
-                  updated_at: "2026-02-24T00:00:01Z"
-                }
-              ];
-              state.report = {
-                release_id: releaseId,
-                summary: "Playwright Track [COMMITTED] 1 platform(s)",
-                actions: [{ platform: "mock", action: "VERIFIED (simulated)", simulated: true }]
-              };
-              return {
-                release_id: releaseId,
-                status: "COMMITTED",
-                message: "Execution completed (TEST mode remains simulation-only).",
-                report_path: "artifacts/release_report.json"
-              };
-            }
-            case "list_history":
-              return state.history;
-            case "get_report":
-              return state.report;
-            default:
-              throw { code: "UNKNOWN_COMMAND", message: `Unhandled command ${command}` };
-          }
-        }
-      }
-    };
-  });
+  await openWorkspace(page, "About");
 
-  await page.goto("/");
-  await page.getByTestId("spec-path-input").fill("C:\\spec.yaml");
-  await page.getByTestId("media-path-input").fill("C:\\media.bin");
+  await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+  await expect(page.getByRole("note", { name: "About workspace guidance" })).toBeVisible();
+  const runtimeLogRow = page
+    .locator(".about-workspace-card[aria-label='System Information'] .about-kv-list div")
+    .filter({ has: page.getByText("Runtime Error Log") })
+    .first();
+  await expect(runtimeLogRow.locator("dd")).toHaveText(/Unavailable/i);
+  await expect(page.getByRole("button", { name: "Copy System Info" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh Diagnostics" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Shared transport" })).toBeVisible();
+  await expect(page.locator(".music-right-dock")).toHaveCount(0);
 
-  await page.getByTestId("load-spec-button").click();
-  await expect(page.getByTestId("normalized-spec-summary")).toContainText("title: Playwright Track");
-
-  await page.getByTestId("validate-plan-button").click();
-  await expect(page.getByTestId("plan-summary")).toContainText("actions: 1");
-  await expect(page.getByTestId("planned-actions-list")).toContainText("mock: mock.plan");
-
-  await page.getByTestId("execute-button").click();
-  await expect(page.getByTestId("status-summary")).toContainText("COMMITTED:");
-  await expect(page.getByTestId("history-list")).toContainText("COMMITTED");
-  await expect(page.getByTestId("report-summary")).toContainText("COMMITTED");
-  await expect(page.getByTestId("report-actions-list")).toContainText("VERIFIED (simulated)");
-  expect(externalRequests).toEqual([]);
+  await signals.assertClean("browser preview about workspace");
 });
+
+test("settings maintenance controls are disabled until there is state to clear", async ({
+  page
+}) => {
+  const signals = attachUiSignalMonitor(page);
+
+  await gotoCurrentShell(page);
+  await openWorkspace(page, "Settings");
+
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear Notice" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Clear Error Banner" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Reset Library Data" })).toBeEnabled();
+  await expect(page.getByRole("region", { name: "Shared transport" })).toBeVisible();
+
+  await signals.assertClean("browser preview settings workspace");
+});
+
+for (const viewportCase of viewportCases) {
+  test(`${viewportCase.label} layout keeps the shell stable and positions Publish dock correctly`, async ({
+    page
+  }) => {
+    const signals = attachUiSignalMonitor(page);
+
+    await page.setViewportSize({
+      width: viewportCase.width,
+      height: viewportCase.height
+    });
+    await gotoCurrentShell(page);
+
+    await expect(page.locator(".app-shell-root")).toHaveAttribute(
+      "data-layout-tier",
+      viewportCase.tier
+    );
+    await expectNoHorizontalOverflow(page, `${viewportCase.label} release preview`);
+
+    await openApplicationMode(page, "Publish");
+
+    await expect(page.getByRole("heading", { name: "Publish Workflow" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Release Selection" })).toBeVisible();
+
+    const geometry = await readShellGeometry(page);
+    expect(geometry.hasRightDockClass).toBe(true);
+    expect(geometry.mainRect).not.toBeNull();
+    expect(geometry.dockRect).not.toBeNull();
+
+    if (!geometry.mainRect || !geometry.dockRect) {
+      throw new Error(`Missing publish layout geometry for ${viewportCase.label}.`);
+    }
+
+    if (viewportCase.tier === "compact") {
+      expect(geometry.dockRect.x).toBeLessThanOrEqual(geometry.mainRect.x + 12);
+      expect(geometry.dockRect.y).toBeGreaterThan(geometry.mainRect.y + 40);
+      expect(geometry.dockRect.width).toBeGreaterThan(geometry.mainRect.width * 0.9);
+    } else {
+      expect(geometry.dockRect.x).toBeGreaterThan(geometry.mainRect.x + 40);
+      expect(Math.abs(geometry.dockRect.y - geometry.mainRect.y)).toBeLessThanOrEqual(24);
+    }
+
+    await expectNoHorizontalOverflow(page, `${viewportCase.label} publish`);
+
+    await openWorkspace(page, "About");
+    await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+    await expect(page.locator(".music-right-dock")).toHaveCount(0);
+
+    await signals.assertClean(`${viewportCase.label} layout sweep`);
+  });
+}
+
+
+

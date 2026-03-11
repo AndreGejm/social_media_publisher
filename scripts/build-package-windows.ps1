@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$SkipInstall,
   [string]$BundleTargets = "nsis",
   [string]$ArtifactsRoot = "artifacts"
@@ -23,15 +23,25 @@ function Invoke-Checked {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+$corepackShimDir = if ($nodeCommand) {
+  Join-Path (Split-Path $nodeCommand.Source -Parent) "node_modules\corepack\shims"
+} else {
+  $null
+}
 $extraBins = @(
   "$env:USERPROFILE\.cargo\bin",
   "$env:APPDATA\npm",
+  $corepackShimDir,
   "${env:ProgramFiles(x86)}\NSIS",
   "$env:ProgramFiles\NSIS",
   "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
   "$env:ProgramFiles\WiX Toolset v3.14\bin"
 ) | Where-Object { $_ -and (Test-Path $_) }
 $env:PATH = (($extraBins + @($env:PATH)) -join ";")
+if (-not (Get-Command pnpm.cmd -ErrorAction SilentlyContinue)) {
+  throw "pnpm.cmd was not found on PATH after adding the Corepack shims directory."
+}
 
 if (-not $SkipInstall) {
   Invoke-Checked pnpm.cmd install
@@ -71,3 +81,4 @@ $manifest = @{
 Set-Content -Encoding utf8 (Join-Path $dest "build_manifest.json") $manifest
 
 Write-Host "[build-package] artifacts: $dest"
+

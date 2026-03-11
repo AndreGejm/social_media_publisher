@@ -35,7 +35,9 @@ type SettingsPanelProps = {
   onShortcutBindingChange: (actionId: ShortcutActionId, binding: string | null) => void;
   onResetShortcutBindings: () => void;
   onClearNotice: () => void;
+  hasNotice: boolean;
   onClearErrorBanner: () => void;
+  hasErrorBanner: boolean;
   onResetLibraryData: () => void;
   resetLibraryDataPending: boolean;
   settingsSummaryCollapsed: boolean;
@@ -230,12 +232,22 @@ export default function SettingsPanel(props: SettingsPanelProps) {
 
           <div className="settings-actions">
             <HelpTooltip content="Clears the current UI notice banner.">
-              <button type="button" className="secondary-action" onClick={props.onClearNotice}>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={props.onClearNotice}
+                disabled={!props.hasNotice}
+              >
                 Clear Notice
               </button>
             </HelpTooltip>
             <HelpTooltip content="Clears the current catalog error banner shown in the music shell.">
-              <button type="button" className="secondary-action" onClick={props.onClearErrorBanner}>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={props.onClearErrorBanner}
+                disabled={!props.hasErrorBanner}
+              >
                 Clear Error Banner
               </button>
             </HelpTooltip>
@@ -281,3 +293,4 @@ export default function SettingsPanel(props: SettingsPanelProps) {
     </section>
   );
 }
+
