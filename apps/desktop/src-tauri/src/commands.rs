@@ -56,6 +56,7 @@ mod catalog;
 mod playback;
 mod qc;
 mod release;
+mod runtime_logging;
 mod video_render;
 
 #[cfg(test)]
@@ -68,6 +69,7 @@ pub use catalog::*;
 pub use playback::*;
 pub use qc::*;
 pub use release::*;
+pub use runtime_logging::*;
 pub use video_render::*;
 
 #[cfg(test)]
@@ -1772,15 +1774,72 @@ impl CommandService {
         .map_err(AppError::from)?;
         let max_concurrent_ingest_scans = max_concurrent_ingest_scans_from_env();
 
-        Ok(Self {
+        let service = Self {
             db,
             orchestrator: Arc::new(orchestrator),
             artifacts_root,
             cancel_requested_ingest_jobs: RwLock::new(HashSet::new()),
             ingest_scan_semaphore: Arc::new(Semaphore::new(max_concurrent_ingest_scans)),
             max_concurrent_ingest_scans,
-        })
+        };
+
+        match service.recover_interrupted_ingest_jobs().await {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::info!(
+                    target: "desktop.catalog",
+                    recovered_jobs = count,
+                    "marked interrupted ingest jobs as failed on startup"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "desktop.catalog",
+                    error_code = %error.code,
+                    error = %error.message,
+                    "failed to recover interrupted ingest jobs"
+                );
+            }
+        }
+
+        Ok(service)
     }
+
+    async fn recover_interrupted_ingest_jobs(&self) -> Result<usize, AppError> {
+        let stale_jobs = self.db.list_incomplete_ingest_jobs().await?;
+        if stale_jobs.is_empty() {
+            return Ok(0);
+        }
+
+        for job in &stale_jobs {
+            let next_error_count = job.error_count.saturating_add(1);
+            let _ = self
+                .db
+                .update_ingest_job(&UpdateIngestJob {
+                    job_id: job.job_id.clone(),
+                    status: DbIngestJobStatus::Failed,
+                    total_items: job.total_items,
+                    processed_items: job.processed_items,
+                    error_count: next_error_count,
+                })
+                .await?;
+            let _ = self
+                .db
+                .append_ingest_event(&NewIngestEvent {
+                    job_id: job.job_id.clone(),
+                    level: "WARN".to_string(),
+                    message: "Ingest job marked failed after interrupted app shutdown.".to_string(),
+                    payload_json: Some(serde_json::json!({
+                        "status": "FAILED",
+                        "reason": "INTERRUPTED_APP_SHUTDOWN"
+                    })),
+                })
+                .await;
+        }
+
+        Ok(stale_jobs.len())
+    }
+
     async fn handle_catalog_import_files(
         &self,
         paths: Vec<String>,
@@ -3418,3 +3477,4 @@ impl From<AppEnv> for ExecutionEnvironment {
 
 #[cfg(test)]
 mod tests;
+

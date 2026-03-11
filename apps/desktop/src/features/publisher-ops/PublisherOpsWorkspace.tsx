@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { HelpTooltip } from "../../shared/ui/HelpTooltip";
 import type { UiAppError } from "../../services/tauri/tauriClient";
@@ -442,7 +442,7 @@ export default function PublisherOpsWorkspace({
     <main className="app-shell">
       <header className="hero">
         <p className="eyebrow">Phase 6 workflow UI</p>
-        <h1>Release Publisher</h1>
+        <h1>Skald</h1>
         <p className="lede">
           Tauri commands are wired to the hardened Rust core. TEST mode remains simulation-only.
         </p>
@@ -809,6 +809,7 @@ export default function PublisherOpsWorkspace({
     </main>
   );
 }
+
 
 
 

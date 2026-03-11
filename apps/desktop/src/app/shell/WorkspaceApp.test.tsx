@@ -909,7 +909,9 @@ describe("WorkspaceApp metadata editor", () => {
     await waitFor(() => {
       expect(screen.queryByRole("menu", { name: /Actions for Queue Candidate/i })).not.toBeInTheDocument();
     });
-    expect(await screen.findByText("Playback started.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
+    });
   });
 
   it("opens an album-track row context menu and shows the track in Tracks", async () => {
@@ -1273,6 +1275,159 @@ describe("WorkspaceApp metadata editor", () => {
     });
   });
 
+  it("starts playback immediately for Next and Prev in native transport without success toast", async () => {
+    installTwoTrackCatalog();
+    tauriApiMocks.initExclusiveDevice.mockResolvedValue({
+      sample_rate_hz: 48_000,
+      bit_depth: 16,
+      buffer_size_frames: 256,
+      is_exclusive_lock: false
+    });
+    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+      volume_scalar: 1,
+      is_bit_perfect_bypassed: true,
+      active_queue_index: 0,
+      is_queue_ui_expanded: false,
+      queued_track_change_requests: 0,
+      is_playing: false,
+      position_seconds: 0,
+      track_duration_seconds: 1.5
+    });
+
+    render(<WorkspaceApp />);
+
+    const sharedTransport = screen.getByRole("region", { name: "Shared transport" });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Play" })).toBeEnabled();
+    });
+
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Play" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    const nextButton = within(sharedTransport).getByRole("button", { name: "Next" });
+    const prevButton = within(sharedTransport).getByRole("button", { name: "Prev" });
+
+    if (nextButton.hasAttribute("disabled")) {
+      await waitFor(() => {
+        expect(prevButton).toBeEnabled();
+      });
+      fireEvent.click(prevButton);
+      await waitFor(() => {
+        expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+      });
+      tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+      tauriApiMocks.setPlaybackPlaying.mockClear();
+    }
+
+    await waitFor(() => {
+      expect(nextButton).toBeEnabled();
+    });
+    fireEvent.click(nextButton);
+    await waitFor(() => {
+      expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
+    });
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    await waitFor(() => {
+      expect(prevButton).toBeEnabled();
+    });
+    fireEvent.click(prevButton);
+    await waitFor(() => {
+      expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("auto-advances native playback to the next queue track when the current track reaches the end", async () => {
+    installTwoTrackCatalog();
+    tauriApiMocks.initExclusiveDevice.mockResolvedValue({
+      sample_rate_hz: 48_000,
+      bit_depth: 16,
+      buffer_size_frames: 256,
+      is_exclusive_lock: false
+    });
+
+    let playbackContext = {
+      volume_scalar: 1,
+      is_bit_perfect_bypassed: true,
+      active_queue_index: 0,
+      is_queue_ui_expanded: false,
+      queued_track_change_requests: 0,
+      is_playing: false,
+      position_seconds: 0,
+      track_duration_seconds: 1.5
+    };
+    tauriApiMocks.getPlaybackContext.mockImplementation(async () => playbackContext);
+
+    render(<WorkspaceApp />);
+
+    const sharedTransport = screen.getByRole("region", { name: "Shared transport" });
+    await waitFor(() => {
+      expect(within(sharedTransport).getByRole("button", { name: "Play" })).toBeEnabled();
+    });
+
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Play" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+
+    const playbackRequestCalls = tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls;
+    const initialPlaybackRequest = playbackRequestCalls[playbackRequestCalls.length - 1]?.[0] ?? 0;
+
+    if (initialPlaybackRequest !== 0) {
+      const prevButton = within(sharedTransport).getByRole("button", { name: "Prev" });
+      await waitFor(() => {
+        expect(prevButton).toBeEnabled();
+      });
+      fireEvent.click(prevButton);
+      await waitFor(() => {
+        expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(0);
+      });
+      await waitFor(() => {
+        expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+      });
+    }
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    playbackContext = {
+      ...playbackContext,
+      is_playing: true,
+      active_queue_index: 0,
+      position_seconds: 1.49,
+      track_duration_seconds: 1.5
+    };
+
+    await waitFor(
+      () => {
+        expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(1);
+      },
+      { timeout: 3000 }
+    );
+    await waitFor(
+      () => {
+        expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+      },
+      { timeout: 3000 }
+    );
+    expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
+  });
   it("sends normalized volume scalar from the shared transport slider", async () => {
     tauriApiMocks.initExclusiveDevice.mockResolvedValue({
       sample_rate_hz: 48_000,
@@ -1737,6 +1892,98 @@ describe("WorkspaceApp metadata editor", () => {
       expect(rows).toHaveLength(1);
       expect(within(rows[0]).getByText("No Path Keyword")).toBeInTheDocument();
     });
+  });
+
+  it("does not retrigger codec preview preparation when search filtering excludes the selected track", async () => {
+    tauriApiMocks.qcGetFeatureFlags.mockResolvedValue({
+      qc_codec_preview_v1: true,
+      qc_realtime_meters_v1: false,
+      qc_batch_export_v1: false
+    });
+    tauriApiMocks.qcListCodecProfiles.mockResolvedValue([
+      {
+        profile_id: "spotify_vorbis_320",
+        label: "Spotify Vorbis 320 kbps",
+        codec_family: "vorbis",
+        target_platform: "Spotify",
+        target_bitrate_kbps: 320,
+        expected_latency_ms: 38,
+        available: true
+      },
+      {
+        profile_id: "apple_music_aac_256",
+        label: "Apple Music AAC 256 kbps",
+        codec_family: "aac",
+        target_platform: "Apple Music",
+        target_bitrate_kbps: 256,
+        expected_latency_ms: 34,
+        available: true
+      }
+    ]);
+    tauriApiMocks.qcGetPreviewSession.mockResolvedValue(null);
+    tauriApiMocks.qcPreparePreviewSession.mockImplementation(async (input) => ({
+      source_track_id: input.source_track_id,
+      active_variant: "bypass",
+      profile_a_id: input.profile_a_id,
+      profile_b_id: input.profile_b_id,
+      blind_x_enabled: input.blind_x_enabled,
+      blind_x_revealed: true
+    }));
+    tauriApiMocks.qcGetActivePreviewMedia.mockResolvedValue({
+      variant: "bypass",
+      media_path: baseTrackDetail.file_path,
+      blind_x_resolved_variant: null
+    });
+
+    tauriApiMocks.catalogListTracks.mockImplementation(async (request) => {
+      const search = typeof request.search === "string" ? request.search.trim().toLowerCase() : "";
+      const allTracks = [baseTrackListItem, secondTrackListItem];
+      const items =
+        search.length === 0
+          ? allTracks
+          : allTracks.filter((item) => {
+            const haystack = (item.title + " " + item.artist_name + " " + (item.album_title ?? "") + " " + item.file_path).toLowerCase();
+            return haystack.includes(search);
+          });
+      return {
+        items,
+        total: items.length,
+        limit: 100,
+        offset: 0
+      };
+    });
+    tauriApiMocks.catalogGetTrack.mockImplementation(async (trackId: string) => {
+      if (trackId === secondTrackDetail.track_id) {
+        return { ...secondTrackDetail };
+      }
+      return { ...baseTrackDetail };
+    });
+
+    render(<WorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    const secondTrackRow = await screen.findByRole("button", { name: /^Queue Candidate/i });
+    fireEvent.click(secondTrackRow);
+
+    await waitFor(() => {
+      expect(tauriApiMocks.qcPreparePreviewSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source_track_id: secondTrackDetail.track_id
+        })
+      );
+    });
+
+    tauriApiMocks.qcPreparePreviewSession.mockClear();
+
+    const searchbox = screen.getByRole("searchbox", { name: "Search tracks" });
+    fireEvent.change(searchbox, { target: { value: "Authoring" } });
+
+    await waitFor(() => {
+      const rows = within(screen.getByRole("list", { name: "Library tracks" })).getAllByRole("listitem");
+      expect(rows).toHaveLength(1);
+      expect(within(rows[0]).getByText("Authoring Track")).toBeInTheDocument();
+    });
+    expect(tauriApiMocks.qcPreparePreviewSession).not.toHaveBeenCalled();
   });
 
   it("autoplays a track after dropped-folder scan completes", async () => {
@@ -2314,16 +2561,4 @@ describe("WorkspaceApp metadata editor", () => {
     });
   });
 });
-
-
-
-
-
-
-
-
-
-
-
-
 

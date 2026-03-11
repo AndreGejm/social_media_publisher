@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 
 import { sanitizeUiText } from "../../../shared/lib/ui-sanitize";
 import {
@@ -36,8 +36,13 @@ export function useTransportPolling(args: UseTransportPollingArgs): void {
     onNativeTransportUnavailable
   } = args;
 
+  const lastDecodeErrorRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!nativeTransportEnabled) return;
+    if (!nativeTransportEnabled) {
+      lastDecodeErrorRef.current = null;
+      return;
+    }
 
     let cancelled = false;
     const refresh = async () => {
@@ -60,8 +65,21 @@ export function useTransportPolling(args: UseTransportPollingArgs): void {
 
         const decodeError = await getPlaybackDecodeError();
         if (cancelled) return;
-        if (decodeError && decodeError.trim().length > 0) {
-          setPlayerError(sanitizeUiText(decodeError, 512));
+
+        const sanitizedDecodeError =
+          decodeError && decodeError.trim().length > 0
+            ? sanitizeUiText(decodeError, 512)
+            : null;
+
+        if (sanitizedDecodeError) {
+          if (lastDecodeErrorRef.current !== sanitizedDecodeError) {
+            lastDecodeErrorRef.current = sanitizedDecodeError;
+            setPlayerError(sanitizedDecodeError);
+          }
+        } else if (lastDecodeErrorRef.current) {
+          const previousDecodeError = lastDecodeErrorRef.current;
+          lastDecodeErrorRef.current = null;
+          setPlayerError((current) => (current === previousDecodeError ? null : current));
         }
       } catch (error) {
         if (cancelled) return;
@@ -99,3 +117,4 @@ export function useTransportPolling(args: UseTransportPollingArgs): void {
     shouldUseLegacyAudioFallback
   ]);
 }
+

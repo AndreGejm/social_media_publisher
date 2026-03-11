@@ -45,7 +45,7 @@ if (-not $SkipBuild) {
 }
 
 if (-not $AppExePath) {
-  $AppExePath = Join-Path $repoRoot "target\release\release-publisher-desktop.exe"
+  $AppExePath = Join-Path $repoRoot "target\release\Skald.exe"
 }
 $AppExePath = (Resolve-Path $AppExePath).Path
 

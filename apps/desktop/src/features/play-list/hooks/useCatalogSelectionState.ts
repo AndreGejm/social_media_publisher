@@ -47,8 +47,12 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
       setCatalogPage(response);
       setCatalogActiveSearch(trimmedSearch);
       setSelectedTrackId((current) => {
-        if (response.items.length === 0) return "";
+        if (response.items.length === 0) {
+          if (trimmedSearch.length > 0 && current) return current;
+          return "";
+        }
         if (current && response.items.some((item) => item.track_id === current)) return current;
+        if (trimmedSearch.length > 0 && current) return current;
         return response.items[0].track_id;
       });
       return response;

@@ -27,7 +27,7 @@ export {
 } from "./qc";
 
 export { publisherCreateDraftFromTrack } from "./publisher";
-export { invokeCommand, isUiAppError } from "./core";
+export { invokeCommand, isUiAppError, runtimeGetErrorLogPath, runtimeLogError } from "./core";
 
 export {
   getPlaybackContext,
@@ -106,4 +106,5 @@ export type {
   VideoRenderValidationIssue,
   VideoRenderValidationIssueCode
 } from "./video";
+
 

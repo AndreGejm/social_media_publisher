@@ -179,10 +179,6 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
         }
 
         setPlayerError(null);
-        onNotice({
-          level: "success",
-          message: "Playback started."
-        });
       } catch (error) {
         const message = sanitizeUiErrorMessage(error, "Unable to start playback for this file.");
         setPlayerError(message);

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PublisherOpsWorkspace from "./PublisherOpsWorkspace";
 
@@ -203,7 +203,7 @@ describe("PublisherOpsWorkspace", () => {
   it("renders the phase 1 shell", () => {
     render(<PublisherOpsWorkspace />);
 
-    expect(screen.getByRole("heading", { name: "Release Publisher" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Skald" })).toBeInTheDocument();
     expect(screen.getByText(/Phase 6 workflow UI/i)).toBeInTheDocument();
   });
 
@@ -1012,6 +1012,7 @@ describe("PublisherOpsWorkspace", () => {
     expect(sharedTransport.seekToRatio).toHaveBeenCalled();
   });
 });
+
 
 
 

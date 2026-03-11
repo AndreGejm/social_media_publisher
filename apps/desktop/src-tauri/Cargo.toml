@@ -2,6 +2,12 @@
 name = "release-publisher-desktop"
 version = "0.2.0"
 edition = "2021"
+autobins = false
+default-run = "Skald"
+
+[[bin]]
+name = "Skald"
+path = "src/main.rs"
 
 [lib]
 name = "release_publisher_desktop_lib"
@@ -12,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
+chrono.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tauri = { version = "2", features = ["isolation", "protocol-asset"] }
@@ -32,3 +39,5 @@ tauri-build = { version = "2", features = ["isolation"] }
 [dev-dependencies]
 tempfile = "3"
 sqlx.workspace = true
+
+

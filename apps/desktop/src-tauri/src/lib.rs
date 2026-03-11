@@ -3,17 +3,15 @@
 //! Tauri desktop application bootstrap and command registration.
 
 mod commands;
-
-use tracing_subscriber::{fmt, EnvFilter};
+mod runtime_error_log;
 
 /// Boots the Tauri desktop application and registers the audited IPC command surface.
 pub fn run() {
-    let _ = fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_target(false)
-        .try_init();
-
     let app = tauri::Builder::default()
+        .setup(|app| {
+            runtime_error_log::initialize(app.handle());
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::load_spec,
@@ -24,6 +22,8 @@ pub fn run() {
             commands::analyze_audio_file,
             commands::analyze_and_persist_release_track,
             commands::get_release_track_analysis,
+            commands::runtime_log_error,
+            commands::runtime_get_error_log_path,
             commands::init_exclusive_device,
             commands::acquire_audio_device_lock,
             commands::release_audio_device_lock,
@@ -72,5 +72,3 @@ pub fn run() {
         std::process::exit(1);
     }
 }
-
-

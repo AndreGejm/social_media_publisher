@@ -1,4 +1,4 @@
-﻿param(
+param(
   [switch]$SkipInstall,
   [string]$BundleTargets = "nsis",
   [string]$ArtifactsRoot = "artifacts"
@@ -46,10 +46,10 @@ Invoke-Checked pnpm.cmd tauri build --bundles $BundleTargets
 
 $tauriTarget = Join-Path $repoRoot "target\release"
 $bundleDir = Join-Path $tauriTarget "bundle"
-$exePath = Join-Path $tauriTarget "release-publisher-desktop.exe"
+$exePath = Join-Path $tauriTarget "Skald.exe"
 
 if (Test-Path $exePath) {
-  Copy-Item $exePath -Destination (Join-Path $dest "release-publisher-desktop.exe") -Force
+  Copy-Item $exePath -Destination (Join-Path $dest "Skald.exe") -Force
 }
 if (Test-Path $bundleDir) {
   $bundleDest = Join-Path $dest "bundle"

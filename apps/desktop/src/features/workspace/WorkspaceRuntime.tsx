@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
+import desktopPackageJson from "../../../package.json";
 import { readStorage } from "../../app/state/localStorage";
 import {
   PublisherOpsWorkspace,
@@ -70,6 +71,7 @@ import {
   type CatalogTrackDetailResponse,
   type LibraryRootResponse,
   type PublisherCreateDraftFromTrackResponse,
+  type VideoRenderEnvironmentDiagnostics,
   type UiAppError
 } from "../../services/tauri/tauriClient";
 import { useTauriClient } from "../../services/tauri/TauriClientProvider";
@@ -154,6 +156,16 @@ const STORAGE_KEYS = {
 
 type AppNotice = { level: "info" | "success" | "warning"; message: string };
 
+type NavigatorWithUaData = Navigator & {
+  userAgentData?: {
+    platform?: string;
+    architecture?: string;
+  };
+};
+
+const ABOUT_RUNTIME_LABEL = "Tauri desktop + Rust core";
+const ABOUT_AUDIO_ENGINE_LABEL = "Native Rust playback pipeline (Symphonia decode + WASAPI/CPAL output)";
+const ABOUT_COPY_FEEDBACK_DURATION_MS = 2400;
 
 
 function isWorkspace(value: unknown): value is Workspace {
@@ -367,6 +379,11 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   const [trackDetailEditMode, setTrackDetailEditMode] = useState(false);
   const [publisherOpsBooted, setPublisherOpsBooted] = useState(false);
 
+  const [aboutDiagnostics, setAboutDiagnostics] = useState<VideoRenderEnvironmentDiagnostics | null>(null);
+  const [aboutDiagnosticsStatus, setAboutDiagnosticsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [aboutRuntimeErrorLogPath, setAboutRuntimeErrorLogPath] = useState<string>("Resolving...");
+  const [aboutCopyFeedback, setAboutCopyFeedback] = useState<string | null>(null);
+
   const [publisherDraftPrefill, setPublisherDraftPrefill] = useState<PublisherCreateDraftFromTrackResponse | null>(null);
   const {
     modeWorkspaces,
@@ -414,12 +431,24 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   });
   const favoriteTrackIdSet = useMemo(() => new Set(favoriteTrackIds), [favoriteTrackIds]);
   const batchSelectedTrackIdSet = useMemo(() => new Set(batchSelectedTrackIds), [batchSelectedTrackIds]);
-  const visibleTracks = useMemo(() => {
+  const queueSourceTracks = useMemo(() => {
     const filtered = showFavoritesOnly
       ? catalogPage.items.filter((item) => favoriteTrackIdSet.has(item.track_id))
       : catalogPage.items;
-    return rankCatalogTracksBySearch(filtered, deferredTrackSearch, trackSort, trackGroupMode);
-  }, [catalogPage.items, deferredTrackSearch, favoriteTrackIdSet, showFavoritesOnly, trackSort, trackGroupMode]);
+    return rankCatalogTracksBySearch(filtered, "", trackSort, trackGroupMode);
+  }, [catalogPage.items, favoriteTrackIdSet, showFavoritesOnly, trackSort, trackGroupMode]);
+  const visibleTracks = useMemo(
+    () => rankCatalogTracksBySearch(queueSourceTracks, deferredTrackSearch, trackSort, trackGroupMode),
+    [deferredTrackSearch, queueSourceTracks, trackSort, trackGroupMode]
+  );
+  const catalogTracksById = useMemo(
+    () => new Map(catalogPage.items.map((item) => [item.track_id, item] as const)),
+    [catalogPage.items]
+  );
+  const queueSourceTracksById = useMemo(
+    () => new Map(queueSourceTracks.map((item) => [item.track_id, item] as const)),
+    [queueSourceTracks]
+  );
   const visibleTracksById = useMemo(
     () => new Map(visibleTracks.map((item) => [item.track_id, item] as const)),
     [visibleTracks]
@@ -434,10 +463,10 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   );
   const queue = useMemo(() => {
     const sessionQueue = sessionQueueTrackIds
-      .map((trackId) => visibleTracksById.get(trackId))
+      .map((trackId) => queueSourceTracksById.get(trackId))
       .filter((item): item is CatalogListTracksResponse["items"][number] => Boolean(item));
-    return sessionQueue.length > 0 ? sessionQueue : visibleTracks;
-  }, [sessionQueueTrackIds, visibleTracks, visibleTracksById]);
+    return sessionQueue.length > 0 ? sessionQueue : queueSourceTracks;
+  }, [queueSourceTracks, queueSourceTracksById, sessionQueueTrackIds]);
   const isQueueMode = playListMode === "queue";
   const activePlayListItems = useMemo(
     () => (isQueueMode ? queue : visibleTracks),
@@ -672,6 +701,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     themeVariantPreference,
     albumGroups,
     setSelectedAlbumKey,
+    catalogTracksById,
     visibleTracksById,
     setSessionQueueTrackIds,
     setBatchSelectedTrackIds,
@@ -706,7 +736,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     queueIndexByTrackId,
     sessionQueueTrackIds,
     setSessionQueueTrackIds,
-    visibleTracksById,
+    queueTracksById: queueSourceTracksById,
     onQueueFeedback: noteListenQueueAction,
     onNotice: showNotice
   });
@@ -724,7 +754,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     playAlbumGroup
   } = usePlayListActions({
     queue,
-    visibleTracksById,
+    queueTracksById: queueSourceTracksById,
     orderedBatchSelectionIds,
     selectedAlbumBatchTrackIds,
     contextMenuTrack,
@@ -788,6 +818,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   }, [refreshLibraryRootsAction]);
 
   const trackSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeTrackEndHandledSourceKeyRef = useRef<string | null>(null);
   useDroppedIngestAutoplayController({
     activeScanJobs,
     setActiveScanJobs,
@@ -1099,11 +1130,11 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     })();
   };
   const handlePlayerPrev = useCallback(
-    () => setPlayerTrackFromQueueIndex(Math.max(0, queueIndex - 1)),
+    () => setPlayerTrackFromQueueIndex(Math.max(0, queueIndex - 1), { autoplay: true }),
     [queueIndex, setPlayerTrackFromQueueIndex]
   );
   const handlePlayerNext = useCallback(
-    () => setPlayerTrackFromQueueIndex(Math.min(queue.length - 1, queueIndex + 1)),
+    () => setPlayerTrackFromQueueIndex(Math.min(queue.length - 1, queueIndex + 1), { autoplay: true }),
     [queue.length, queueIndex, setPlayerTrackFromQueueIndex]
   );
   useEffect(() => {
@@ -1189,11 +1220,260 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   const handlePlayerAudioEnded = () => {
     setPlayerIsPlaying(false);
     if (queueIndex >= 0 && queueIndex < queue.length - 1) {
-      setPlayerTrackFromQueueIndex(queueIndex + 1);
+      setPlayerTrackFromQueueIndex(queueIndex + 1, { autoplay: true });
     } else {
       setPlayerTimeSec(0);
     }
   };
+
+  useEffect(() => {
+    if (!nativeTransportEnabled) {
+      nativeTrackEndHandledSourceKeyRef.current = null;
+      return;
+    }
+
+    if (!playerSource || !latestPlaybackContext) return;
+    if (queueIndex < 0 || latestPlaybackContext.active_queue_index !== queueIndex) return;
+
+    const durationSecondsRaw = latestPlaybackContext.track_duration_seconds;
+    const positionSecondsRaw = latestPlaybackContext.position_seconds;
+    if (
+      typeof durationSecondsRaw !== "number" ||
+      !Number.isFinite(durationSecondsRaw) ||
+      durationSecondsRaw <= 0 ||
+      typeof positionSecondsRaw !== "number" ||
+      !Number.isFinite(positionSecondsRaw)
+    ) {
+      return;
+    }
+
+    const durationSeconds = durationSecondsRaw;
+    const positionSeconds = positionSecondsRaw;
+    const sourceKey = playerSource.key;
+    const endThresholdSeconds = Math.max(0.05, Math.min(0.25, durationSeconds * 0.02));
+    const hasReachedTrackEnd = positionSeconds >= durationSeconds - endThresholdSeconds;
+
+    if (!hasReachedTrackEnd) {
+      if (nativeTrackEndHandledSourceKeyRef.current === sourceKey) {
+        nativeTrackEndHandledSourceKeyRef.current = null;
+      }
+      return;
+    }
+
+    if (!latestPlaybackContext.is_playing && !playerIsPlaying) {
+      return;
+    }
+
+    if (nativeTrackEndHandledSourceKeyRef.current === sourceKey) {
+      return;
+    }
+    nativeTrackEndHandledSourceKeyRef.current = sourceKey;
+
+    if (queueIndex < queue.length - 1) {
+      setPlayerTrackFromQueueIndex(queueIndex + 1, { autoplay: true });
+      return;
+    }
+
+    setPlayerIsPlaying(false);
+    setPlayerTimeSec(0);
+    void setNativePlaybackPlaying(false).catch((error) => {
+      setPlayerError(normalizeWorkspaceUiError(error).message);
+    });
+  }, [
+    latestPlaybackContext,
+    nativeTransportEnabled,
+    playerIsPlaying,
+    playerSource,
+    queue.length,
+    queueIndex,
+    setNativePlaybackPlaying,
+    setPlayerError,
+    setPlayerIsPlaying,
+    setPlayerTimeSec,
+    setPlayerTrackFromQueueIndex
+  ]);
+
+  useEffect(() => {
+    if (activeWorkspace !== "About") return;
+    if (aboutDiagnosticsStatus === "loading" || aboutDiagnosticsStatus === "ready") return;
+
+    const diagnosticsFn = (
+      tauriClient as Partial<{
+        videoRenderGetEnvironmentDiagnostics: (
+          outputDirectoryPath?: string | null
+        ) => Promise<VideoRenderEnvironmentDiagnostics>;
+      }>
+    ).videoRenderGetEnvironmentDiagnostics;
+
+    if (typeof diagnosticsFn !== "function") {
+      setAboutDiagnosticsStatus("error");
+      return;
+    }
+
+    let cancelled = false;
+    setAboutDiagnosticsStatus("loading");
+
+    diagnosticsFn(null)
+      .then((diagnostics) => {
+        if (cancelled) return;
+        setAboutDiagnostics(diagnostics);
+        setAboutDiagnosticsStatus("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAboutDiagnostics(null);
+        setAboutDiagnosticsStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace, aboutDiagnosticsStatus, tauriClient]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pathFn = (
+      tauriClient as Partial<{
+        runtimeGetErrorLogPath: () => Promise<string>;
+      }>
+    ).runtimeGetErrorLogPath;
+
+    if (typeof pathFn !== "function") {
+      setAboutRuntimeErrorLogPath("Unavailable in browser preview");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    pathFn()
+      .then((path) => {
+        if (cancelled) return;
+        setAboutRuntimeErrorLogPath(path);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAboutRuntimeErrorLogPath("Unavailable");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tauriClient]);
+
+  useEffect(() => {
+    if (!aboutCopyFeedback) return;
+    const timer = window.setTimeout(() => {
+      setAboutCopyFeedback((current) => (current === aboutCopyFeedback ? null : current));
+    }, ABOUT_COPY_FEEDBACK_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [aboutCopyFeedback]);
+
+  const aboutVersion =
+    typeof __SKALD_APP_VERSION__ === "string" && __SKALD_APP_VERSION__.trim().length > 0
+      ? __SKALD_APP_VERSION__
+      : desktopPackageJson.version;
+  const aboutBuildDate =
+    typeof __SKALD_BUILD_DATE__ === "string" && __SKALD_BUILD_DATE__.trim().length > 0
+      ? __SKALD_BUILD_DATE__
+      : "Unknown";
+
+  const aboutSystemProfile = useMemo(() => {
+    if (typeof navigator === "undefined") {
+      return {
+        platform: "Unknown",
+        architecture: "Unknown"
+      };
+    }
+
+    const navigatorWithUaData = navigator as NavigatorWithUaData;
+    const userAgent = navigator.userAgent.toLowerCase();
+    const architecture =
+      navigatorWithUaData.userAgentData?.architecture ??
+      (userAgent.includes("arm64") || userAgent.includes("aarch64")
+        ? "arm64"
+        : userAgent.includes("x64") || userAgent.includes("x86_64") || userAgent.includes("win64")
+          ? "x64"
+          : userAgent.includes("x86") || userAgent.includes("i686")
+            ? "x86"
+            : "Unknown");
+
+    return {
+      platform: navigatorWithUaData.userAgentData?.platform ?? navigator.platform ?? "Unknown",
+      architecture
+    };
+  }, []);
+
+  const aboutFfmpegVersion =
+    aboutDiagnosticsStatus === "loading"
+      ? "Loading diagnostics..."
+      : aboutDiagnostics?.ffmpeg.version?.split("\n")[0] ?? "Unavailable";
+
+  const aboutFfmpegSource =
+    aboutDiagnosticsStatus === "loading"
+      ? "Checking..."
+      : aboutDiagnostics?.ffmpeg.source ?? "Unavailable";
+
+  const aboutRenderCapability =
+    aboutDiagnosticsStatus === "loading"
+      ? "Checking..."
+      : aboutDiagnostics
+        ? aboutDiagnostics.renderCapable
+          ? "Available"
+          : "Blocked"
+        : "Unknown";
+
+  const aboutSystemInfoText = useMemo(
+    () =>
+      [
+        `Skald QC ${aboutVersion}`,
+        `Build Date: ${aboutBuildDate}`,
+        `Runtime: ${ABOUT_RUNTIME_LABEL}`,
+        `Audio Engine: ${ABOUT_AUDIO_ENGINE_LABEL}`,
+        `Platform: ${aboutSystemProfile.platform}`,
+        `Architecture: ${aboutSystemProfile.architecture}`,
+        `FFmpeg: ${aboutFfmpegVersion}`,
+        `FFmpeg Source: ${aboutFfmpegSource}`,
+        `Render Capability: ${aboutRenderCapability}`,
+        `Runtime Error Log: ${aboutRuntimeErrorLogPath}`,
+        aboutDiagnostics?.ffmpeg.executablePath
+          ? `FFmpeg Path: ${aboutDiagnostics.ffmpeg.executablePath}`
+          : "FFmpeg Path: unavailable"
+      ].join("\n"),
+    [
+      aboutVersion,
+      aboutBuildDate,
+      aboutSystemProfile.platform,
+      aboutSystemProfile.architecture,
+      aboutFfmpegVersion,
+      aboutFfmpegSource,
+      aboutRenderCapability,
+      aboutRuntimeErrorLogPath,
+      aboutDiagnostics?.ffmpeg.executablePath
+    ]
+  );
+
+  const copyAboutSystemInfo = useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setAboutCopyFeedback("Clipboard is unavailable in this runtime.");
+      return;
+    }
+
+    void navigator.clipboard
+      .writeText(aboutSystemInfoText)
+      .then(() => {
+        setAboutCopyFeedback("System info copied.");
+      })
+      .catch(() => {
+        setAboutCopyFeedback("Failed to copy system info.");
+      });
+  }, [aboutSystemInfoText]);
+
+  const refreshAboutDiagnostics = () => {
+    setAboutDiagnosticsStatus("idle");
+  };
+
+  const showPublishWorkflowChrome =
+    activeMode === "Publish" && activeWorkspace === "Publisher Ops";
   const closeTrackRowContextMenu = () => setTrackRowContextMenu(null);
   const showListenMode = () => {
     switchAppMode("Listen");
@@ -1248,7 +1528,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
 
   return (
     <div
-      className={`music-shell${compactDensity ? " compact" : ""}${activeMode === "Publish" ? " with-right-dock" : ""}`}
+      className={`music-shell${compactDensity ? " compact" : ""}${showPublishWorkflowChrome ? " with-right-dock" : ""}`}
       data-layout-tier={shellFrame?.layoutTier ?? "standard"}
       data-refresh-tick={shellFrame?.refreshTick ?? 0}
     >
@@ -1355,12 +1635,14 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
         ) : null}
 
         <main className="workspace-content">
-          <PublishStepShell
-            activeMode={activeMode}
-            publishShellStep={publishShellStep}
-            publishWorkflowSteps={publishWorkflowSteps}
-            onPublishShellStepChange={handlePublishShellStepChange}
-          />
+          {showPublishWorkflowChrome ? (
+            <PublishStepShell
+              activeMode={activeMode}
+              publishShellStep={publishShellStep}
+              publishWorkflowSteps={publishWorkflowSteps}
+              onPublishShellStepChange={handlePublishShellStepChange}
+            />
+          ) : null}
 
           <LibraryHomeSection
             hidden={activeMode !== "Listen" || activeWorkspace !== "Library"}
@@ -1550,8 +1832,104 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
             }}
           />
 
-          <section hidden={activeWorkspace !== "About"} className="workspace-section placeholder-workspace">
-            <h3>About</h3>
+          <section hidden={activeWorkspace !== "About"} className="workspace-section placeholder-workspace about-workspace">
+            <header className="about-workspace-header">
+              <h3>Skald QC</h3>
+              <p className="about-workspace-tagline">Codec Preview, Quality Control &amp; Multi-Platform Publishing</p>
+              <p className="helper-text">
+                Skald QC is a desktop tool for codec verification, quality control, and multi-platform publishing workflows.
+              </p>
+            </header>
+
+            <div className="about-workspace-grid">
+              <section className="about-workspace-card" aria-label="Version Information">
+                <h4>Version Information</h4>
+                <dl className="about-kv-list">
+                  <div>
+                    <dt>Application</dt>
+                    <dd>{aboutVersion}</dd>
+                  </div>
+                  <div>
+                    <dt>Build date</dt>
+                    <dd>{aboutBuildDate}</dd>
+                  </div>
+                  <div>
+                    <dt>Runtime</dt>
+                    <dd>{ABOUT_RUNTIME_LABEL}</dd>
+                  </div>
+                  <div>
+                    <dt>Audio Engine</dt>
+                    <dd>{ABOUT_AUDIO_ENGINE_LABEL}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section className="about-workspace-card" aria-label="System Information">
+                <h4>System Information</h4>
+                <dl className="about-kv-list">
+                  <div>
+                    <dt>Platform</dt>
+                    <dd>{aboutSystemProfile.platform}</dd>
+                  </div>
+                  <div>
+                    <dt>Architecture</dt>
+                    <dd>{aboutSystemProfile.architecture}</dd>
+                  </div>
+                  <div>
+                    <dt>FFmpeg</dt>
+                    <dd>{aboutFfmpegVersion}</dd>
+                  </div>
+                  <div>
+                    <dt>FFmpeg Source</dt>
+                    <dd>{aboutFfmpegSource}</dd>
+                  </div>
+                  <div>
+                    <dt>Render Capability</dt>
+                    <dd>{aboutRenderCapability}</dd>
+                  </div>
+                  <div>
+                    <dt>Runtime Error Log</dt>
+                    <dd>{aboutRuntimeErrorLogPath}</dd>
+                  </div>
+                </dl>
+                {aboutDiagnosticsStatus === "error" ? (
+                  <p className="helper-text">Environment diagnostics are unavailable in this runtime.</p>
+                ) : null}
+              </section>
+
+              <section className="about-workspace-card" aria-label="License Information">
+                <h4>License Information</h4>
+                <dl className="about-kv-list">
+                  <div>
+                    <dt>License</dt>
+                    <dd>Proprietary</dd>
+                  </div>
+                  <div>
+                    <dt>Copyright</dt>
+                    <dd>Lauridsen Production</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section className="about-workspace-card" aria-label="Resources">
+                <h4>Resources</h4>
+                <p className="helper-text">Copy diagnostics before sending a user report to speed up reproduction.</p>
+                <div className="about-workspace-actions">
+                  <button type="button" className="secondary-action compact" onClick={copyAboutSystemInfo}>
+                    Copy System Info
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action compact"
+                    onClick={refreshAboutDiagnostics}
+                    disabled={aboutDiagnosticsStatus === "loading"}
+                  >
+                    Refresh Diagnostics
+                  </button>
+                </div>
+                {aboutCopyFeedback ? <p className="about-copy-feedback">{aboutCopyFeedback}</p> : null}
+              </section>
+            </div>
           </section>
 
           {publisherOpsBooted || activeWorkspace === "Publisher Ops" ? (
@@ -1568,7 +1946,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
           ) : null}
         </main>
 
-        {activeMode === "Listen" ? (
+        {activeMode === "Listen" && activeWorkspace !== "About" ? (
           <SharedPlayerBar
             playerSource={playerSource}
             playerIsPlaying={playerIsPlaying}
@@ -1604,7 +1982,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
       </div>
 
       <PublishSelectionDock
-        visible={activeMode === "Publish"}
+        visible={showPublishWorkflowChrome}
         publishSelectionItems={publishSelectionItems}
         activeDraftTrackId={publisherDraftPrefill?.source_track_id ?? null}
         onClearSelection={clearPublishSelection}
@@ -1629,43 +2007,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -1,4 +1,4 @@
-﻿param(
+param(
   [switch]$SkipInstall,
   [switch]$SkipRuntimeE2E
 )
@@ -53,9 +53,9 @@ if ($LASTEXITCODE -ne 0) {
 
 if (-not $SkipRuntimeE2E) {
   $today = Get-Date -Format "yyyyMMdd"
-  $exe = Join-Path $repoRoot ("artifacts\\windows\\$today\\release-publisher-desktop.exe")
+  $exe = Join-Path $repoRoot ("artifacts\\windows\\$today\\Skald.exe")
   if (-not (Test-Path $exe)) {
-    $exe = Join-Path $repoRoot "target\release\release-publisher-desktop.exe"
+    $exe = Join-Path $repoRoot "target\release\Skald.exe"
   }
   & (Join-Path $PSScriptRoot "runtime-e2e\run-tauri-runtime-e2e.ps1") -AppExePath $exe -SkipBuild
   if ($LASTEXITCODE -ne 0) {

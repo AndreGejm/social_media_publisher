@@ -24,7 +24,7 @@ type AlbumGroupPlaybackInput = {
 
 type UsePlayListActionsArgs = {
   queue: QueueTrack[];
-  visibleTracksById: Map<string, QueueTrack>;
+  queueTracksById: Map<string, QueueTrack>;
   orderedBatchSelectionIds: string[];
   selectedAlbumBatchTrackIds: string[];
   contextMenuTrack: QueueTrack | null;
@@ -110,7 +110,7 @@ export function usePlayListActions(args: UsePlayListActionsArgs) {
       return next.filter((id) => {
         if (seen.has(id)) return false;
         seen.add(id);
-        return args.visibleTracksById.has(id);
+        return args.queueTracksById.has(id);
       });
     });
     args.setPlayerExternalSource(null);

@@ -12,7 +12,7 @@ type UseQueueStateArgs = {
   queueIndexByTrackId: Map<string, number>;
   sessionQueueTrackIds: string[];
   setSessionQueueTrackIds: Dispatch<SetStateAction<string[]>>;
-  visibleTracksById: Map<string, QueueTrack>;
+  queueTracksById: Map<string, QueueTrack>;
   onQueueFeedback: (message: string) => void;
   onNotice: (notice: AppNotice) => void;
 };
@@ -24,7 +24,7 @@ export function useQueueState(args: UseQueueStateArgs) {
     queueIndexByTrackId,
     sessionQueueTrackIds,
     setSessionQueueTrackIds,
-    visibleTracksById,
+    queueTracksById,
     onQueueFeedback,
     onNotice
   } = args;
@@ -41,12 +41,12 @@ export function useQueueState(args: UseQueueStateArgs) {
       const next = trackIds.filter((trackId) => {
         if (seen.has(trackId)) return false;
         seen.add(trackId);
-        return visibleTracksById.has(trackId);
+        return queueTracksById.has(trackId);
       });
       setSessionQueueTrackIds(next);
       return next;
     },
-    [setSessionQueueTrackIds, visibleTracksById]
+    [setSessionQueueTrackIds, queueTracksById]
   );
 
   const appendTracksToSessionQueue = useCallback(
@@ -64,7 +64,7 @@ export function useQueueState(args: UseQueueStateArgs) {
 
   const enqueueTracksNext = useCallback(
     (trackIds: string[]) => {
-      const uniqueTrackIds = [...new Set(trackIds)].filter((id) => visibleTracksById.has(id));
+      const uniqueTrackIds = [...new Set(trackIds)].filter((id) => queueTracksById.has(id));
       if (uniqueTrackIds.length === 0) return;
       const uniqueTrackIdSet = new Set(uniqueTrackIds);
       const base = materializeSessionQueueBase().filter((id) => !uniqueTrackIdSet.has(id));
@@ -78,7 +78,7 @@ export function useQueueState(args: UseQueueStateArgs) {
       onQueueFeedback(message);
       onNotice({ level: "success", message });
     },
-    [visibleTracksById, materializeSessionQueueBase, queueIndex, setSessionQueueFromTrackIds, onQueueFeedback, onNotice]
+    [queueTracksById, materializeSessionQueueBase, queueIndex, setSessionQueueFromTrackIds, onQueueFeedback, onNotice]
   );
 
   const enqueueTrackNext = useCallback(

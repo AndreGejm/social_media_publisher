@@ -121,6 +121,29 @@ impl PlaybackControlPlane {
 
         #[cfg(target_os = "windows")]
         {
+            let previous_engine = {
+                let mut guard = self.audio_engine.write().map_err(|_| {
+                    AppError::new(
+                        app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                        "failed to update audio playback engine state",
+                    )
+                })?;
+                guard.take()
+            };
+            if let Some(previous) = previous_engine {
+                previous.shutdown();
+            }
+
+            {
+                let mut guard = self.hardware_state.write().map_err(|_| {
+                    AppError::new(
+                        app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
+                        "failed to clear playback hardware state",
+                    )
+                })?;
+                *guard = None;
+            }
+
             let candidates = wasapi_exclusive_fallback_candidates(target_rate_hz, target_bit_depth);
             let mut startup_attempt_errors: Vec<String> = Vec::new();
             let mut selected_config: Option<(AudioEngineContext, u32, u32, u16, usize)> = None;
@@ -172,17 +195,15 @@ impl PlaybackControlPlane {
                     "WASAPI requested format unsupported; using fallback format"
                 );
             }
-            let previous_engine = {
+
+            {
                 let mut guard = self.audio_engine.write().map_err(|_| {
                     AppError::new(
                         app_error_codes::EXCLUSIVE_AUDIO_UNAVAILABLE,
                         "failed to update audio playback engine state",
                     )
                 })?;
-                guard.replace(engine)
-            };
-            if let Some(previous) = previous_engine {
-                previous.shutdown();
+                *guard = Some(engine);
             }
 
             let hardware = AudioHardwareState {
@@ -203,7 +224,6 @@ impl PlaybackControlPlane {
             Ok(hardware)
         }
     }
-
     pub(crate) fn release_audio_device_lock(&self) -> Result<(), AppError> {
         let previous_engine = {
             let mut guard = self.audio_engine.write().map_err(|_| {
@@ -307,14 +327,22 @@ impl PlaybackControlPlane {
             *queue_guard = normalized.clone();
         }
 
+        // Queue sync is a recovery boundary: clear stale decode errors that might refer
+        // to previous queue/index combinations.
+        self.set_decode_error(None);
+
         if normalized.is_empty() {
             if let Ok(mut decoded_guard) = self.decoded_track.write() {
                 *decoded_guard = None;
             }
             self.playback_frame_cursor.store(0, Ordering::Release);
             self.transport_playing.store(false, Ordering::Release);
-            self.set_decode_error(None);
             self.active_queue_index.store(0, Ordering::Release);
+        } else {
+            let current_index = self.active_queue_index.load(Ordering::Acquire) as usize;
+            let clamped_index = current_index.min(normalized.len().saturating_sub(1)) as u32;
+            self.active_queue_index
+                .store(clamped_index, Ordering::Release);
         }
 
         Ok(PlaybackQueueState {
@@ -547,6 +575,13 @@ impl PlaybackControlPlane {
                     return;
                 }
             };
+
+            if queue_guard.is_empty() {
+                // Empty queue is a valid idle state (common during startup/recovery).
+                self.set_decode_error(None);
+                return;
+            }
+
             match queue_guard.get(queue_index as usize) {
                 Some(item) => item.clone(),
                 None => {
@@ -602,4 +637,3 @@ pub(crate) fn shared_playback_control() -> Arc<PlaybackControlPlane> {
     static CONTROL: OnceLock<Arc<PlaybackControlPlane>> = OnceLock::new();
     Arc::clone(CONTROL.get_or_init(PlaybackControlPlane::new))
 }
-

@@ -35,7 +35,8 @@ pub(crate) fn video_render_result(job_id: String) -> Result<VideoRenderResultRes
 pub(crate) fn video_render_get_environment_diagnostics(
     output_directory_path: Option<String>,
 ) -> Result<VideoRenderDiagnosticsResponse, AppError> {
-    runtime::shared_video_render_runtime().get_environment_diagnostics(output_directory_path.as_deref())
+    runtime::shared_video_render_runtime()
+        .get_environment_diagnostics(output_directory_path.as_deref())
 }
 
 pub(crate) fn video_render_check_source_path(

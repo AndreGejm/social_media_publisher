@@ -1,4 +1,3 @@
-
 use super::*;
 use release_publisher_core::secrets::{
     InMemorySecretStore, SecretRecord, SecretStore, SecretValue,
@@ -223,6 +222,48 @@ fn playback_control_set_playback_queue_empty_clears_decode_error() {
     );
 }
 
+#[test]
+fn playback_control_set_playback_queue_clamps_active_index_and_clears_stale_decode_error() {
+    let control = PlaybackControlPlane::new();
+    let _ = control
+        .set_playback_queue(vec!["C:\\audio\\one.wav".to_string()])
+        .expect("queue set should succeed");
+    assert!(
+        control
+            .push_track_change_request(9)
+            .expect("queue request should succeed"),
+        "track-change request should be accepted"
+    );
+
+    let err = control
+        .set_playback_playing(true)
+        .expect_err("out-of-range queued index should fail decode");
+    assert_eq!(err.code, app_error_codes::PLAYBACK_QUEUE_REQUEST_REJECTED);
+    assert!(
+        err.message
+            .contains("requested queue index 9 is out of range"),
+        "error message should capture stale out-of-range decode state"
+    );
+    assert_eq!(
+        control.context_state().active_queue_index,
+        9,
+        "stale active index should be visible before queue recovery"
+    );
+
+    let state = control
+        .set_playback_queue(vec!["C:\\audio\\replacement.wav".to_string()])
+        .expect("queue reset should succeed");
+    assert_eq!(state.total_tracks, 1);
+    assert_eq!(
+        control.context_state().active_queue_index,
+        0,
+        "queue update should clamp stale active index into bounds"
+    );
+    assert!(
+        control.decode_error().is_none(),
+        "queue update should clear stale decode errors"
+    );
+}
 #[test]
 fn playback_control_set_playback_queue_rejects_oversized_queue() {
     let control = PlaybackControlPlane::new();
@@ -1633,6 +1674,78 @@ async fn catalog_cancel_ingest_job_marks_job_canceled_and_prevents_scan_run() {
 }
 
 #[tokio::test]
+async fn command_service_startup_marks_incomplete_ingest_jobs_failed() {
+    let dir = tempdir().expect("tempdir");
+    let runtime_dir = dir.path().join("runtime");
+
+    let service1 = CommandService::for_base_dir(runtime_dir.clone())
+        .await
+        .expect("service1");
+    let pending_job_id = "a".repeat(64);
+    let running_job_id = "b".repeat(64);
+
+    service1
+        .db
+        .create_ingest_job(&NewIngestJob {
+            job_id: pending_job_id.clone(),
+            status: DbIngestJobStatus::Pending,
+            scope: "CATALOG_SCAN_ROOT".to_string(),
+            total_items: 243,
+            processed_items: 120,
+            error_count: 3,
+        })
+        .await
+        .expect("create pending ingest job");
+    service1
+        .db
+        .create_ingest_job(&NewIngestJob {
+            job_id: running_job_id.clone(),
+            status: DbIngestJobStatus::Running,
+            scope: "CATALOG_SCAN_ROOT".to_string(),
+            total_items: 243,
+            processed_items: 200,
+            error_count: 0,
+        })
+        .await
+        .expect("create running ingest job");
+
+    drop(service1);
+
+    let service2 = CommandService::for_base_dir(runtime_dir)
+        .await
+        .expect("service2");
+
+    let pending_after_restart = service2
+        .handle_catalog_get_ingest_job(&pending_job_id)
+        .await
+        .expect("fetch pending ingest job")
+        .expect("pending ingest job should exist");
+    assert_eq!(pending_after_restart.status, "FAILED");
+    assert_eq!(pending_after_restart.total_items, 243);
+    assert_eq!(pending_after_restart.processed_items, 120);
+    assert_eq!(pending_after_restart.error_count, 4);
+
+    let running_after_restart = service2
+        .handle_catalog_get_ingest_job(&running_job_id)
+        .await
+        .expect("fetch running ingest job")
+        .expect("running ingest job should exist");
+    assert_eq!(running_after_restart.status, "FAILED");
+    assert_eq!(running_after_restart.total_items, 243);
+    assert_eq!(running_after_restart.processed_items, 200);
+    assert_eq!(running_after_restart.error_count, 1);
+
+    let incomplete_after_restart = service2
+        .db
+        .list_incomplete_ingest_jobs()
+        .await
+        .expect("list incomplete ingest jobs after startup recovery");
+    assert!(
+        incomplete_after_restart.is_empty(),
+        "startup recovery should clear all stale non-terminal ingest jobs"
+    );
+}
+#[tokio::test]
 async fn command_service_analyze_and_persist_release_track_round_trips_release_model() {
     let (service, dir) = new_service().await;
     let spec_path = write_spec_file(dir.path(), "QC Track", "QC Artist").await;
@@ -2723,4 +2836,3 @@ fn resample_stereo_interleaved_frames_converts_44100_to_48000() {
         resampled_frames
     );
 }
-

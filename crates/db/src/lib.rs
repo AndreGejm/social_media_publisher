@@ -1605,6 +1605,22 @@ impl Db {
         .map_err(|e| DbError::map_sqlx(e, "fetch ingest job"))?;
         row.map(map_ingest_job_row).transpose()
     }
+    /// Lists ingest jobs that were left non-terminal (PENDING/RUNNING).
+    pub async fn list_incomplete_ingest_jobs(&self) -> DbResult<Vec<IngestJobRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT job_id, status, scope, total_items, processed_items, error_count, created_at, updated_at
+            FROM ingest_jobs
+            WHERE status IN ('PENDING', 'RUNNING')
+            ORDER BY updated_at ASC, job_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::map_sqlx(e, "list incomplete ingest jobs"))?;
+
+        rows.into_iter().map(map_ingest_job_row).collect()
+    }
 
     /// Appends an ingest event row for audit/progress diagnostics.
     pub async fn append_ingest_event(&self, entry: &NewIngestEvent) -> DbResult<IngestEventRecord> {

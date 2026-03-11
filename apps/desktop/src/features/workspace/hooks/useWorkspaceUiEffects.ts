@@ -31,6 +31,7 @@ type UseWorkspaceUiEffectsArgs = {
   themeVariantPreference: ThemeVariantId;
   albumGroups: AlbumGroup[];
   setSelectedAlbumKey: Dispatch<SetStateAction<string>>;
+  catalogTracksById: Map<string, unknown>;
   visibleTracksById: Map<string, unknown>;
   setSessionQueueTrackIds: Dispatch<SetStateAction<string[]>>;
   setBatchSelectedTrackIds: Dispatch<SetStateAction<string[]>>;
@@ -38,20 +39,9 @@ type UseWorkspaceUiEffectsArgs = {
 };
 
 function applyThemeTokens(root: HTMLElement, tokens: ThemeSemanticTokens): void {
-  root.style.setProperty("--background-primary", tokens.backgroundPrimary);
-  root.style.setProperty("--background-panel", tokens.backgroundPanel);
-  root.style.setProperty("--surface-elevated", tokens.surfaceElevated);
-  root.style.setProperty("--text-primary", tokens.textPrimary);
-  root.style.setProperty("--text-secondary", tokens.textSecondary);
-  root.style.setProperty("--accent-primary", tokens.accentPrimary);
-  root.style.setProperty("--accent-secondary", tokens.accentSecondary);
-  root.style.setProperty("--border-subtle", tokens.borderSubtle);
-  root.style.setProperty("--border-strong", tokens.borderStrong);
-  root.style.setProperty("--success", tokens.success);
-  root.style.setProperty("--warning", tokens.warning);
-  root.style.setProperty("--error", tokens.error);
-  root.style.setProperty("--accent-primary-rgb", tokens.accentPrimaryRgb);
-  root.style.setProperty("--accent-secondary-rgb", tokens.accentSecondaryRgb);
+  Object.entries(tokens).forEach(([tokenName, tokenValue]) => {
+    root.style.setProperty(tokenName, tokenValue);
+  });
 }
 
 export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
@@ -68,6 +58,7 @@ export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
     themeVariantPreference,
     albumGroups,
     setSelectedAlbumKey,
+    catalogTracksById,
     visibleTracksById,
     setSessionQueueTrackIds,
     setBatchSelectedTrackIds,
@@ -117,8 +108,8 @@ export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
   }, [albumGroups, setSelectedAlbumKey]);
 
   useEffect(() => {
-    setSessionQueueTrackIds((current) => current.filter((id) => visibleTracksById.has(id)));
-  }, [setSessionQueueTrackIds, visibleTracksById]);
+    setSessionQueueTrackIds((current) => current.filter((id) => catalogTracksById.has(id)));
+  }, [catalogTracksById, setSessionQueueTrackIds]);
 
   useEffect(() => {
     setBatchSelectedTrackIds((current) => current.filter((id) => visibleTracksById.has(id)));
@@ -127,3 +118,4 @@ export function useWorkspaceUiEffects(args: UseWorkspaceUiEffectsArgs) {
     );
   }, [setBatchSelectedTrackIds, setTrackRowContextMenu, visibleTracksById]);
 }
+

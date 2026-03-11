@@ -576,7 +576,6 @@ impl VideoRenderRuntime {
     ) -> Result<VideoRenderOpenOutputFolderResponse, AppError> {
         open_output_folder_for_file(output_file_path)
     }
-
 }
 
 fn run_render_worker(
@@ -757,7 +756,10 @@ fn bundled_ffmpeg_candidates() -> Vec<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest_candidates = [
         manifest_dir.join("resources").join(binary_name),
-        manifest_dir.join("resources").join("ffmpeg").join(binary_name),
+        manifest_dir
+            .join("resources")
+            .join("ffmpeg")
+            .join(binary_name),
         manifest_dir
             .join("resources")
             .join("ffmpeg")
@@ -2420,5 +2422,3 @@ mod tests {
         assert!(metadata.len() > 0);
     }
 }
-
-
