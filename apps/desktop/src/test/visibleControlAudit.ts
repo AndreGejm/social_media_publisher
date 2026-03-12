@@ -19,7 +19,7 @@ export type VisibleControlAuditItem = {
   name: string | RegExp;
   expectation: "action" | "disabled" | "noop";
   rationale?: string;
-  act?: (element: HTMLElement) => void | Promise<void>;
+  act?: (element: HTMLElement) => void | boolean | Promise<void | boolean>;
   assertAfter?: () => void | Promise<void>;
 };
 
@@ -221,30 +221,49 @@ export async function assertVisibleActionableControls(
     expect(controlIndex, `${scopeLabel}: missing ${control.role} ${String(control.name)}`).toBeGreaterThan(-1);
 
     const [matchedControl] = remainingControls.splice(controlIndex, 1);
-    const element = matchedControl.element;
+    let element = matchedControl.element;
+
+    if (!element.isConnected) {
+      const scope = options?.root ? within(options.root) : screen;
+      const freshCandidates = scope
+        .queryAllByRole(control.role as never)
+        .filter(isVisibleElement)
+        .filter((el) => {
+          const nameMatches =
+            typeof control.name === "string"
+              ? control.name === normalizeName(el)
+              : control.name.test(normalizeName(el));
+          return nameMatches;
+        });
+      if (freshCandidates.length > 0) {
+        element = freshCandidates[0];
+      }
+    }
+
     expect(element, `${scopeLabel}: missing ${control.role} ${String(control.name)}`).toBeVisible();
 
-    if (control.expectation === "disabled") {
-      expect(element, `${scopeLabel}: ${matchedControl.name} should be disabled`).toBeDisabled();
-      continue;
+    try {
+      if (control.expectation === "disabled") {
+        expect(element).toBeDisabled();
+      } else if (control.expectation === "noop") {
+        expect(control.rationale?.trim().length ?? 0).toBeGreaterThan(0);
+      } else {
+        expect(element).not.toBeDisabled();
+      }
+    } catch (err: any) {
+      throw new Error(`Audit failed for ${control.role} "${String(control.name)}\": ${err.message}`);
     }
 
-    if (control.expectation === "noop") {
-      expect(
-        control.rationale?.trim().length ?? 0,
-        `${scopeLabel}: ${matchedControl.name} needs a no-op rationale`
-      ).toBeGreaterThan(0);
-      continue;
-    }
-
-    expect(element, `${scopeLabel}: ${matchedControl.name} should be enabled`).not.toBeDisabled();
-    if (control.act) {
-      await control.act(element);
-    } else {
-      fireEvent.click(element);
-    }
-    if (control.assertAfter) {
-      await control.assertAfter();
+    if (control.expectation !== "disabled" && control.expectation !== "noop") {
+      if (control.act) {
+        await control.act(element);
+      } else {
+        fireEvent.click(element);
+      }
+      if (control.assertAfter) {
+        await control.assertAfter();
+      }
     }
   }
 }
+
