@@ -1,4 +1,3 @@
-import { HelpTooltip } from "../../../shared/ui/HelpTooltip";
 import SectionCollapseToggle from "./SectionCollapseToggle";
 
 type LibraryHomeSectionProps = {
@@ -9,11 +8,6 @@ type LibraryHomeSectionProps = {
   queueCount: number;
   albumGroupsCount: number;
   favoritesCount: number;
-  libraryQuickActionsCollapsed: boolean;
-  onToggleLibraryQuickActionsCollapsed: () => void;
-  onOpenTracksWorkspace: () => void;
-  onOpenAlbumsWorkspace: () => void;
-  onShowPublishMode: () => void;
 };
 
 export default function LibraryHomeSection(props: LibraryHomeSectionProps) {
@@ -65,41 +59,6 @@ export default function LibraryHomeSection(props: LibraryHomeSectionProps) {
           </div>
         </div>
       </div>
-
-      <div className="collapsible-card">
-        <div className="collapsible-card-head">
-          <div>
-            <p className="eyebrow">Library</p>
-            <h3>Quick Actions</h3>
-          </div>
-          <SectionCollapseToggle
-            expanded={!props.libraryQuickActionsCollapsed}
-            onToggle={props.onToggleLibraryQuickActionsCollapsed}
-            label="Quick actions"
-            controlsId="library-quick-actions-panel"
-          />
-        </div>
-        <div id="library-quick-actions-panel" hidden={props.libraryQuickActionsCollapsed} className="collapsible-panel-body">
-          <div className="library-quick-links">
-            <HelpTooltip content="Open Quality Control in Track QC mode (single-track absolute checks).">
-              <button type="button" className="secondary-action" onClick={props.onOpenTracksWorkspace}>
-                Open Track QC
-              </button>
-            </HelpTooltip>
-            <HelpTooltip content="Open Quality Control in Album QC mode (cross-track relational checks).">
-              <button type="button" className="secondary-action" onClick={props.onOpenAlbumsWorkspace}>
-                Open Album QC
-              </button>
-            </HelpTooltip>
-            <HelpTooltip content="Open the existing publisher pipeline workflow (plan/verify/execute/report).">
-              <button type="button" className="secondary-action" onClick={props.onShowPublishMode}>
-                Open Publish Workflow
-              </button>
-            </HelpTooltip>
-          </div>
-        </div>
-      </div>
     </section>
   );
 }
-

@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 
 import { sanitizeUiErrorMessage } from "../../../shared/lib/ui-sanitize";
 import type { UiAppError } from "../../../services/tauri/tauriClient";
@@ -42,6 +42,13 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     playerAudioSrc,
     setAutoplayRequestSourceKey
   } = args;
+  const pendingNativeArmSourceKeyRef = useRef<string | null>(null);
+  const lastHandledAutoplaySourceKeyRef = useRef<string | null>(null);
+  const autoplayInFlightSourceKeyRef = useRef<string | null>(null);
+  const autoplayRequestSourceKeyRef = useRef<string | null>(autoplayRequestSourceKey);
+  const playerSourceKey = playerSource?.key ?? null;
+
+  autoplayRequestSourceKeyRef.current = autoplayRequestSourceKey;
 
   useEffect(() => {
     if (!nativeTransportEnabled) return;
@@ -67,14 +74,18 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
   }, [nativeTransportEnabled, queueFilePaths, setPlaybackQueue, setPlayerError]);
 
   useEffect(() => {
-    if (!playerSource) return;
+    if (!playerSourceKey) return;
+
+    const shouldAutoplaySource = autoplayRequestSourceKeyRef.current === playerSourceKey;
 
     if (nativeTransportEnabled) {
       setPlayerTimeSec((current) => (current === 0 ? current : 0));
-      setPlayerIsPlaying((current) => (current ? false : current));
-      void Promise.resolve(setPlaybackPlaying(false)).catch(() => {
-        // Native transport may become unavailable; polling loop handles fallback/error state.
-      });
+      if (!shouldAutoplaySource) {
+        setPlayerIsPlaying((current) => (current ? false : current));
+        void Promise.resolve(setPlaybackPlaying(false)).catch(() => {
+          // Native transport may become unavailable; polling loop handles fallback/error state.
+        });
+      }
       return;
     }
 
@@ -100,7 +111,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     nativeTransportEnabled,
     playerAudioRef,
     playerAudioSrc,
-    playerSource,
+    playerSourceKey,
     setPlaybackPlaying,
     setPlayerError,
     setPlayerIsPlaying,
@@ -108,10 +119,41 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
   ]);
 
   useEffect(() => {
+    if (!nativeTransportEnabled || !playerSourceKey || !playerTrackId || queueIndex < 0) {
+      pendingNativeArmSourceKeyRef.current = null;
+      if (!playerSourceKey) {
+        lastHandledAutoplaySourceKeyRef.current = null;
+      }
+      return;
+    }
+
+    if (
+      lastHandledAutoplaySourceKeyRef.current &&
+      lastHandledAutoplaySourceKeyRef.current !== playerSourceKey
+    ) {
+      lastHandledAutoplaySourceKeyRef.current = null;
+    }
+
+    if (lastHandledAutoplaySourceKeyRef.current === playerSourceKey) {
+      pendingNativeArmSourceKeyRef.current = null;
+      return;
+    }
+
+    if (autoplayRequestSourceKeyRef.current) {
+      pendingNativeArmSourceKeyRef.current = null;
+      return;
+    }
+
+    pendingNativeArmSourceKeyRef.current = playerSourceKey;
+  }, [nativeTransportEnabled, playerSourceKey, playerTrackId, queueIndex]);
+
+  useEffect(() => {
     if (!nativeTransportEnabled) return;
-    if (!playerSource || !playerTrackId) return;
-    if (autoplayRequestSourceKey) return;
+    if (!playerSourceKey || !playerTrackId) return;
     if (queueIndex < 0) return;
+    if (pendingNativeArmSourceKeyRef.current !== playerSourceKey) return;
+
+    pendingNativeArmSourceKeyRef.current = null;
 
     let cancelled = false;
     const run = async () => {
@@ -131,9 +173,8 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
       cancelled = true;
     };
   }, [
-    autoplayRequestSourceKey,
     nativeTransportEnabled,
-    playerSource,
+    playerSourceKey,
     playerTrackId,
     pushPlaybackTrackChangeRequest,
     queueFilePaths,
@@ -145,7 +186,10 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
 
   useEffect(() => {
     if (!autoplayRequestSourceKey) return;
-    if (!playerSource || autoplayRequestSourceKey !== playerSource.key) return;
+    if (!playerSourceKey || autoplayRequestSourceKey !== playerSourceKey) return;
+    if (autoplayInFlightSourceKeyRef.current === autoplayRequestSourceKey) return;
+
+    autoplayInFlightSourceKeyRef.current = autoplayRequestSourceKey;
 
     const run = async () => {
       try {
@@ -188,8 +232,10 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           message: "Playback failed to start. Check file format support or file access."
         });
       } finally {
+        lastHandledAutoplaySourceKeyRef.current = playerSourceKey;
+        autoplayInFlightSourceKeyRef.current = null;
         setAutoplayRequestSourceKey((current) =>
-          current === playerSource.key ? null : current
+          current === playerSourceKey ? null : current
         );
       }
     };
@@ -201,7 +247,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     onNotice,
     playerAudioRef,
     playerAudioSrc,
-    playerSource,
+    playerSourceKey,
     pushPlaybackTrackChangeRequest,
     queueFilePaths,
     queueIndex,

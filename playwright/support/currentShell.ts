@@ -62,6 +62,11 @@ export async function gotoCurrentShell(page: Page): Promise<void> {
 }
 
 export async function openWorkspace(page: Page, name: string): Promise<void> {
+  if (name === "Video Workspace") {
+    await page.getByRole("tab", { name }).click();
+    return;
+  }
+
   await page
     .getByRole("navigation", { name: "Workspaces" })
     .getByRole("button", { name })

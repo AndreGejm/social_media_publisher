@@ -446,6 +446,29 @@ describe("VideoWorkspaceFeature", () => {
     expect(screen.getByTestId("video-output-file-preview")).toHaveTextContent("C:\\Exports\\session-01.mp4");
   });
 
+  it("does not re-run diagnostics on each output-directory keystroke and refreshes on demand", async () => {
+    render(<VideoWorkspaceFeature />);
+
+    await waitFor(() => {
+      expect(tauriVideoMocks.diagnostics).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.change(screen.getByLabelText("Output directory"), {
+      target: { value: "C:/Exports/Queued" }
+    });
+
+    await waitFor(() => {
+      expect(tauriVideoMocks.diagnostics).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh render diagnostics/i }));
+
+    await waitFor(() => {
+      expect(tauriVideoMocks.diagnostics).toHaveBeenCalledTimes(2);
+    });
+    expect(tauriVideoMocks.diagnostics).toHaveBeenLastCalledWith("C:/Exports/Queued");
+  });
+
   it("saves and loads a project snapshot from local persistence", async () => {
     render(<VideoWorkspaceFeature />);
 

@@ -981,6 +981,7 @@ export async function installMockTauriBridge(
 
       (window as Window & {
         __TAURI__?: { core?: { invoke?: typeof invoke } };
+        __TAURI_INTERNALS__?: { invoke?: typeof invoke };
         __RP_E2E__?: {
           getState: () => PublicMockState;
           deleteTracksByPath: (paths: string[]) => void;
@@ -992,6 +993,13 @@ export async function installMockTauriBridge(
         core: {
           invoke
         }
+      };
+
+      (window as Window & {
+        __TAURI__?: { core?: { invoke?: typeof invoke } };
+        __TAURI_INTERNALS__?: { invoke?: typeof invoke };
+      }).__TAURI_INTERNALS__ = {
+        invoke
       };
 
       (window as Window & {

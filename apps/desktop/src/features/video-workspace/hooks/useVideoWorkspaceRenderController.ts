@@ -111,6 +111,9 @@ export function useVideoWorkspaceRenderController(
   const pollTimerRef = useRef<number | null>(null);
   const pollInFlightRef = useRef(false);
   const runTokenRef = useRef(0);
+  const outputDirectoryPathRef = useRef(buildInput.outputSettings.outputDirectoryPath);
+
+  outputDirectoryPathRef.current = buildInput.outputSettings.outputDirectoryPath;
 
   const clearPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -122,9 +125,7 @@ export function useVideoWorkspaceRenderController(
 
   const refreshDiagnostics = useCallback(async () => {
     try {
-      const diagnostics = await videoRenderGetEnvironmentDiagnostics(
-        buildInput.outputSettings.outputDirectoryPath
-      );
+      const diagnostics = await videoRenderGetEnvironmentDiagnostics(outputDirectoryPathRef.current);
 
       setState((current) => ({
         ...current,
@@ -148,7 +149,7 @@ export function useVideoWorkspaceRenderController(
         diagnosticsErrorMessage: formatUiError(error, "Environment diagnostics failed.")
       }));
     }
-  }, [buildInput.outputSettings.outputDirectoryPath]);
+  }, []);
 
   const applyResultState = useCallback(
     (result: VideoRenderResultResponse, request: VideoRenderRequest) => {

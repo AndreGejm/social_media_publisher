@@ -768,10 +768,21 @@ body {
   color: var(--accent-primary);
 }
 
+.media-button.ghost.caution {
+  border-color: rgba(236, 196, 88, 0.56);
+  background: rgba(236, 196, 88, 0.13);
+  color: var(--text);
+}
+
 .media-button.ghost.active {
   border-color: var(--accent);
   color: var(--text);
   background: rgba(var(--selection-rgb), 0.28);
+}
+
+.media-button.ghost.caution.active {
+  border-color: rgba(244, 205, 103, 0.76);
+  background: rgba(244, 205, 103, 0.2);
 }
 
 .media-button:disabled {
@@ -883,6 +894,15 @@ body {
   --shell-sidebar-width: 300px;
   --shared-player-height: 78px;
   --workspace-content-max-width: 1800px;
+  --workspace-right-inset: 0px;
+  --workspace-horizontal-gutter: max(
+    1rem,
+    calc(
+      (
+        100vw - var(--shell-sidebar-width, 300px) - var(--workspace-right-inset, 0px) - var(--workspace-content-max-width, 1800px)
+      ) / 2
+    )
+  );
   min-height: 100vh;
   display: grid;
   grid-template-columns: var(--shell-sidebar-width, 300px) minmax(0, 1fr);
@@ -894,7 +914,13 @@ body {
 }
 
 .music-shell.with-right-dock {
+  --workspace-right-inset: var(--shell-right-dock-width, 320px);
   grid-template-columns: var(--shell-sidebar-width, 300px) minmax(0, 1fr) var(--shell-right-dock-width, 320px);
+}
+
+.music-shell[data-layout-tier="wide"] {
+  --shared-player-height: 110px;
+  --workspace-content-max-width: 1520px;
 }
 
 .music-sidebar {
@@ -2744,13 +2770,13 @@ body {
 
 .persistent-player-bar {
   position: fixed;
-  left: var(--shell-sidebar-width, 300px);
-  right: 0;
+  left: calc(var(--shell-sidebar-width, 300px) + var(--workspace-horizontal-gutter, 1rem));
+  right: calc(var(--workspace-right-inset, 0px) + var(--workspace-horizontal-gutter, 1rem));
   bottom: 0;
   z-index: 160;
   grid-column: 1 / -1;
-  max-width: calc(100vw - var(--shell-sidebar-width, 300px));
   border-top: 1px solid rgba(var(--accent-rgb), 0.14);
+  border-radius: 12px 12px 0 0;
   background: rgba(var(--bg-panel-rgb), 0.95);
   backdrop-filter: blur(12px);
   box-shadow: 0 -6px 24px rgba(var(--shadow-rgb), 0.08);
@@ -2759,11 +2785,65 @@ body {
   gap: 0.45rem;
 }
 
-.music-shell.with-right-dock .persistent-player-bar {
-  right: var(--shell-right-dock-width, 320px);
-  max-width: calc(
-    100vw - var(--shell-sidebar-width, 300px) - var(--shell-right-dock-width, 320px)
-  );
+.music-shell[data-layout-tier="wide"] .persistent-player-bar {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 0.35rem 0.8rem;
+  padding: 0.48rem 0.9rem 0.58rem;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-main {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: start;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.55rem;
+  row-gap: 0.08rem;
+  align-items: start;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-meta > .eyebrow {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  margin: 0.08rem 0 0;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-main strong,
+.music-shell[data-layout-tier="wide"] .persistent-player-subtitle {
+  grid-column: 2;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-output-status,
+.music-shell[data-layout-tier="wide"] .persistent-player-output-reason,
+.music-shell[data-layout-tier="wide"] .persistent-player-output-warning {
+  grid-column: 1 / -1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-actions {
+  justify-content: flex-end;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-utility {
+  grid-column: 1;
+  grid-template-columns: auto minmax(110px, 150px) auto auto;
+}
+
+.music-shell[data-layout-tier="wide"] .persistent-player-timeline {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.music-shell[data-layout-tier="wide"] .library-hero-cards {
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 19rem));
+  justify-content: start;
 }
 
 .player-error-inline {
@@ -2775,16 +2855,160 @@ body {
   font-size: 0.82rem;
 }
 
-.music-shell.compact .workspace-nav-item,
+.music-shell.compact .music-sidebar {
+  padding: 0.72rem 0.62rem;
+  padding-bottom: calc(0.72rem + var(--shared-player-height) + env(safe-area-inset-bottom, 0px));
+  gap: 0.62rem;
+}
+
+.music-shell.compact .music-topbar {
+  padding: 0.58rem 0.78rem;
+  gap: 0.65rem;
+}
+
+.music-shell.compact .music-mode-tabs,
+.music-shell.compact .qc-intent-toggle,
+.music-shell.compact .play-list-mode-toggle {
+  padding: 0.16rem;
+}
+
+.music-shell.compact .music-mode-tab,
+.music-shell.compact .qc-intent-tab,
+.music-shell.compact .play-list-mode-tab {
+  min-height: 1.8rem;
+  padding: 0.28rem 0.56rem;
+  font-size: 0.78rem;
+}
+
+.music-shell.compact .workspace-content {
+  gap: 0.62rem;
+  padding: 0.58rem 0.72rem calc(0.72rem + var(--shared-player-height) + env(safe-area-inset-bottom, 0px));
+}
+
+.music-shell.compact .sidebar-panel,
+.music-shell.compact .collapsible-card,
+.music-shell.compact .library-hero,
+.music-shell.compact .qc-intent-shell,
+.music-shell.compact .tracks-view-head,
+.music-shell.compact .track-detail-card,
+.music-shell.compact .queue-card,
+.music-shell.compact .album-detail-card,
+.music-shell.compact .settings-card,
+.music-shell.compact .placeholder-workspace,
+.music-shell.compact .publisher-ops-host,
+.music-shell.compact .video-fit-mode-group {
+  padding: 0.65rem;
+  gap: 0.55rem;
+}
+
+.music-shell.compact .collapsible-panel-body,
+.music-shell.compact .tracks-list-column,
+.music-shell.compact .tracks-detail-column,
+.music-shell.compact .tracks-queue-column,
+.music-shell.compact .albums-list-column,
+.music-shell.compact .albums-detail-column,
+.music-shell.compact .track-detail-stack,
+.music-shell.compact .settings-layout,
+.music-shell.compact .settings-grid,
+.music-shell.compact .settings-shortcuts-section {
+  gap: 0.55rem;
+}
+
+.music-shell.compact .library-hero-cards,
+.music-shell.compact .tracks-layout,
+.music-shell.compact .album-summary-grid,
+.music-shell.compact .track-meta-grid,
+.music-shell.compact .queue-list,
+.music-shell.compact .album-track-list {
+  gap: 0.45rem;
+}
+
+.music-shell.compact .library-quick-links,
+.music-shell.compact .tracks-toolbar,
+.music-shell.compact .tracks-subtoolbar,
+.music-shell.compact .tracks-selection-actions,
+.music-shell.compact .tracks-batch-actions,
+.music-shell.compact .queue-card-controls,
+.music-shell.compact .settings-actions {
+  gap: 0.3rem;
+}
+
+.music-shell.compact .workspace-nav-item {
+  min-height: 34px;
+  padding: 0.42rem 0.62rem;
+}
+
+.music-shell.compact .track-row-shell,
+.music-shell.compact .queue-row,
+.music-shell.compact .album-track-row {
+  padding: 0.22rem;
+}
+
 .music-shell.compact .track-row,
 .music-shell.compact .album-row {
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
+  padding: 0.38rem 0.5rem;
 }
 
 .music-shell.compact .tracks-list-shell,
 .music-shell.compact .albums-list-shell {
-  gap: 0.25rem;
+  gap: 0.2rem;
+  padding: 0.22rem;
+}
+
+.music-shell.compact .albums-head {
+  padding: 0.55rem 0.65rem;
+  gap: 0.55rem;
+}
+
+.music-shell.compact .track-row-batch-checkbox {
+  padding: 0.12rem 0.1rem 0.12rem 0.14rem;
+}
+
+.music-shell.compact .track-row-menu-button {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.music-shell.compact .queue-row-select,
+.music-shell.compact .album-track-row-main {
+  gap: 0.35rem;
+  padding: 0.12rem 0.16rem;
+}
+
+.music-shell.compact .album-summary-grid > div,
+.music-shell.compact .track-meta-grid > div,
+.music-shell.compact .settings-shortcut-row,
+.music-shell.compact .hero-card {
+  padding: 0.45rem 0.55rem;
+}
+
+.music-shell.compact .primary-action,
+.music-shell.compact .secondary-action,
+.music-shell.compact .tracks-toolbar-select,
+.music-shell.compact .tracks-search,
+.music-shell.compact .track-meta-inline-select,
+.music-shell.compact .settings-field select {
+  padding: 0.5rem 0.62rem;
+}
+
+.music-shell.compact .secondary-action.compact,
+.music-shell.compact .queue-row-remove,
+.music-shell.compact .filter-chip {
+  padding: 0.32rem 0.5rem;
+}
+
+.music-shell.compact .topbar-pill,
+.music-shell.compact .queue-mode-pill,
+.music-shell.compact .track-detail-mode-pill,
+.music-shell.compact .queue-help-badge,
+.music-shell.compact .library-ingest-status-item,
+.music-shell.compact .track-chip {
+  padding: 0.2rem 0.42rem;
+  font-size: 0.74rem;
+}
+
+.music-shell.compact .settings-checkbox {
+  gap: 0.42rem;
 }
 
 .persistent-player-main {
@@ -3491,4 +3715,3 @@ body {
   overflow: auto;
   font-size: 0.78rem;
 }
-

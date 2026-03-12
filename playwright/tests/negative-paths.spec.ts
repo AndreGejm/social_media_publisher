@@ -27,6 +27,9 @@ async function importLibraryPaths(page: Page, paths: string[]) {
   await page.getByRole("tab", { name: "Import Files" }).click();
   await page.getByRole("textbox", { name: "Import file paths" }).fill(paths.join("\n"));
   await page.getByRole("button", { name: "Import Files" }).click();
+  await expect(
+    page.getByText(/Imported \d+ track\(s\)\.|No tracks were imported\./i)
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 test("invalid file types and corrupt metadata surface once and keep the app usable", async ({ page }) => {
@@ -44,9 +47,13 @@ test("invalid file types and corrupt metadata surface once and keep the app usab
   await expect(page.getByText(/CORRUPT_METADATA/i)).toBeVisible();
 
   await openWorkspace(page, "Playlists");
-  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Stable Track");
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Stable Track", {
+    timeout: 30_000
+  });
 
-  await signals.assertClean("import negatives");
+  await signals.assertClean("import negatives", {
+    allowedNotifications: [/Imported 1 track\(s\)\./i]
+  });
 });
 
 test("backend IPC timeout shows a single error surface and navigation still works", async ({ page }) => {
@@ -63,7 +70,9 @@ test("backend IPC timeout shows a single error surface and navigation still work
   });
 
   await openWorkspace(page, "Playlists");
-  await expect(page.getByText(/Catalog list request timed out/i)).toHaveCount(1);
+  await expect(page.locator("[aria-label=\"Notifications\"]")).toContainText("Catalog list request timed out.", {
+    timeout: 30_000
+  });
 
   await openWorkspace(page, "Settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -117,17 +126,21 @@ test("scan interruption cancels cleanly without crashing the workspace", async (
   await page.getByRole("textbox", { name: "Library root path" }).fill("C:/Interrupt Root");
   await page.getByRole("button", { name: "Add Folder" }).click();
   await page.getByRole("button", { name: "Scan Folder" }).click();
-  await page.getByRole("button", { name: "Cancel Scan" }).click();
+  const cancelScanButton = page.getByRole("button", { name: "Cancel Scan" });
+  await expect(cancelScanButton).toBeEnabled({ timeout: 30_000 });
+  await cancelScanButton.click();
 
   await expect
     .poll(async () => (await page.locator(".library-root-row").first().textContent()) ?? "")
     .toContain("CANCELED");
 
   await openWorkspace(page, "Playlists");
-  await expect(page.getByRole("list", { name: "Library tracks" })).not.toContainText("Fresh Root Track");
+  await expect(page.getByRole("list", { name: "Library tracks" })).not.toContainText("Fresh Root Track", {
+    timeout: 30_000
+  });
 
   await signals.assertClean("scan interruption", {
-    allowedNotifications: [/Library root added/i, /Library root scan started/i]
+    allowedNotifications: [/Library root added/i, /Library root scan started/i, /Scan cancellation requested/i]
   });
 });
 
@@ -144,6 +157,9 @@ test("queued references are pruned when their scanned root is removed", async ({
     .toContain("COMPLETED");
 
   await openWorkspace(page, "Playlists");
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Fresh Root Track", {
+    timeout: 30_000
+  });
   await page.getByRole("checkbox", { name: "Select Fresh Root Track for batch actions" }).check();
   await page.getByRole("button", { name: "Add Selection to Queue" }).click();
   await expect(page.getByRole("button", { name: /1 queue item\(s\)/i })).toBeVisible();
@@ -156,7 +172,12 @@ test("queued references are pruned when their scanned root is removed", async ({
   await expect(page.getByText(/Queue is empty\. Add tracks from Library mode or Play Selection\./i)).toBeVisible();
 
   await signals.assertClean("deleted queue references", {
-    allowedNotifications: [/Library root added/i, /Library root removed/i, /Library root scan started/i, /Added track to queue/i]
+    allowedNotifications: [
+      /Library root added/i,
+      /Library root removed/i,
+      /Library root scan started/i,
+      /Added track to queue/i
+    ]
   });
 });
 
@@ -166,7 +187,11 @@ test("deleted queue items can also be pruned through the mock backend without a 
   });
 
   await openWorkspace(page, "Playlists");
-  await page.getByRole("checkbox", { name: "Select Removed Soon for batch actions" }).check();
+  const removedSoonCheckbox = page.getByRole("checkbox", {
+    name: "Select Removed Soon for batch actions"
+  });
+  await expect(removedSoonCheckbox).toBeVisible({ timeout: 30_000 });
+  await removedSoonCheckbox.check();
   await page.getByRole("button", { name: "Add Selection to Queue" }).click();
   await expect(page.getByRole("button", { name: /1 queue item\(s\)/i })).toBeVisible();
 

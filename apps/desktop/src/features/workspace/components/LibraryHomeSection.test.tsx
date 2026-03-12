@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LibraryHomeSection from "./LibraryHomeSection";
@@ -8,11 +8,7 @@ afterEach(() => {
 });
 
 describe("LibraryHomeSection", () => {
-  it("renders summary cards and quick action buttons", () => {
-    const onOpenTracksWorkspace = vi.fn();
-    const onOpenAlbumsWorkspace = vi.fn();
-    const onShowPublishMode = vi.fn();
-
+  it("renders summary cards without redundant quick action shortcuts", () => {
     render(
       <LibraryHomeSection
         hidden={false}
@@ -22,21 +18,11 @@ describe("LibraryHomeSection", () => {
         queueCount={3}
         albumGroupsCount={2}
         favoritesCount={4}
-        libraryQuickActionsCollapsed={false}
-        onToggleLibraryQuickActionsCollapsed={vi.fn()}
-        onOpenTracksWorkspace={onOpenTracksWorkspace}
-        onOpenAlbumsWorkspace={onOpenAlbumsWorkspace}
-        onShowPublishMode={onShowPublishMode}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Track QC" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open Album QC" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open Publish Workflow" }));
-
     expect(screen.getByText("228")).toBeInTheDocument();
-    expect(onOpenTracksWorkspace).toHaveBeenCalledTimes(1);
-    expect(onOpenAlbumsWorkspace).toHaveBeenCalledTimes(1);
-    expect(onShowPublishMode).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Open Track QC" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Quick Actions" })).not.toBeInTheDocument();
   });
 });

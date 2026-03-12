@@ -10,7 +10,6 @@ type StorageKeys = {
   libraryIngestTab: string;
   libraryIngestCollapsed: string;
   libraryOverviewCollapsed: string;
-  libraryQuickActionsCollapsed: string;
   settingsPreferencesCollapsed: string;
   settingsSummaryCollapsed: string;
   themePreference: string;
@@ -37,7 +36,6 @@ type UseWorkspacePersistenceArgs = {
   libraryIngestTab: string;
   libraryIngestCollapsed: boolean;
   libraryOverviewCollapsed: boolean;
-  libraryQuickActionsCollapsed: boolean;
   settingsPreferencesCollapsed: boolean;
   settingsSummaryCollapsed: boolean;
   themePreference: string;
@@ -83,10 +81,6 @@ export function useWorkspacePersistence(args: UseWorkspacePersistenceArgs) {
   useEffect(() => {
     writeStorage(args.storageKeys.libraryOverviewCollapsed, args.libraryOverviewCollapsed);
   }, [args.libraryOverviewCollapsed, args.storageKeys.libraryOverviewCollapsed]);
-
-  useEffect(() => {
-    writeStorage(args.storageKeys.libraryQuickActionsCollapsed, args.libraryQuickActionsCollapsed);
-  }, [args.libraryQuickActionsCollapsed, args.storageKeys.libraryQuickActionsCollapsed]);
 
   useEffect(() => {
     writeStorage(args.storageKeys.settingsPreferencesCollapsed, args.settingsPreferencesCollapsed);

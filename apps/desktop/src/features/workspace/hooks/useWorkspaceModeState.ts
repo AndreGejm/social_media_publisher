@@ -7,6 +7,7 @@ type UseWorkspaceModeStateArgs<Workspace extends string> = {
   setActiveWorkspace: Dispatch<SetStateAction<Workspace>>;
   setPublisherOpsBooted: Dispatch<SetStateAction<boolean>>;
   listenModeWorkspaces: Workspace[];
+  listenModeNavWorkspaces: Workspace[];
   publishModeWorkspaces: Workspace[];
   globalWorkspaces: Workspace[];
 };
@@ -19,19 +20,31 @@ export function useWorkspaceModeState<Workspace extends string>(args: UseWorkspa
     setActiveWorkspace,
     setPublisherOpsBooted,
     listenModeWorkspaces,
+    listenModeNavWorkspaces,
     publishModeWorkspaces,
     globalWorkspaces
   } = args;
 
-  const modeWorkspaces = activeMode === "Listen" ? listenModeWorkspaces : publishModeWorkspaces;
+  const defaultListenWorkspace = listenModeNavWorkspaces[0] ?? listenModeWorkspaces[0];
+  const defaultPublishWorkspace = publishModeWorkspaces[0];
+  const modeWorkspaces = activeMode === "Listen" ? listenModeNavWorkspaces : publishModeWorkspaces;
   const showLibraryIngestSidebar = activeMode === "Listen" && activeWorkspace === "Library";
 
   useEffect(() => {
     const modeAllowed = activeMode === "Listen" ? listenModeWorkspaces : publishModeWorkspaces;
     const allowed = [...modeAllowed, ...globalWorkspaces];
     if (allowed.includes(activeWorkspace)) return;
-    setActiveWorkspace((activeMode === "Listen" ? "Library" : "Publisher Ops") as Workspace);
-  }, [activeMode, activeWorkspace, listenModeWorkspaces, publishModeWorkspaces, globalWorkspaces, setActiveWorkspace]);
+    setActiveWorkspace((activeMode === "Listen" ? defaultListenWorkspace : defaultPublishWorkspace) as Workspace);
+  }, [
+    activeMode,
+    activeWorkspace,
+    defaultListenWorkspace,
+    defaultPublishWorkspace,
+    listenModeWorkspaces,
+    publishModeWorkspaces,
+    globalWorkspaces,
+    setActiveWorkspace
+  ]);
 
   useEffect(() => {
     if (activeWorkspace === "Publisher Ops") {
@@ -45,14 +58,24 @@ export function useWorkspaceModeState<Workspace extends string>(args: UseWorkspa
     if (mode === "Publish") {
       setPublisherOpsBooted(true);
       if (!isGlobalWorkspace) {
-        setActiveWorkspace("Publisher Ops" as Workspace);
+        setActiveWorkspace(defaultPublishWorkspace as Workspace);
       }
       return;
     }
-    if (!listenModeWorkspaces.includes(activeWorkspace) && !isGlobalWorkspace) {
-      setActiveWorkspace("Library" as Workspace);
+    const isListenNavWorkspace = listenModeNavWorkspaces.includes(activeWorkspace);
+    if (!isListenNavWorkspace && !isGlobalWorkspace) {
+      setActiveWorkspace(defaultListenWorkspace as Workspace);
     }
-  }, [activeWorkspace, globalWorkspaces, listenModeWorkspaces, setActiveMode, setActiveWorkspace, setPublisherOpsBooted]);
+  }, [
+    activeWorkspace,
+    defaultListenWorkspace,
+    defaultPublishWorkspace,
+    globalWorkspaces,
+    listenModeNavWorkspaces,
+    setActiveMode,
+    setActiveWorkspace,
+    setPublisherOpsBooted
+  ]);
 
   return {
     modeWorkspaces,

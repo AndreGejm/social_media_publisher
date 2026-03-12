@@ -297,6 +297,10 @@ function renderApp() {
 }
 
 function openWorkspace(name: string) {
+  if (name === "Video Workspace") {
+    fireEvent.click(screen.getByRole("tab", { name }));
+    return;
+  }
   fireEvent.click(screen.getByRole("button", { name }));
 }
 
@@ -331,16 +335,6 @@ async function goToWorkspace(name: string) {
   await waitForWorkspace(name);
 }
 
-async function restoreLibraryWorkspace() {
-  fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
-  await goToWorkspace("Library");
-}
-
-async function restorePlaylistsWorkspace() {
-  fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
-  await waitForWorkspace("Playlists");
-}
-
 async function restoreQualityControlTrackMode() {
   await goToWorkspace("Quality Control");
   const trackTab = screen.getByRole("tab", { name: "Track QC" });
@@ -362,7 +356,7 @@ async function restoreQualityControlAlbumMode() {
   if (albumTab.getAttribute("aria-selected") !== "true") {
     fireEvent.click(albumTab);
   }
-  await waitFor(() => expect(screen.getByRole("button", { name: "Play Album" })).toBeVisible());
+  await waitFor(() => expect(screen.getByText("Album Detail")).toBeVisible());
 }
 
 async function toggleCollapse(hideName: string, showName: string) {
@@ -415,7 +409,6 @@ describe("Mechanical UI control audits", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Folder" }));
     await waitFor(() => expect(screen.getByText("C:/Music")).toBeVisible());
 
-    const ingestBody = document.getElementById("library-ingest-panel-body") as HTMLElement;
 
     // Verify all ingest controls render correctly initially
     expect(screen.getByRole("tab", { name: "Scan Folders" })).toBeInTheDocument();
@@ -471,24 +464,11 @@ describe("Mechanical UI control audits", () => {
       { root: importPanel }
     );
 
-    const libraryPanel = screen.getByRole("button", { name: "Hide Library overview" }).closest(".workspace-section") as HTMLElement;
     expect(screen.getByRole("button", { name: "Hide Library overview" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hide Quick actions" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Track QC" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Album QC" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Publish Workflow" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Track QC" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Play Now" })).toBeVisible());
-    await restoreLibraryWorkspace();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Album QC" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Play Album" })).toBeVisible());
-    await restoreLibraryWorkspace();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Publish Workflow" }));
-    await waitFor(() => expect(screen.getByTestId("publisher-ops-mock")).toBeVisible());
-    await restoreLibraryWorkspace();
+    expect(screen.queryByRole("button", { name: "Hide Quick actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Track QC" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Album QC" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Publish Workflow" })).not.toBeInTheDocument();
   });
 
   it("audits Playlists workspace controls", async () => {
@@ -525,20 +505,12 @@ describe("Mechanical UI control audits", () => {
             await waitFor(() => expect(screen.getByRole("button", { name: "All Tracks" })).toBeVisible());
           }
         },
-        {
-          role: "button",
-          name: "Album QC View",
-          expectation: "action",
-          act: async () => {
-            fireEvent.click(screen.getByRole("button", { name: "Album QC View" }));
-            await waitFor(() => expect(screen.getByRole("button", { name: "Play Album" })).toBeVisible());
-            await restorePlaylistsWorkspace();
-          }
-        }
+
       ],
       "Playlists toolbar",
       { root: toolbar }
     );
+    expect(screen.queryByRole("button", { name: "Album QC View" })).not.toBeInTheDocument();
 
     const firstTrackRow = screen.getByRole("checkbox", { name: /Select Queue Candidate for batch actions/i }).closest(".track-row-shell") as HTMLElement;
     await assertVisibleActionableControls(
@@ -595,7 +567,7 @@ describe("Mechanical UI control audits", () => {
           expectation: "action",
           act: async () => {
             fireEvent.click(screen.getByRole("tab", { name: "Album QC" }));
-            await waitFor(() => expect(screen.getByRole("button", { name: "Play Album" })).toBeVisible());
+            await waitFor(() => expect(screen.getByText("Album Detail")).toBeVisible());
             fireEvent.click(screen.getByRole("tab", { name: "Track QC" }));
             await waitFor(() => expect(screen.getByRole("button", { name: "Play Now" })).toBeVisible());
           }
@@ -685,11 +657,9 @@ describe("Mechanical UI control audits", () => {
 
     expect(screen.getAllByText(/Night Session/i)[0]).toBeInTheDocument();
     expect(screen.getAllByText(/Singles \/ Unassigned/i)[0]).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Play Album" })[0]).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Add Album to Queue" })[0]).toBeInTheDocument();
-    
-    fireEvent.click(screen.getByRole("button", { name: "Show in Track QC" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Play Now" })).toBeVisible());
+    expect(screen.queryByRole("button", { name: "Play Album" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Album to Queue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show in Track QC" })).not.toBeInTheDocument();
   });
 
   it("audits Video workspace controls", async () => {
@@ -849,3 +819,5 @@ describe("Mechanical UI control audits", () => {
     );
   });
 });
+
+

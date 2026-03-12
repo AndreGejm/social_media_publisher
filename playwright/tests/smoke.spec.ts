@@ -15,7 +15,7 @@ const viewportCases = [
   { label: "compact", width: 900, height: 960, tier: "compact" }
 ] as const;
 
-test("browser preview renders the current shell and keeps About informational", async ({
+test("browser preview renders the current shell and keeps About available", async ({
   page
 }) => {
   const signals = attachUiSignalMonitor(page);
@@ -27,17 +27,18 @@ test("browser preview renders the current shell and keeps About informational", 
     "Library",
     "Quality Control",
     "Playlists",
-    "Video Workspace",
     "Settings",
     "About"
   ]) {
     await expect(workspaceNav.getByRole("button", { name: workspace })).toBeVisible();
   }
+  await expect(page.getByRole("tab", { name: "Video Workspace" })).toBeVisible();
 
   await openWorkspace(page, "About");
 
   await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
-  await expect(page.getByRole("note", { name: "About workspace guidance" })).toBeVisible();
+  await expect(page.getByText(/Static product and runtime diagnostics for support and build verification\./i)).toHaveCount(0);
+  await expect(page.getByText(/Informational workspace/i)).toHaveCount(0);
   const runtimeLogRow = page
     .locator(".about-workspace-card[aria-label='System Information'] .about-kv-list div")
     .filter({ has: page.getByText("Runtime Error Log") })
@@ -118,6 +119,3 @@ for (const viewportCase of viewportCases) {
     await signals.assertClean(`${viewportCase.label} layout sweep`);
   });
 }
-
-
-

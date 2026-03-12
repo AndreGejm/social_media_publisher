@@ -53,7 +53,6 @@ type PlayListPanelProps = {
   onClearQueue: () => void;
   showFavoritesOnly: boolean;
   onToggleFavoritesOnly: () => void;
-  onOpenAlbumsView: () => void;
   orderedBatchSelectionIds: string[];
   onPlaySelectionNow: () => void;
   onAddSelectionToQueue: (trackIds: string[]) => void;
@@ -422,11 +421,6 @@ export default function PlayListPanel(props: PlayListPanelProps) {
                   onClick={props.onToggleFavoritesOnly}
                 >
                   {props.showFavoritesOnly ? "Favorites Only" : "All Tracks"}
-                </button>
-              </HelpTooltip>
-              <HelpTooltip content="Switch Quality Control to Album QC mode for grouped, cross-track review.">
-                <button type="button" className="secondary-action compact" onClick={props.onOpenAlbumsView}>
-                  Album QC View
                 </button>
               </HelpTooltip>
             </>

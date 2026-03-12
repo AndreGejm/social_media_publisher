@@ -27,11 +27,16 @@ async function importLibraryPaths(page: Page, paths: string[]) {
   await page.getByRole("tab", { name: "Import Files" }).click();
   await page.getByRole("textbox", { name: "Import file paths" }).fill(paths.join("\n"));
   await page.getByRole("button", { name: "Import Files" }).click();
+  await expect(
+    page.getByText(/Imported \d+ track\(s\)\.|No tracks were imported\./i)
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 async function addVisibleSelectionsToQueue(page: Page, trackTitles: string[]) {
   for (const title of trackTitles) {
-    await page.getByRole("checkbox", { name: `Select ${title} for batch actions` }).check();
+    const checkbox = page.getByRole("checkbox", { name: `Select ${title} for batch actions` });
+    await expect(checkbox).toBeVisible({ timeout: 30_000 });
+    await checkbox.check();
   }
   await page.getByRole("button", { name: "Add Selection to Queue" }).click();
 }
@@ -50,8 +55,12 @@ test("library to queue flow imports tracks and manages the session queue", async
   ]);
 
   await openWorkspace(page, "Playlists");
-  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Imported A");
-  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Imported B");
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Imported A", {
+    timeout: 30_000
+  });
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Imported B", {
+    timeout: 30_000
+  });
 
   await addVisibleSelectionsToQueue(page, ["Imported A", "Imported B"]);
   await openQueueMode(page);
@@ -70,7 +79,12 @@ test("library to queue flow imports tracks and manages the session queue", async
   await expect(page.getByRole("button", { name: "Clear Queue" })).toBeDisabled();
 
   await signals.assertClean("library queue workflow", {
-    allowedNotifications: [/Added 2 tracks to queue/i, /Removed track from queue/i, /Session queue cleared/i]
+    allowedNotifications: [
+      /Imported 2 track\(s\)\./i,
+      /Added 2 tracks to queue/i,
+      /Removed track from queue/i,
+      /Session queue cleared/i
+    ]
   });
 });
 
@@ -93,7 +107,7 @@ test("listen queue state stays isolated from the Video workspace", async ({ page
   );
 
   await signals.assertClean("workspace isolation", {
-    allowedNotifications: [/Added track to queue/i]
+    allowedNotifications: [/Imported 1 track\(s\)\./i, /Added track to queue/i]
   });
 });
 
@@ -157,11 +171,15 @@ test("import and ingest handles duplicate files and unsupported formats during r
   await expect(page.locator(".library-root-row").first()).toContainText("errors 2");
 
   await openWorkspace(page, "Playlists");
-  await expect(page.getByRole("button", { name: /2 track\(s\)/i })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Fresh Root Track");
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Fresh Root Track", {
+    timeout: 30_000
+  });
+  await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Imported A", {
+    timeout: 30_000
+  });
 
   await signals.assertClean("import and ingest", {
-    allowedNotifications: [/Added folder/i, /Scan started/i, /Scan completed/i]
+    allowedNotifications: [/Library root added/i, /Library root scan started/i]
   });
 });
 

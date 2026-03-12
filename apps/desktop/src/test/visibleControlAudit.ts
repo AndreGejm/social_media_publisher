@@ -250,8 +250,9 @@ export async function assertVisibleActionableControls(
       } else {
         expect(element).not.toBeDisabled();
       }
-    } catch (err: any) {
-      throw new Error(`Audit failed for ${control.role} "${String(control.name)}\": ${err.message}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Audit failed for ${control.role} "${String(control.name)}": ${message}`);
     }
 
     if (control.expectation !== "disabled" && control.expectation !== "noop") {

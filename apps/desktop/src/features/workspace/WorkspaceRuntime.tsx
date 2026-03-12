@@ -18,7 +18,6 @@ import {
   usePlayListActions,
   buildAlbumGroups,
   rankCatalogTracksBySearch,
-  type AlbumGroup,
   type TrackGroupMode,
   type TrackSortKey
 } from "../../features/play-list";
@@ -101,9 +100,9 @@ type QualityControlMode = "track" | "album";
 
 const workspaces: Workspace[] = ["Library", "Quality Control", "Playlists", "Video Workspace", "Publisher Ops", "Settings", "About"];
 const listenModeWorkspaces: Workspace[] = ["Library", "Quality Control", "Playlists", "Video Workspace"];
+const listenModeNavWorkspaces: Workspace[] = ["Library", "Quality Control", "Playlists"];
 const publishModeWorkspaces: Workspace[] = ["Publisher Ops"];
 const globalWorkspaces: Workspace[] = ["Settings", "About"];
-const appModes: AppMode[] = ["Listen", "Publish"];
 const libraryIngestTabs: Array<{ value: LibraryIngestTab; label: string }> = [
   { value: "scan_folders", label: "Scan Folders" },
   { value: "import_files", label: "Import Files" }
@@ -137,7 +136,7 @@ const STORAGE_KEYS = {
   libraryIngestTab: "rp.music.libraryIngestTab.v1",
   libraryIngestCollapsed: "rp.music.libraryIngestCollapsed.v1",
   libraryOverviewCollapsed: "rp.music.libraryOverviewCollapsed.v1",
-  libraryQuickActionsCollapsed: "rp.music.libraryQuickActionsCollapsed.v1",
+
   settingsPreferencesCollapsed: "rp.music.settingsPreferencesCollapsed.v1",
   settingsSummaryCollapsed: "rp.music.settingsSummaryCollapsed.v1",
   trackSort: "rp.music.trackSort.v1",
@@ -290,9 +289,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   const [libraryOverviewCollapsed, setLibraryOverviewCollapsed] = useState<boolean>(() =>
     readStorage<boolean>(STORAGE_KEYS.libraryOverviewCollapsed, false, (value): value is boolean => typeof value === "boolean")
   );
-  const [libraryQuickActionsCollapsed, setLibraryQuickActionsCollapsed] = useState<boolean>(() =>
-    readStorage<boolean>(STORAGE_KEYS.libraryQuickActionsCollapsed, false, (value): value is boolean => typeof value === "boolean")
-  );
+
   const [settingsPreferencesCollapsed, setSettingsPreferencesCollapsed] = useState<boolean>(() =>
     readStorage<boolean>(STORAGE_KEYS.settingsPreferencesCollapsed, false, (value): value is boolean => typeof value === "boolean")
   );
@@ -398,6 +395,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setActiveWorkspace,
     setPublisherOpsBooted,
     listenModeWorkspaces,
+    listenModeNavWorkspaces,
     publishModeWorkspaces,
     globalWorkspaces
   });
@@ -684,7 +682,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     libraryIngestTab,
     libraryIngestCollapsed,
     libraryOverviewCollapsed,
-    libraryQuickActionsCollapsed,
+
     settingsPreferencesCollapsed,
     settingsSummaryCollapsed,
     themePreference,
@@ -762,8 +760,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     playBatchSelectionNow,
     armTrackFromPlayList,
     runTrackContextMenuAction,
-    toggleFavoriteTrack,
-    playAlbumGroup
+    toggleFavoriteTrack
   } = usePlayListActions({
     queue,
     queueTracksById: queueSourceTracksById,
@@ -1006,11 +1003,15 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setActiveWorkspace("Quality Control");
   };
   const openLibraryWorkspace = () => setActiveWorkspace("Library");
+  const openVideoWorkspace = () => {
+    setActiveMode("Listen");
+    setActiveWorkspace("Video Workspace");
+  };
   const openWorkspace = (workspace: Workspace) => setActiveWorkspace(workspace);
-  const showPublishMode = () => switchAppMode("Publish");
+
   const toggleLibraryIngestCollapsed = () => setLibraryIngestCollapsed((value) => !value);
   const toggleLibraryOverviewCollapsed = () => setLibraryOverviewCollapsed((value) => !value);
-  const toggleLibraryQuickActionsCollapsed = () => setLibraryQuickActionsCollapsed((value) => !value);
+
   const handleBrowseLibraryRoot = () => void handleBrowseLibraryRootAction();
   const handleAddLibraryRoot = () => void handleAddLibraryRootAction();
   const handleRefreshLibraryRoots = () => void refreshLibraryRootsAction();
@@ -1089,13 +1090,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     }
     seekPlayer(ratio);
   };
-  const handleShowFirstAlbumTrackInTracks = (group: AlbumGroup) => {
-    if (group.trackIds[0]) {
-      setSelectedTrackId(group.trackIds[0]);
-      setQualityControlMode("track");
-      setActiveWorkspace("Quality Control");
-    }
-  };
+
   const handleShowTrackInTracks = (trackId: string) => {
     setSelectedTrackId(trackId);
     setQualityControlMode("track");
@@ -1527,7 +1522,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     onClearQueue: clearSessionQueue,
     showFavoritesOnly,
     onToggleFavoritesOnly: toggleShowFavoritesOnly,
-    onOpenAlbumsView: openAlbumsWorkspace,
+
     orderedBatchSelectionIds,
     onPlaySelectionNow: playBatchSelectionNow,
     onAddSelectionToQueue: appendTracksToSessionQueue,
@@ -1620,8 +1615,8 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
         <MusicTopbar
           activeMode={activeMode}
           activeWorkspace={activeWorkspace}
-          appModes={appModes}
           onSwitchAppMode={switchAppMode}
+          onOpenVideoWorkspace={openVideoWorkspace}
           tracksCount={catalogPage.total}
           albumGroupsCount={albumGroups.length}
           favoritesCount={favoriteTrackCount}
@@ -1676,11 +1671,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
             queueCount={queue.length}
             albumGroupsCount={albumGroups.length}
             favoritesCount={favoriteTrackCount}
-            libraryQuickActionsCollapsed={libraryQuickActionsCollapsed}
-            onToggleLibraryQuickActionsCollapsed={toggleLibraryQuickActionsCollapsed}
-            onOpenTracksWorkspace={openTracksWorkspace}
-            onOpenAlbumsWorkspace={openAlbumsWorkspace}
-            onShowPublishMode={showPublishMode}
           />
 
           <section hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control"} className="workspace-section qc-intent-shell">
@@ -1795,9 +1785,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
             selectedAlbumGroup={selectedAlbumGroup}
             onSelectAlbumGroup={setSelectedAlbumKey}
             formatClock={formatClock}
-            onPlayAlbumGroup={playAlbumGroup}
-            onAddAlbumToQueue={appendTracksToSessionQueue}
-            onShowFirstAlbumTrackInTracks={handleShowFirstAlbumTrackInTracks}
             selectedAlbumTracks={selectedAlbumTracks}
             favoriteTrackIdSet={favoriteTrackIdSet}
             selectedAlbumBatchTrackIds={selectedAlbumBatchTrackIds}
@@ -2041,6 +2028,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     </div>
   );
 }
+
 
 
 

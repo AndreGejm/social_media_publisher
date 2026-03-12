@@ -19,9 +19,6 @@ type AlbumsPanelProps = {
   selectedAlbumGroup: AlbumGroup | null;
   onSelectAlbumGroup: (key: string) => void;
   formatClock: (seconds: number) => string;
-  onPlayAlbumGroup: (group: AlbumGroup) => void;
-  onAddAlbumToQueue: (trackIds: string[]) => void;
-  onShowFirstAlbumTrackInTracks: (group: AlbumGroup) => void;
   selectedAlbumTracks: CatalogListTracksResponse["items"];
   favoriteTrackIdSet: Set<string>;
   selectedAlbumBatchTrackIds: string[];
@@ -84,38 +81,6 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
                 <p className="eyebrow">Album Detail</p>
                 <h3>{props.selectedAlbumGroup.albumTitle}</h3>
                 <p className="track-detail-subtitle">{props.selectedAlbumGroup.artistName}</p>
-              </div>
-              <div className="track-detail-actions">
-                <HelpTooltip content="Start playback with this album group's first track and load the album into the local session queue.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onPlayAlbumGroup(props.selectedAlbumGroup!)}
-                    disabled={props.selectedAlbumGroup.trackIds.length === 0}
-                  >
-                    Play Album
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Append all album tracks to the end of the local session queue.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onAddAlbumToQueue(props.selectedAlbumGroup!.trackIds)}
-                    disabled={props.selectedAlbumGroup.trackIds.length === 0}
-                  >
-                    Add Album to Queue
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Switch to Track QC mode and focus the first track in this album group.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onShowFirstAlbumTrackInTracks(props.selectedAlbumGroup!)}
-                    disabled={props.selectedAlbumGroup.trackIds.length === 0}
-                  >
-                    Show in Track QC
-                  </button>
-                </HelpTooltip>
               </div>
             </div>
 
@@ -229,4 +194,3 @@ export default function AlbumsPanel(props: AlbumsPanelProps) {
     </section>
   );
 }
-

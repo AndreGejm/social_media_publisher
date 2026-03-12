@@ -78,7 +78,7 @@ export default function SharedPlayerBar(props: SharedPlayerBarProps) {
             </button>
             <button
               type="button"
-              className={`media-button ghost${props.outputMode === "exclusive" ? " active" : ""}`}
+              className={`media-button ghost caution${props.outputMode === "exclusive" ? " active" : ""}`}
               onClick={() => props.onOutputModeChange("exclusive")}
               disabled={props.outputModeSwitching}
             >

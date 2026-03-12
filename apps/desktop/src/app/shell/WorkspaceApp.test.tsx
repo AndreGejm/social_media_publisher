@@ -1012,17 +1012,23 @@ describe("WorkspaceApp metadata editor", () => {
     expect(screen.queryByRole("button", { name: "Publisher Ops" })).not.toBeInTheDocument();
   });
 
-  it("shows Video Workspace navigation in Listen mode only", async () => {
+  it("shows Video Workspace as a top-level workspace tab while keeping it out of the sidebar", async () => {
     render(<WorkspaceApp />);
 
-    expect(screen.getByRole("button", { name: "Video Workspace" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Video Workspace" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
     expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Video Workspace" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
-    expect(await screen.findByRole("button", { name: "Video Workspace" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Library" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
   });
 
   it("recovers to Publisher Ops when restart state restores Publish mode with a listen-only workspace", async () => {
@@ -1045,7 +1051,7 @@ describe("WorkspaceApp metadata editor", () => {
   it("opens Video Workspace with the Stage 1 static section shell", async () => {
     render(<WorkspaceApp />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
 
     const shell = await screen.findByTestId("video-workspace-shell");
     expect(within(shell).getByRole("heading", { name: "Image + Audio to YouTube MP4" })).toBeInTheDocument();
@@ -1213,7 +1219,7 @@ describe("WorkspaceApp metadata editor", () => {
     expect(await screen.findByRole("searchbox", { name: "Search tracks" })).toBeInTheDocument();
     expectSharedTransportToStayLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
     expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
     expect(screen.getByText("No audio selected.")).toBeVisible();
     expectSharedTransportToStayLoaded();
@@ -1280,13 +1286,18 @@ describe("WorkspaceApp metadata editor", () => {
       tauriApiMocks.initExclusiveDevice.mock.calls.some((call) => call[2] === true)
     ).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Exclusive" }));
+    const exclusiveButton = screen.getByRole("button", { name: "Exclusive" });
+    expect(exclusiveButton).toHaveClass("caution");
+    expect(exclusiveButton).not.toHaveClass("active");
+
+    fireEvent.click(exclusiveButton);
 
     await waitFor(() => {
       expect(
         tauriApiMocks.initExclusiveDevice.mock.calls.some((call) => call[2] === true)
       ).toBe(true);
     });
+    expect(exclusiveButton).toHaveClass("caution", "active");
     expect(screen.getByText(/Output: Exclusive/)).toBeInTheDocument();
   });
 
@@ -1312,7 +1323,11 @@ describe("WorkspaceApp metadata editor", () => {
       expect(tauriApiMocks.initExclusiveDevice).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Exclusive" }));
+    const exclusiveButton = screen.getByRole("button", { name: "Exclusive" });
+    expect(exclusiveButton).toHaveClass("caution");
+    expect(exclusiveButton).not.toHaveClass("active");
+
+    fireEvent.click(exclusiveButton);
 
     await waitFor(() => {
       expect(
@@ -1519,6 +1534,8 @@ describe("WorkspaceApp metadata editor", () => {
       },
       { timeout: 3000 }
     );
+    expect(tauriApiMocks.pushPlaybackTrackChangeRequest.mock.calls).toEqual([[1]]);
+    expect(tauriApiMocks.setPlaybackPlaying.mock.calls).toEqual([[true]]);
     expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
   });
   it("keeps rapid native transport actions deterministic and toast-free", async () => {
@@ -2356,7 +2373,7 @@ describe("WorkspaceApp metadata editor", () => {
     expect(await screen.findByText("Added track to queue.")).toBeInTheDocument();
     expect(screen.queryByText(/Dropped media processed: .*error/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
     expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
     expect(screen.getByText("No audio selected.")).toBeVisible();
   });
@@ -2418,7 +2435,7 @@ describe("WorkspaceApp metadata editor", () => {
       expect(playSpy).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
     expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
     expect(screen.getByText("No audio selected.")).toBeVisible();
   });
@@ -2643,7 +2660,7 @@ describe("WorkspaceApp metadata editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
     expect(await screen.findByRole("tab", { name: "Library" })).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
     expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
     expect(screen.getByText("No audio selected.")).toBeVisible();
 
@@ -2853,6 +2870,40 @@ describe("WorkspaceApp metadata editor", () => {
     expect(screen.queryByRole("combobox", { name: "Theme preference" })).not.toBeInTheDocument();
   });
 
+  it("applies and restores compact density from Settings", async () => {
+    const firstRender = render(<WorkspaceApp />);
+
+    const initialShell = document.querySelector(".music-shell");
+    expect(initialShell).not.toBeNull();
+    expect(initialShell).not.toHaveClass("compact");
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: "Compact density (denser lists and controls)"
+      })
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".music-shell")).toHaveClass("compact");
+      expect(window.localStorage.getItem("rp.music.compactDensity.v1")).toBe("true");
+    });
+
+    firstRender.unmount();
+
+    render(<WorkspaceApp />);
+    await waitFor(() => {
+      expect(document.querySelector(".music-shell")).toHaveClass("compact");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(
+      await screen.findByRole("checkbox", {
+        name: "Compact density (denser lists and controls)"
+      })
+    ).toBeChecked();
+  });
+
   it("captures and persists configurable shortcut bindings from Settings", async () => {
     render(<WorkspaceApp />);
 
@@ -2916,4 +2967,3 @@ describe("WorkspaceApp metadata editor", () => {
     });
   });
 });
-
