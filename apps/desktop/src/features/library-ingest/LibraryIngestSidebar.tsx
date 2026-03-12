@@ -42,7 +42,7 @@ export default function LibraryIngestSidebar(props: LibraryIngestSidebarProps) {
   if (!props.visible) return null;
 
   return (
-    <section className="sidebar-panel" aria-label="Library ingest tools">
+    <section className="workspace-section sidebar-panel library-ingest-section" aria-label="Library ingest tools">
       <div className="sidebar-panel-head">
         <div className="sidebar-panel-head-main">
           <h2>Library Ingest</h2>
