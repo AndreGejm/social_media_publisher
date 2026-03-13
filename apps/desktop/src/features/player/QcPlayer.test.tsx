@@ -39,6 +39,7 @@ describe("QcPlayer", () => {
 
     const waveform = screen.getByTestId("qc-waveform");
     expect(waveform).toBeInTheDocument();
+    expect(waveform.closest(".waveform-tooltip-root")).not.toBeNull();
     expect(waveform.querySelectorAll(".waveform-bar")).toHaveLength(0);
     expect(screen.getByTestId("qc-peak")).toHaveTextContent("n/a");
     expect(screen.getByTestId("qc-lufs")).toHaveTextContent("LUFS");
@@ -68,3 +69,7 @@ describe("QcPlayer", () => {
     expect(screen.getByText("Artist Name")).toBeInTheDocument();
   });
 });
+
+
+
+

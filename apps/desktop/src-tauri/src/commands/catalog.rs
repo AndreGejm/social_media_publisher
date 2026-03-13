@@ -82,6 +82,7 @@ pub async fn catalog_list_tracks(
 pub async fn catalog_get_track(
     track_id: String,
 ) -> Result<Option<CatalogTrackDetailResponse>, AppError> {
+    let track_id = validate_catalog_track_id(&track_id)?;
     shared_service()
         .await?
         .handle_catalog_get_track(&track_id)
@@ -92,6 +93,7 @@ pub async fn catalog_get_track(
 pub async fn publisher_create_draft_from_track(
     track_id: String,
 ) -> Result<PublisherCreateDraftFromTrackResponse, AppError> {
+    let track_id = validate_catalog_track_id(&track_id)?;
     shared_service()
         .await?
         .handle_publisher_create_draft_from_track(&track_id)
@@ -100,8 +102,9 @@ pub async fn publisher_create_draft_from_track(
 
 #[tauri::command]
 pub async fn catalog_update_track_metadata(
-    input: CatalogUpdateTrackMetadataInput,
+    mut input: CatalogUpdateTrackMetadataInput,
 ) -> Result<CatalogTrackDetailResponse, AppError> {
+    input.track_id = validate_catalog_track_id(&input.track_id)?;
     shared_service()
         .await?
         .handle_catalog_update_track_metadata(input)
@@ -175,6 +178,7 @@ pub async fn catalog_list_library_roots() -> Result<Vec<LibraryRootResponse>, Ap
 
 #[tauri::command]
 pub async fn catalog_remove_library_root(root_id: String) -> Result<bool, AppError> {
+    let root_id = validate_catalog_hex_id(&root_id, "root_id")?;
     shared_service()
         .await?
         .handle_catalog_remove_library_root(&root_id)
@@ -259,6 +263,7 @@ pub async fn catalog_scan_root(root_id: String) -> Result<CatalogScanRootRespons
 pub async fn catalog_get_ingest_job(
     job_id: String,
 ) -> Result<Option<CatalogIngestJobResponse>, AppError> {
+    let job_id = validate_catalog_hex_id(&job_id, "job_id")?;
     shared_service()
         .await?
         .handle_catalog_get_ingest_job(&job_id)
@@ -267,6 +272,7 @@ pub async fn catalog_get_ingest_job(
 
 #[tauri::command]
 pub async fn catalog_cancel_ingest_job(job_id: String) -> Result<bool, AppError> {
+    let job_id = validate_catalog_hex_id(&job_id, "job_id")?;
     let started = Instant::now();
     tracing::info!(
         target: "desktop.catalog",

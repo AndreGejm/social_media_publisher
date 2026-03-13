@@ -341,7 +341,7 @@ async function restoreQualityControlTrackMode() {
   if (trackTab.getAttribute("aria-selected") !== "true") {
     fireEvent.click(trackTab);
   }
-  await waitFor(() => expect(screen.getByRole("button", { name: "Play Now" })).toBeVisible());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Edit Metadata" })).toBeVisible());
 }
 
 async function restoreQualityControlAlbumMode() {
@@ -558,6 +558,8 @@ describe("Mechanical UI control audits", () => {
     await restoreQualityControlTrackMode();
 
     const qcIntent = screen.getByRole("tablist", { name: "Quality Control intent" });
+    expect(screen.queryByRole("searchbox", { name: "Search tracks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh List" })).not.toBeInTheDocument();
     await assertVisibleActionableControls(
       [
         { role: "tab", name: "Track QC", expectation: "action" },
@@ -569,7 +571,7 @@ describe("Mechanical UI control audits", () => {
             fireEvent.click(screen.getByRole("tab", { name: "Album QC" }));
             await waitFor(() => expect(screen.getByText("Album Detail")).toBeVisible());
             fireEvent.click(screen.getByRole("tab", { name: "Track QC" }));
-            await waitFor(() => expect(screen.getByRole("button", { name: "Play Now" })).toBeVisible());
+            await waitFor(() => expect(screen.getByRole("button", { name: "Edit Metadata" })).toBeVisible());
           }
         }
       ],
@@ -577,23 +579,9 @@ describe("Mechanical UI control audits", () => {
       { root: qcIntent }
     );
 
-    const trackActions = screen.getByRole("button", { name: "Play Now" }).closest(".track-detail-actions") as HTMLElement;
+    const trackActions = screen.getByRole("button", { name: "Edit Metadata" }).closest(".track-detail-actions") as HTMLElement;
     await assertVisibleActionableControls(
       [
-        { role: "button", name: "Play Now", expectation: "action" },
-        { role: "button", name: "Add to Queue", expectation: "action" },
-        { role: "button", name: "Play Next", expectation: "action" },
-        {
-          role: "button",
-          name: "Favorite",
-          expectation: "action",
-          act: async () => {
-            fireEvent.click(screen.getByRole("button", { name: "Favorite" }));
-            await waitFor(() => expect(screen.getByRole("button", { name: "Unfavorite" })).toBeVisible());
-            fireEvent.click(screen.getByRole("button", { name: "Unfavorite" }));
-            await waitFor(() => expect(screen.getByRole("button", { name: "Favorite" })).toBeVisible());
-          }
-        },
         {
           role: "button",
           name: "Edit Metadata",
@@ -621,7 +609,6 @@ describe("Mechanical UI control audits", () => {
       "QC track detail actions",
       { root: trackActions }
     );
-
     fireEvent.click(screen.getByRole("button", { name: "Edit Metadata" }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Visibility" })).toBeVisible());
     const trackMetaGrid = screen.getByRole("combobox", { name: "Visibility" }).closest(".track-meta-grid") as HTMLElement;
@@ -818,5 +805,9 @@ describe("Mechanical UI control audits", () => {
     );
   });
 });
+
+
+
+
 
 

@@ -45,6 +45,21 @@ async function openQueueMode(page: Page) {
   await page.getByRole("tab", { name: "Queue" }).click();
 }
 
+async function dropNativePath(page: Page, dropLabel: string, sourcePath: string) {
+  await page.getByRole("button", { name: dropLabel }).evaluate((element, droppedPath) => {
+    const dataTransfer = new DataTransfer();
+    const normalizedPath = droppedPath.replace(/\\/g, "/");
+    dataTransfer.setData("text/plain", droppedPath);
+    dataTransfer.setData("text/uri-list", `file:///${normalizedPath}`);
+    element.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer }));
+    element.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
+  }, sourcePath);
+}
+
+function previewTransport(page: Page) {
+  return page.locator('[aria-label="Preview transport controls"]');
+}
+
 test("library to queue flow imports tracks and manages the session queue", async ({ page }) => {
   const signals = attachUiSignalMonitor(page);
 
@@ -162,13 +177,15 @@ test("import and ingest handles duplicate files and unsupported formats during r
   await openWorkspace(page, "Library");
   await page.getByRole("textbox", { name: "Library root path" }).fill("C:/Scan Root");
   await page.getByRole("button", { name: "Add Folder" }).click();
-  await expect(page.getByText("C:/Scan Root")).toBeVisible();
 
-  await page.getByRole("button", { name: "Scan Folder" }).click();
+  const rootRow = page.locator(".library-root-row").filter({ hasText: "C:/Scan Root" }).first();
+  await expect(rootRow).toBeVisible();
+
+  await rootRow.getByRole("button", { name: "Scan Folder" }).click();
   await expect
-    .poll(async () => (await page.locator(".library-root-row").first().textContent()) ?? "")
+    .poll(async () => (await rootRow.textContent()) ?? "")
     .toContain("COMPLETED");
-  await expect(page.locator(".library-root-row").first()).toContainText("errors 2");
+  await expect(rootRow).toContainText("errors 2");
 
   await openWorkspace(page, "Playlists");
   await expect(page.getByRole("list", { name: "Library tracks" })).toContainText("Fresh Root Track", {
@@ -201,6 +218,68 @@ test("theme preference persists across a browser-preview restart", async ({ page
     .toBe("light");
 });
 
+test("track QC keeps the detail view focused on metadata and release actions", async ({ page }) => {
+  const signals = attachUiSignalMonitor(page);
+
+  await gotoMockShell(page, {
+    initialTracks: [{ path: "C:/QC/Example Artist - QC Coverage.wav" }]
+  });
+
+  await openWorkspace(page, "Playlists");
+  await page.getByRole("button", { name: /^QC Coverage/i }).click();
+
+  await openWorkspace(page, "Quality Control");
+
+  const trackDetailCard = page.locator(".track-detail-card").first();
+  await expect(page.getByRole("heading", { name: "Choose QC Intent" })).toBeVisible();
+  await expect(trackDetailCard.getByRole("heading", { name: "QC Coverage" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search tracks" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh List" })).toHaveCount(0);
+  await expect(trackDetailCard.getByRole("button", { name: "Play Now" })).toHaveCount(0);
+  await expect(trackDetailCard.getByRole("button", { name: "Add to Queue" })).toHaveCount(0);
+  await expect(trackDetailCard.getByRole("button", { name: "Play Next" })).toHaveCount(0);
+  await expect(trackDetailCard.getByRole("button", { name: "Favorite" })).toHaveCount(0);
+  await expect(trackDetailCard.getByRole("button", { name: "Edit Metadata" })).toBeVisible();
+  await expect(trackDetailCard.getByRole("button", { name: "Prepare for Release..." })).toBeVisible();
+
+  await signals.assertClean("track qc simplified detail view");
+});
+
+test("video render flow builds a request, completes, and opens the output folder", async ({ page }) => {
+  const signals = attachUiSignalMonitor(page);
+
+  await gotoMockShell(page);
+  await openWorkspace(page, "Video Workspace");
+
+  await dropNativePath(page, "Drop image file", "C:/Media/coverage-cover.png");
+  await dropNativePath(page, "Drop audio file", "C:/Media/coverage-render.wav");
+
+  await page.getByRole("textbox", { name: "Output directory" }).fill("C:/Exports");
+  await page.getByRole("textbox", { name: "Output file name" }).fill("coverage-render");
+  await expect(page.getByTestId("video-output-file-preview")).toContainText("C:/Exports/coverage-render.mp4");
+
+  await page.getByRole("button", { name: "Build render request" }).click();
+  await expect(page.getByTestId("video-render-request-summary")).toContainText("coverage-render.mp4");
+  await expect(page.getByTestId("video-render-request-json")).toContainText("coverage-render.mp4");
+
+  await page.getByRole("button", { name: "Render MP4" }).click();
+  await expect(page.getByTestId("video-render-success-summary")).toContainText(
+    "C:/Exports/coverage-render.mp4",
+    { timeout: 15_000 }
+  );
+  await page.getByRole("button", { name: "Open Output Folder" }).click();
+  await expect(page.getByTestId("video-open-output-folder-status")).toContainText(
+    /Opened output folder: C:\/Exports/i
+  );
+
+  await signals.assertClean("video render success", {
+    allowedConsoleErrors: [
+      /Not allowed to load local resource: file:\/\/\/C:\/Media\/coverage-cover\.png/i,
+      /Not allowed to load local resource: file:\/\/\/C:\/Media\/coverage-render\.wav/i
+    ]
+  });
+});
+
 test("video preview controls remain usable after loading valid media", async ({ page }) => {
   const signals = attachUiSignalMonitor(page);
 
@@ -217,8 +296,9 @@ test("video preview controls remain usable after loading valid media", async ({ 
   );
 
   await expect(page.getByTestId("video-preview-readiness")).toHaveText(/Preview is ready/i);
-  await page.getByRole("button", { name: "Play" }).click();
+  await previewTransport(page).getByRole("button", { name: "Play" }).click();
   await expect(page.getByTestId("video-preview-status")).toContainText(/Playback:/i);
 
   await signals.assertClean("video preview happy path");
 });
+

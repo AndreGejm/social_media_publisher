@@ -33,6 +33,8 @@ $directPaths = @(
   'node_modules',
   'apps/desktop/node_modules',
   'target',
+  'target-runtime-e2e',
+  'artifacts',
   'apps/desktop/dist',
   'playwright-report',
   'playwright-report-runtime',
@@ -43,18 +45,35 @@ $directPaths = @(
   'tmp_perm_dir',
   'build/artifacts_test',
   'scripts/windows/logs',
-  'artifacts/windows'
+  'artifacts/windows',
+  '.disk_usage_raw.json'
 )
 
 $directPaths | ForEach-Object { Remove-Entry $_ }
 
-Get-ChildItem -Force -Name | Where-Object { $_ -like '_tmp_*' } | ForEach-Object { Remove-Entry $_ }
+# Temp and lint scratch outputs at workspace root.
+Get-ChildItem -Force -Name | Where-Object { $_ -like '_tmp_*' -or $_ -like '_lint_*' } | ForEach-Object { Remove-Entry $_ }
 Get-ChildItem -Force -Directory -Name | Where-Object {
-  $_ -like 'target-*' -or $_ -like 'target_agent*' -or $_ -like 'target-agent*' -or $_ -like 'target-clippy*' -or $_ -like '_push_workspace*'
+  $_ -like 'target-*' -or
+  $_ -like 'target_*' -or
+  $_ -like 'playwright-report*' -or
+  $_ -like 'test-results*' -or
+  $_ -like 'target_agent*' -or
+  $_ -like 'target-agent*' -or
+  $_ -like 'target-clippy*' -or
+  $_ -like '_push_workspace*'
 } | ForEach-Object { Remove-Entry $_ }
 
+# Generated build/install output anywhere under apps.
+if (Test-Path 'apps') {
+  Get-ChildItem -Force -Directory -Path 'apps' -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -in @('node_modules', 'dist') } |
+    Sort-Object FullName -Descending |
+    ForEach-Object { Remove-Entry $_.FullName }
+}
+
 Get-ChildItem -Force -Directory -Path 'apps/desktop' -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -like 'target-*' } |
+  Where-Object { $_.Name -like 'target-*' -or $_.Name -like 'target_*' } |
   ForEach-Object { Remove-Entry $_.FullName }
 
 Get-ChildItem -Force -Directory -Path 'apps/desktop/src-tauri' -ErrorAction SilentlyContinue |
@@ -65,8 +84,11 @@ Get-ChildItem -Force -Directory -Path 'apps/desktop/src-tauri' -ErrorAction Sile
 if (Test-Path 'archives') {
   Get-ChildItem -Recurse -Directory 'archives' -ErrorAction SilentlyContinue |
     Where-Object {
-      $_.Name -in @('node_modules', 'dist', 'target', 'build', '.cache', '.turbo', '.vite', 'test-results', 'playwright-report') -or
+      $_.Name -in @('node_modules', 'dist', 'target', 'build', '.cache', '.turbo', '.vite', 'test-results', 'playwright-report', 'playwright-report-runtime') -or
       $_.Name -like 'target-*' -or
+      $_.Name -like 'target_*' -or
+      $_.Name -like 'test-results*' -or
+      $_.Name -like 'playwright-report*' -or
       $_.Name -like '.tmp-*'
     } |
     Sort-Object FullName -Descending |
@@ -78,7 +100,3 @@ if ($DryRun) {
 } else {
   Write-Host "cleanup complete; removed $($removed.Count) paths"
 }
-
-
-
-

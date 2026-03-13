@@ -679,8 +679,20 @@ body {
   gap: 0.45rem;
 }
 
+.waveform-tooltip-root {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.waveform-tooltip-root > .waveform-shell {
+  flex: 1 1 auto;
+}
+
 .waveform-shell {
   position: relative;
+  width: 100%;
+  min-width: 0;
   height: 156px;
   border: 1px solid rgba(var(--accent-rgb), 0.16);
   border-radius: 10px;
@@ -3720,3 +3732,6 @@ body {
   overflow: auto;
   font-size: 0.78rem;
 }
+
+
+

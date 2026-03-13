@@ -375,8 +375,6 @@ function createMockDataTransfer(seed?: Record<string, string>): DataTransfer {
 
 async function openTracksAndSelectFirstTrack() {
   fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
-  const trackRow = await screen.findByRole("button", { name: /^Authoring Track/i });
-  fireEvent.click(trackRow);
   await screen.findByRole("button", { name: "Edit Metadata" });
 }
 
@@ -506,7 +504,7 @@ describe("WorkspaceApp metadata editor", () => {
   it("supports multi-select batch actions in Tracks", async () => {
     installTwoTrackCatalog();
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     fireEvent.click(await screen.findByRole("checkbox", { name: `Select ${baseTrackListItem.title} for batch actions` }));
     fireEvent.click(screen.getByRole("checkbox", { name: `Select ${secondTrackListItem.title} for batch actions` }));
@@ -530,15 +528,18 @@ describe("WorkspaceApp metadata editor", () => {
     expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
   });
 
-  it("keeps selected-track playback actions in Track Detail instead of duplicating them in the Tracks toolbar", async () => {
+  it("keeps Track Detail focused on metadata and release actions without redundant playback shortcuts", async () => {
     render(<WorkspaceApp />);
     await openTracksAndSelectFirstTrack();
 
     expect(screen.queryByRole("group", { name: "Selected track actions" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Play Now" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add to Queue" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Play Next" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Tracks view actions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Play Now" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add to Queue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Play Next" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Favorite" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit Metadata" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prepare for Release..." })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Tracks view actions" })).not.toBeInTheDocument();
   });
 
   it("shows codec preview panel with disabled-build guidance when feature flag is off", async () => {
@@ -923,7 +924,7 @@ describe("WorkspaceApp metadata editor", () => {
   it("opens a row context menu and runs Play Now", async () => {
     installTwoTrackCatalog();
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     const targetRowButton = await screen.findByRole("button", { name: /^Queue Candidate/i });
     fireEvent.contextMenu(targetRowButton);
@@ -986,8 +987,7 @@ describe("WorkspaceApp metadata editor", () => {
     fireEvent.click(within(batchActions).getByRole("button", { name: "Play Selection Next" }));
     expect(await screen.findByText("Queued 2 selected tracks to play next.")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
-    fireEvent.click(screen.getByRole("tab", { name: "Track QC" }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
     fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
     const queueList = screen.getByRole("list", { name: "Queue tracks" });
     expect(within(queueList).getByText(baseTrackListItem.title)).toBeInTheDocument();
@@ -1083,7 +1083,12 @@ describe("WorkspaceApp metadata editor", () => {
   it("splits Library ingest tools into Scan Folders and Import Files tabs with clearer labels", async () => {
     render(<WorkspaceApp />);
 
-    const ingestTabs = screen.getByRole("tablist", { name: "Library ingest sections" });
+    const workspaceMain = screen.getByRole("main");
+    const workspaceSidebar = screen.getByRole("navigation", { name: "Workspaces" }).closest("aside");
+    expect(workspaceSidebar).not.toBeNull();
+
+    const ingestTabs = within(workspaceMain).getByRole("tablist", { name: "Library ingest sections" });
+    expect(within(workspaceSidebar as HTMLElement).queryByRole("tablist", { name: "Library ingest sections" })).not.toBeInTheDocument();
     expect(within(ingestTabs).getByRole("tab", { name: "Scan Folders" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Indexes files in-place. Does not copy audio files.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add Folder" })).toBeInTheDocument();
@@ -1111,7 +1116,7 @@ describe("WorkspaceApp metadata editor", () => {
   it("keeps the Listen queue separate from the Publish release selection dock", async () => {
     installTwoTrackCatalog();
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     fireEvent.click(
       await screen.findByRole("checkbox", {
@@ -1132,7 +1137,7 @@ describe("WorkspaceApp metadata editor", () => {
     expect(within(queueDock).getByText(/No tracks prepared yet\./i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Quality Control" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Playlists" }));
     fireEvent.click(screen.getByRole("tab", { name: "Queue" }));
     queueList = screen.getByRole("list", { name: "Queue tracks" });
     expect(within(queueList).getByText(secondTrackListItem.title)).toBeInTheDocument();
@@ -1187,11 +1192,12 @@ describe("WorkspaceApp metadata editor", () => {
 
     render(<WorkspaceApp />);
     await openTracksAndSelectFirstTrack();
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     const playSpy = vi.mocked(HTMLMediaElement.prototype.play);
     playSpy.mockClear();
 
-    fireEvent.click(screen.getByRole("button", { name: "Play Now" }));
+    fireEvent.doubleClick(await screen.findByRole("button", { name: /^Authoring Track/i }));
 
     await waitFor(() => {
       expect(playSpy).toHaveBeenCalled();
@@ -1339,7 +1345,7 @@ describe("WorkspaceApp metadata editor", () => {
   });
   it("toggles queue mode from the shared transport bar without invoking native queue APIs in fallback mode", async () => {
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     const queueTab = await screen.findByRole("tab", { name: "Queue" });
     expect(queueTab).toHaveAttribute("aria-selected", "false");
@@ -2281,11 +2287,12 @@ describe("WorkspaceApp metadata editor", () => {
     });
 
     render(<WorkspaceApp />);
-    await openTracksAndSelectFirstTrack();
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
 
     const secondTrackRow = await screen.findByRole("button", { name: /^Queue Candidate/i });
     fireEvent.click(secondTrackRow);
 
+    fireEvent.click(screen.getByRole("button", { name: "Quality Control" }));
     await waitFor(() => {
       expect(tauriApiMocks.qcPreparePreviewSession).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -2296,7 +2303,8 @@ describe("WorkspaceApp metadata editor", () => {
 
     tauriApiMocks.qcPreparePreviewSession.mockClear();
 
-    const searchbox = screen.getByRole("searchbox", { name: "Search tracks" });
+    fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "Search tracks" });
     fireEvent.change(searchbox, { target: { value: "Authoring" } });
 
     await waitFor(() => {
@@ -3083,3 +3091,12 @@ describe("WorkspaceApp metadata editor", () => {
     });
   });
 });
+
+
+
+
+
+
+
+
+

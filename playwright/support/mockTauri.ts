@@ -23,6 +23,7 @@ export type MockTauriScenario = {
   timeoutCommands?: string[];
   commandErrors?: MockCommandError[];
   renderDiagnosticsBlocked?: boolean;
+  ingestPollsBeforeComplete?: number;
 };
 
 type PublicMockState = {
@@ -96,7 +97,7 @@ export async function installMockTauriBridge(
         canceled: boolean;
       };
 
-      type ScenarioShape = {
+            type ScenarioShape = {
         initialTracks?: Array<{
           path: string;
           title?: string;
@@ -110,6 +111,7 @@ export async function installMockTauriBridge(
         timeoutCommands?: string[];
         commandErrors?: Array<{ command: string; code: string; message: string }>;
         renderDiagnosticsBlocked?: boolean;
+        ingestPollsBeforeComplete?: number;
       };
 
       const scenario = (serializedScenario ?? {}) as ScenarioShape;
@@ -121,7 +123,36 @@ export async function installMockTauriBridge(
           { code: item.code, message: item.message }
         ])
       );
-      const timeoutCommands = new Set(scenario.timeoutCommands ?? []);
+            const timeoutCommands = new Set(scenario.timeoutCommands ?? []);
+      const ingestPollsBeforeComplete =
+        typeof scenario.ingestPollsBeforeComplete === "number" &&
+        Number.isFinite(scenario.ingestPollsBeforeComplete)
+          ? Math.max(2, Math.floor(scenario.ingestPollsBeforeComplete))
+          : 2;
+      const removedTrackStorageKey = "__RP_E2E_REMOVED_TRACK_PATHS__";
+
+      const readRemovedTrackPaths = (): Set<string> => {
+        try {
+          const raw = window.sessionStorage.getItem(removedTrackStorageKey);
+          if (!raw) return new Set<string>();
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return new Set<string>();
+          return new Set(parsed.map((value) => normalizePath(value)));
+        } catch {
+          return new Set<string>();
+        }
+      };
+
+      const writeRemovedTrackPaths = (paths: Iterable<string>) => {
+        try {
+          window.sessionStorage.setItem(
+            removedTrackStorageKey,
+            JSON.stringify([...new Set(Array.from(paths, (path) => normalizePath(path)))])
+          );
+        } catch {
+          // Ignore sessionStorage failures in hardened runtimes.
+        }
+      };
 
       let trackCounter = 1;
       let rootCounter = 1;
@@ -466,7 +497,10 @@ export async function installMockTauriBridge(
         createRoot(rootPath);
       }
 
-      for (const track of scenario.initialTracks ?? []) {
+            for (const track of scenario.initialTracks ?? []) {
+        if (readRemovedTrackPaths().has(normalizePath(track.path))) {
+          continue;
+        }
         createTrack(track.path, {
           title: track.title,
           artist: track.artist,
@@ -562,7 +596,7 @@ export async function installMockTauriBridge(
             if (job.poll_count === 1) {
               job.processed_items = 1;
               job.updated_at = FIXED_NOW;
-            } else if (job.poll_count >= 2) {
+            } else if (job.poll_count >= ingestPollsBeforeComplete) {
               completeIngestJob(job);
             }
           }
@@ -1012,12 +1046,17 @@ export async function installMockTauriBridge(
         };
       }).__RP_E2E__ = {
         getState: publicState,
-        deleteTracksByPath: (paths: string[]) => {
+                deleteTracksByPath: (paths: string[]) => {
           const removedPaths = new Set(paths.map((path) => normalizePath(path)));
           state.tracks = state.tracks.filter(
             (track) => !removedPaths.has(normalizePath(track.file_path))
           );
           state.queuePaths = state.queuePaths.filter((path) => !removedPaths.has(normalizePath(path)));
+          const persistedRemovedPaths = readRemovedTrackPaths();
+          for (const path of removedPaths) {
+            persistedRemovedPaths.add(path);
+          }
+          writeRemovedTrackPaths(persistedRemovedPaths);
           if (state.playback.activeQueueIndex >= state.queuePaths.length) {
             state.playback.activeQueueIndex = state.queuePaths.length - 1;
           }
@@ -1116,3 +1155,5 @@ export async function setMockCommandError(
     { nextCommand: command, nextError: error }
   );
 }
+
+

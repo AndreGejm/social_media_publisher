@@ -89,6 +89,7 @@ function WaveformOverview({
 
   return (
     <HelpTooltip
+      className="waveform-tooltip-root"
       content="Click anywhere on the waveform to seek. Use Left/Right arrow keys while focused for small seek steps."
       side="bottom"
     >
@@ -271,5 +272,9 @@ export function QcPlayer({
     </div>
   );
 }
+
+
+
+
 
 

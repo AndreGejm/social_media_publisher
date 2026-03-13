@@ -492,7 +492,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     [selectedAlbumBatchTracks]
   );
   const favoriteTrackCount = favoriteTrackIds.length;
-  const isSelectedTrackFavorite = Boolean(selectedTrackDetail && favoriteTrackIdSet.has(selectedTrackDetail.track_id));
   const contextMenuTrack = trackRowContextMenu ? visibleTracksById.get(trackRowContextMenu.trackId) ?? null : null;
   const contextMenuQueueIndex =
     trackRowContextMenu?.source === "queue"
@@ -754,7 +753,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     playBatchSelectionNow,
     armTrackFromPlayList,
     runTrackContextMenuAction,
-    toggleFavoriteTrack
   } = usePlayListActions({
     queue,
     queueTracksById: queueSourceTracksById,
@@ -1063,7 +1061,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     showNotice({ level: "info", message: "Shortcuts reset to defaults." });
   };
   const handleQueueDragEnd = () => setQueueDragTrackId(null);
-  const handleAddTrackToQueue = (trackId: string) => appendTracksToSessionQueue([trackId]);
   const handleEnterTrackEditMode = () => {
     setTrackDetailEditMode(true);
     clearTrackEditorMessages();
@@ -1576,35 +1573,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
           ))}
         </nav>
 
-        <LibraryIngestSidebar
-          visible={showLibraryIngestSidebar}
-          libraryIngestCollapsed={libraryIngestCollapsed}
-          onToggleCollapsed={toggleLibraryIngestCollapsed}
-          libraryIngestTab={libraryIngestTab}
-          tabs={libraryIngestTabs}
-          onSelectTab={setLibraryIngestTab}
-          statusItems={libraryIngestStatusItems}
-          libraryRootPathInput={libraryRootPathInput}
-          onChangeLibraryRootPathInput={setLibraryRootPathInput}
-          onBrowseLibraryRoot={handleBrowseLibraryRoot}
-          libraryRootMutating={libraryRootMutating}
-          libraryRootBrowsing={libraryRootBrowsing}
-          onAddLibraryRoot={handleAddLibraryRoot}
-          onRefreshLibraryRoots={handleRefreshLibraryRoots}
-          libraryRootsLoading={libraryRootsLoading}
-          libraryRoots={libraryRoots}
-          rootScanJobs={rootScanJobs}
-          showFullPaths={showFullPaths}
-          formatDisplayPath={formatDisplayPath}
-          onScanLibraryRoot={handleScanLibraryRoot}
-          onCancelIngestJob={handleCancelIngestJob}
-          onRemoveLibraryRoot={handleRemoveLibraryRoot}
-          importPathsInput={importPathsInput}
-          onChangeImportPathsInput={setImportPathsInput}
-          onImportFiles={handleImportFiles}
-          catalogImporting={catalogImporting}
-          catalogFailures={catalogFailures}
-        />
+
       </aside>
 
       <div className="music-main">
@@ -1669,6 +1638,36 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
             favoritesCount={favoriteTrackCount}
           />
 
+          <LibraryIngestSidebar
+            visible={showLibraryIngestSidebar}
+            libraryIngestCollapsed={libraryIngestCollapsed}
+            onToggleCollapsed={toggleLibraryIngestCollapsed}
+            libraryIngestTab={libraryIngestTab}
+            tabs={libraryIngestTabs}
+            onSelectTab={setLibraryIngestTab}
+            statusItems={libraryIngestStatusItems}
+            libraryRootPathInput={libraryRootPathInput}
+            onChangeLibraryRootPathInput={setLibraryRootPathInput}
+            onBrowseLibraryRoot={handleBrowseLibraryRoot}
+            libraryRootMutating={libraryRootMutating}
+            libraryRootBrowsing={libraryRootBrowsing}
+            onAddLibraryRoot={handleAddLibraryRoot}
+            onRefreshLibraryRoots={handleRefreshLibraryRoots}
+            libraryRootsLoading={libraryRootsLoading}
+            libraryRoots={libraryRoots}
+            rootScanJobs={rootScanJobs}
+            showFullPaths={showFullPaths}
+            formatDisplayPath={formatDisplayPath}
+            onScanLibraryRoot={handleScanLibraryRoot}
+            onCancelIngestJob={handleCancelIngestJob}
+            onRemoveLibraryRoot={handleRemoveLibraryRoot}
+            importPathsInput={importPathsInput}
+            onChangeImportPathsInput={setImportPathsInput}
+            onImportFiles={handleImportFiles}
+            catalogImporting={catalogImporting}
+            catalogFailures={catalogFailures}
+          />
+
           <section hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control"} className="workspace-section qc-intent-shell">
             <div className="qc-intent-head">
               <p className="eyebrow">Quality Control</p>
@@ -1701,21 +1700,14 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
 
           <section
             hidden={activeMode !== "Listen" || activeWorkspace !== "Quality Control" || qualityControlMode !== "track"}
-            className="workspace-section tracks-layout"
+            className="workspace-section"
           >
-            <PlayListPanel {...playListPanelProps} />
-
             <TrackDetailPanel
               selectedTrackLoading={selectedTrackLoading}
               selectedTrackDetail={selectedTrackDetail}
               selectedTrackAnalysis={selectedTrackAnalysis}
               trackDetailEditMode={trackDetailEditMode}
               trackEditorDirty={trackEditorDirty}
-              isSelectedTrackFavorite={isSelectedTrackFavorite}
-              onPlayNow={playTrackNow}
-              onAddToQueue={handleAddTrackToQueue}
-              onPlayNext={enqueueTrackNext}
-              onToggleFavorite={toggleFavoriteTrack}
               onEnterEditMode={handleEnterTrackEditMode}
               onSaveMetadata={handleSaveMetadata}
               canSaveTrackMetadata={canSaveTrackMetadata}
@@ -2013,6 +2005,9 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     </div>
   );
 }
+
+
+
 
 
 

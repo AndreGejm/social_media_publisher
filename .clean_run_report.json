@@ -1,0 +1,105 @@
+{
+  "root": "C:\\Dev\\testing chtgpt",
+  "timestamp": 1773398946.4117434,
+  "start_total": 23654372121,
+  "end_total": 4720032693,
+  "removed": [
+    {
+      "path": "target",
+      "size_before": 15383521298,
+      "kind": "dir",
+      "reason": "generated-dir:target"
+    },
+    {
+      "path": "target-runtime-e2e",
+      "size_before": 2338821258,
+      "kind": "dir",
+      "reason": "generated-dir-prefix"
+    },
+    {
+      "path": "node_modules",
+      "size_before": 927161143,
+      "kind": "dir",
+      "reason": "generated-dir:node_modules"
+    },
+    {
+      "path": "artifacts",
+      "size_before": 214714182,
+      "kind": "dir",
+      "reason": "generated-dir:artifacts"
+    },
+    {
+      "path": "apps\\desktop\\node_modules",
+      "size_before": 45012483,
+      "kind": "dir",
+      "reason": "generated-dir:node_modules"
+    },
+    {
+      "path": ".disk_usage_raw.json",
+      "size_before": 23166955,
+      "kind": "file",
+      "reason": "analysis-temp-file"
+    },
+    {
+      "path": "playwright-report",
+      "size_before": 571216,
+      "kind": "dir",
+      "reason": "generated-dir:playwright-report"
+    },
+    {
+      "path": "apps\\desktop\\dist",
+      "size_before": 555508,
+      "kind": "dir",
+      "reason": "generated-dir:dist"
+    },
+    {
+      "path": "playwright-report-runtime",
+      "size_before": 462884,
+      "kind": "dir",
+      "reason": "generated-dir:playwright-report-runtime"
+    },
+    {
+      "path": "_lint_initial.json",
+      "size_before": 148580,
+      "kind": "file",
+      "reason": "temp-lint-output"
+    },
+    {
+      "path": "test-results",
+      "size_before": 84878,
+      "kind": "dir",
+      "reason": "generated-dir:test-results"
+    },
+    {
+      "path": "scripts\\windows\\logs",
+      "size_before": 69440,
+      "kind": "dir",
+      "reason": "explicit-generated-path"
+    },
+    {
+      "path": "_lint_postfix.json",
+      "size_before": 45724,
+      "kind": "file",
+      "reason": "temp-lint-output"
+    },
+    {
+      "path": "_tmp_css_colors.txt",
+      "size_before": 3405,
+      "kind": "file",
+      "reason": "temp-tempfile"
+    },
+    {
+      "path": "_lint_initial.txt",
+      "size_before": 474,
+      "kind": "file",
+      "reason": "temp-lint-output"
+    },
+    {
+      "path": ".runtime-e2e-temp",
+      "size_before": 0,
+      "kind": "dir",
+      "reason": "generated-dir:.runtime-e2e-temp"
+    }
+  ],
+  "failed": []
+}

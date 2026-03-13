@@ -46,6 +46,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
   const lastHandledAutoplaySourceKeyRef = useRef<string | null>(null);
   const autoplayInFlightSourceKeyRef = useRef<string | null>(null);
   const autoplayRequestSourceKeyRef = useRef<string | null>(autoplayRequestSourceKey);
+  const autoplayRunIdRef = useRef(0);
   const playerSourceKey = playerSource?.key ?? null;
 
   autoplayRequestSourceKeyRef.current = autoplayRequestSourceKey;
@@ -190,6 +191,22 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     if (autoplayInFlightSourceKeyRef.current === autoplayRequestSourceKey) return;
 
     autoplayInFlightSourceKeyRef.current = autoplayRequestSourceKey;
+    autoplayRunIdRef.current += 1;
+    const autoplayRunId = autoplayRunIdRef.current;
+    const requestedSourceKey = autoplayRequestSourceKey;
+    const resolvedSourceKey = playerSourceKey;
+    let cancelled = false;
+
+    const isCurrentRun = () => !cancelled && autoplayRunIdRef.current === autoplayRunId;
+
+    const finalizeRun = () => {
+      if (!isCurrentRun()) return;
+      lastHandledAutoplaySourceKeyRef.current = resolvedSourceKey;
+      autoplayInFlightSourceKeyRef.current = null;
+      setAutoplayRequestSourceKey((current) =>
+        current === resolvedSourceKey ? null : current
+      );
+    };
 
     const run = async () => {
       try {
@@ -202,7 +219,10 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           }
 
           await setPlaybackQueue(queueFilePaths);
+          if (!isCurrentRun()) return;
+
           const accepted = await pushPlaybackTrackChangeRequest(queueIndex);
+          if (!isCurrentRun()) return;
           if (!accepted) {
             throw {
               code: "PLAYBACK_QUEUE_REQUEST_REJECTED",
@@ -211,6 +231,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           }
 
           await setPlaybackPlaying(true);
+          if (!isCurrentRun()) return;
           setPlayerIsPlaying(true);
         } else {
           if (!playerAudioSrc) return;
@@ -220,11 +241,14 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           if (maybePromise && typeof maybePromise.then === "function") {
             await maybePromise;
           }
+          if (!isCurrentRun()) return;
           setPlayerIsPlaying(true);
         }
 
+        if (!isCurrentRun()) return;
         setPlayerError(null);
       } catch (error) {
+        if (!isCurrentRun()) return;
         const message = sanitizeUiErrorMessage(error, "Unable to start playback for this file.");
         setPlayerError(message);
         onNotice({
@@ -232,15 +256,20 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
           message: "Playback failed to start. Check file format support or file access."
         });
       } finally {
-        lastHandledAutoplaySourceKeyRef.current = playerSourceKey;
-        autoplayInFlightSourceKeyRef.current = null;
-        setAutoplayRequestSourceKey((current) =>
-          current === playerSourceKey ? null : current
-        );
+        finalizeRun();
       }
     };
 
     void run();
+    return () => {
+      cancelled = true;
+      if (
+        autoplayRunIdRef.current === autoplayRunId &&
+        autoplayInFlightSourceKeyRef.current === requestedSourceKey
+      ) {
+        autoplayInFlightSourceKeyRef.current = null;
+      }
+    };
   }, [
     autoplayRequestSourceKey,
     nativeTransportEnabled,
@@ -258,4 +287,3 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     setPlayerIsPlaying
   ]);
 }
-

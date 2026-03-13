@@ -21,6 +21,8 @@ direct_paths=(
   "node_modules"
   "apps/desktop/node_modules"
   "target"
+  "target-runtime-e2e"
+  "artifacts"
   "apps/desktop/dist"
   "playwright-report"
   "playwright-report-runtime"
@@ -32,6 +34,7 @@ direct_paths=(
   "build/artifacts_test"
   "scripts/windows/logs"
   "artifacts/windows"
+  ".disk_usage_raw.json"
 )
 
 for p in "${direct_paths[@]}"; do
@@ -39,15 +42,21 @@ for p in "${direct_paths[@]}"; do
 done
 
 shopt -s nullglob
-for p in _tmp_*; do
+for p in _tmp_* _lint_*; do
   remove_entry "$p"
 done
 
-for p in target-* target_agent* target-agent* target-clippy* _push_workspace*; do
+for p in target-* target_* playwright-report* test-results* target_agent* target-agent* target-clippy* _push_workspace*; do
   [[ -e "$p" ]] && remove_entry "$p"
 done
 
-for p in apps/desktop/target-*; do
+if [[ -d "apps" ]]; then
+  while IFS= read -r -d '' d; do
+    remove_entry "$d"
+  done < <(find apps -type d \( -name node_modules -o -name dist \) -print0 | sort -rz)
+fi
+
+for p in apps/desktop/target-* apps/desktop/target_*; do
   [[ -e "$p" ]] && remove_entry "$p"
 done
 
@@ -60,10 +69,10 @@ if [[ -d "archives" ]]; then
   while IFS= read -r -d '' d; do
     base="$(basename "$d")"
     case "$base" in
-      node_modules|dist|target|build|.cache|.turbo|.vite|test-results|playwright-report)
+      node_modules|dist|target|build|.cache|.turbo|.vite|test-results|playwright-report|playwright-report-runtime)
         remove_entry "$d"
         ;;
-      target-*|.tmp-*)
+      target-*|target_*|test-results*|playwright-report*|.tmp-*)
         remove_entry "$d"
         ;;
     esac
@@ -75,6 +84,3 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   echo "cleanup complete"
 fi
-
-
-

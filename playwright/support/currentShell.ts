@@ -3,17 +3,20 @@ import { expect, type Page } from "@playwright/test";
 type UiSignalMonitor = {
   assertClean: (
     label: string,
-    options?: { allowedNotifications?: Array<RegExp | string> }
+    options?: {
+      allowedNotifications?: Array<RegExp | string>;
+      allowedConsoleErrors?: Array<RegExp | string>;
+    }
   ) => Promise<void>;
 };
 
 const NOTIFICATION_LOCATOR = '[aria-label="Notifications"] .app-notification';
 
-function matchesAllowedNotification(
+function matchesAllowedText(
   text: string,
-  allowedNotifications: Array<RegExp | string>
+  allowedValues: Array<RegExp | string>
 ): boolean {
-  return allowedNotifications.some((allowed) =>
+  return allowedValues.some((allowed) =>
     typeof allowed === "string" ? text.includes(allowed) : allowed.test(text)
   );
 }
@@ -39,14 +42,18 @@ export function attachUiSignalMonitor(page: Page): UiSignalMonitor {
   return {
     async assertClean(label, options) {
       const allowedNotifications = options?.allowedNotifications ?? [];
+      const allowedConsoleErrors = options?.allowedConsoleErrors ?? [];
       const notificationTexts = (await page.locator(NOTIFICATION_LOCATOR).allInnerTexts())
         .map((text) => text.replace(/\s+/g, " ").trim())
         .filter(Boolean);
       const unexpectedNotifications = notificationTexts.filter(
-        (text) => !matchesAllowedNotification(text, allowedNotifications)
+        (text) => !matchesAllowedText(text, allowedNotifications)
+      );
+      const unexpectedConsoleErrors = consoleErrors.filter(
+        (text) => !matchesAllowedText(text, allowedConsoleErrors)
       );
 
-      expect(consoleErrors, `${label}: unexpected console errors`).toEqual([]);
+      expect(unexpectedConsoleErrors, `${label}: unexpected console errors`).toEqual([]);
       expect(pageErrors, `${label}: unexpected page errors`).toEqual([]);
       expect(dialogs, `${label}: unexpected dialogs`).toEqual([]);
       expect(unexpectedNotifications, `${label}: unexpected notifications`).toEqual([]);

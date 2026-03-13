@@ -139,6 +139,7 @@ export function useCatalogSelectionState(args: UseCatalogSelectionStateArgs) {
       setSelectedTrackDetail(null);
       return;
     }
+    setSelectedTrackDetail(null);
     let cancelled = false;
     setSelectedTrackLoading(true);
     setCatalogError(null);

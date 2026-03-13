@@ -24,11 +24,6 @@ type TrackDetailPanelProps = {
   selectedTrackAnalysis: QcPlayerAnalysis | null;
   trackDetailEditMode: boolean;
   trackEditorDirty: boolean;
-  isSelectedTrackFavorite: boolean;
-  onPlayNow: (trackId: string) => void;
-  onAddToQueue: (trackId: string) => void;
-  onPlayNext: (trackId: string) => void;
-  onToggleFavorite: (trackId: string) => void;
   onEnterEditMode: () => void;
   onSaveMetadata: () => void;
   canSaveTrackMetadata: boolean;
@@ -85,7 +80,7 @@ export default function TrackDetailPanel(props: TrackDetailPanelProps) {
     <div className="tracks-column tracks-detail-column">
       {props.selectedTrackLoading ? <p className="empty-state">Loading track detail...</p> : null}
       {!props.selectedTrackLoading && !props.selectedTrackDetail ? (
-        <p className="empty-state">Select a track to view waveform, QC metrics, and metadata.</p>
+        <p className="empty-state">Select a track in Library or Playlists to view waveform, QC metrics, and metadata here.</p>
       ) : null}
       {props.selectedTrackDetail && props.selectedTrackAnalysis ? (
         <div className="track-detail-stack">
@@ -112,43 +107,7 @@ export default function TrackDetailPanel(props: TrackDetailPanelProps) {
                 </div>
               </div>
               <div className="track-detail-actions">
-                <HelpTooltip content="Play this track now and move it to the front of the current local session queue.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onPlayNow(props.selectedTrackDetail!.track_id)}
-                  >
-                    Play Now
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Adds this track to the end of the local session queue without changing playback.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onAddToQueue(props.selectedTrackDetail!.track_id)}
-                  >
-                    Add to Queue
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Places this track immediately after the currently playing track in the local queue.">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => props.onPlayNext(props.selectedTrackDetail!.track_id)}
-                  >
-                    Play Next
-                  </button>
-                </HelpTooltip>
-                <HelpTooltip content="Marks this track as a local session favorite for quick filtering and browsing.">
-                  <button
-                    type="button"
-                    className={`secondary-action${props.isSelectedTrackFavorite ? " active" : ""}`}
-                    onClick={() => props.onToggleFavorite(props.selectedTrackDetail!.track_id)}
-                    aria-pressed={props.isSelectedTrackFavorite}
-                  >
-                    {props.isSelectedTrackFavorite ? "Unfavorite" : "Favorite"}
-                  </button>
-                </HelpTooltip>
+                
                 {!props.trackDetailEditMode ? (
                   <HelpTooltip content="Enables inline metadata editing for this track detail view.">
                     <button type="button" className="secondary-action" onClick={props.onEnterEditMode}>
@@ -595,4 +554,6 @@ export default function TrackDetailPanel(props: TrackDetailPanelProps) {
     </div>
   );
 }
+
+
 

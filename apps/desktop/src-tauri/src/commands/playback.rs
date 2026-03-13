@@ -2,6 +2,9 @@ use super::*;
 
 #[tauri::command]
 pub async fn set_volume(level: f32) -> Result<(), AppError> {
+    if !level.is_finite() || level < 0.0 {
+        return Err(AppError::invalid_argument("volume level must be finite and >= 0.0"));
+    }
     backend_audio_service::set_volume(level)
 }
 
@@ -22,6 +25,9 @@ pub async fn set_playback_playing(is_playing: bool) -> Result<(), AppError> {
 
 #[tauri::command]
 pub async fn seek_playback_ratio(ratio: f32) -> Result<(), AppError> {
+    if !ratio.is_finite() || ratio < 0.0 || ratio > 1.0 {
+        return Err(AppError::invalid_argument("seek ratio must be finite and between 0.0 and 1.0"));
+    }
     backend_audio_service::seek_playback_ratio(ratio)
 }
 
