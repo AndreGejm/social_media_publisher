@@ -79,6 +79,7 @@ pub(crate) struct VideoRenderOverlayInput {
     pub smoothing: f32,
     pub position: String,
     pub theme_color_hex: String,
+    pub size_percent: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1260,9 +1261,10 @@ fn build_filter_complex(request: &VideoRenderRequest) -> Result<String, VideoRen
         }
 
         let strip_h = ((height as f32)
-            * (0.12 + request.composition.overlay.intensity.clamp(0.0, 1.0) * 0.18))
+            * (0.12 + request.composition.overlay.intensity.clamp(0.0, 1.0) * 0.18)
+            * (request.composition.overlay.size_percent / 100.0).clamp(0.0, 2.0))
             .round()
-            .clamp(24.0, height as f32) as u32;
+            .clamp(1.0, height as f32) as u32;
         let strip_rate = ((request.composition.frame_rate as f32)
             * (1.0 - request.composition.overlay.smoothing.clamp(0.0, 1.0) * 0.65))
             .round()
@@ -2023,6 +2025,17 @@ fn collect_validation_issues(request: &VideoRenderRequest) -> Vec<VideoRenderVal
         });
     }
 
+    if !request.composition.overlay.size_percent.is_finite()
+        || request.composition.overlay.size_percent < 0.0
+        || request.composition.overlay.size_percent > 200.0
+    {
+        issues.push(VideoRenderValidationIssue {
+            code: VideoRenderValidationIssueCode::InvalidComposition,
+            message: "overlay.sizePercent must be between 0 and 200.".to_string(),
+            field: "composition.overlay.sizePercent".to_string(),
+        });
+    }
+
     if request.output.preset_id.trim().is_empty() {
         issues.push(VideoRenderValidationIssue {
             code: VideoRenderValidationIssueCode::InvalidOutputFormat,
@@ -2199,6 +2212,7 @@ mod tests {
                     smoothing: 0.45,
                     position: "bottom".to_string(),
                     theme_color_hex: "#44c8ff".to_string(),
+                    size_percent: 100.0,
                 },
             },
             output: VideoRenderOutputInput {
@@ -2270,6 +2284,21 @@ mod tests {
         let error = runtime
             .start_render(request)
             .expect_err("invalid request should fail start");
+        assert_eq!(error.code, app_error_codes::VIDEO_RENDER_INVALID_REQUEST);
+        assert_eq!(error.message, "render request validation failed");
+    }
+
+    #[test]
+    fn start_render_rejects_overlay_size_out_of_range() {
+        let runtime = VideoRenderRuntime::with_runner(Arc::new(MockRunner {
+            mode: MockRunnerMode::Success,
+        }));
+        let mut request = request_fixture();
+        request.composition.overlay.size_percent = 250.0;
+
+        let error = runtime
+            .start_render(request)
+            .expect_err("overlay size outside range should fail start");
         assert_eq!(error.code, app_error_codes::VIDEO_RENDER_INVALID_REQUEST);
         assert_eq!(error.message, "render request validation failed");
     }
@@ -2436,3 +2465,5 @@ mod tests {
         assert!(metadata.len() > 0);
     }
 }
+
+

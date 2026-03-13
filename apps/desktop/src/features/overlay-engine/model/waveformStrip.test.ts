@@ -4,6 +4,7 @@ import {
   analyzeWavBytesToEnvelope,
   createDefaultVideoOverlaySettings,
   deriveWaveformStripBars,
+  deriveWaveformStripHeightRatio,
   patchVideoOverlaySettings,
   type AudioWaveformAnalysis
 } from "./waveformStrip";
@@ -58,6 +59,7 @@ describe("overlay-engine waveformStrip", () => {
     expect(defaults.style).toBe("waveform_strip");
     expect(defaults.opacity).toBeLessThanOrEqual(0.35);
     expect(defaults.intensity).toBeLessThanOrEqual(0.5);
+    expect(defaults.sizePercent).toBe(100);
   });
 
   it("clamps and normalizes patched settings", () => {
@@ -67,6 +69,7 @@ describe("overlay-engine waveformStrip", () => {
       smoothing: 4,
       position: "top",
       themeColorHex: "#00aaee",
+      sizePercent: 500,
       barCount: 500
     });
 
@@ -75,6 +78,7 @@ describe("overlay-engine waveformStrip", () => {
     expect(patched.smoothing).toBe(1);
     expect(patched.position).toBe("top");
     expect(patched.themeColorHex).toBe("#00AAEE");
+    expect(patched.sizePercent).toBe(200);
     expect(patched.barCount).toBe(128);
   });
 
@@ -87,7 +91,7 @@ describe("overlay-engine waveformStrip", () => {
     expect(first).toEqual(second);
   });
 
-  it("derives deterministic waveform strip bars", () => {
+  it("derives static full-track waveform strip bars", () => {
     const analysis: AudioWaveformAnalysis = {
       envelope: [0, 0.2, 0.9, 0.5, 0.1, 0.8, 0.4, 0.3],
       sampleRateHz: 44_100,
@@ -101,23 +105,26 @@ describe("overlay-engine waveformStrip", () => {
       enabled: true,
       barCount: 24,
       intensity: 0.8,
-      smoothing: 0.25
+      smoothing: 0.25,
+      sizePercent: 140
     });
 
     const first = deriveWaveformStripBars({
       analysis,
-      progressRatio: 0.42,
+      progressRatio: 0.1,
       settings
     });
 
     const second = deriveWaveformStripBars({
       analysis,
-      progressRatio: 0.42,
+      progressRatio: 0.9,
       settings
     });
 
     expect(first).toEqual(second);
     expect(first).toHaveLength(24);
     expect(first.every((value) => value >= 0 && value <= 1)).toBe(true);
+    expect(deriveWaveformStripHeightRatio(settings)).toBeCloseTo(0.3696, 4);
   });
 });
+

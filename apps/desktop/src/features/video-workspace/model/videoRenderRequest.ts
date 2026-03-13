@@ -59,6 +59,7 @@ export type VideoRenderRequest = {
       smoothing: number;
       position: VideoOverlaySettings["position"];
       themeColorHex: string;
+      sizePercent: number;
     };
   };
   output: {
@@ -201,7 +202,8 @@ function toRequestWithoutId(args: {
         intensity: input.overlaySettings.intensity,
         smoothing: input.overlaySettings.smoothing,
         position: input.overlaySettings.position,
-        themeColorHex: input.overlaySettings.themeColorHex
+        themeColorHex: input.overlaySettings.themeColorHex,
+        sizePercent: input.overlaySettings.sizePercent
       }
     },
     output: {

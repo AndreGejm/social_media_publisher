@@ -5,6 +5,7 @@ import {
   VIDEO_PREVIEW_FIT_MODE_OPTIONS,
   VIDEO_TEXT_LAYOUT_PRESETS
 } from "../video-composition/api";
+import { deriveWaveformStripHeightRatio } from "../overlay-engine/api";
 import {
   formatFileSize,
   type VideoWorkspaceMediaAsset
@@ -575,6 +576,8 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
         : overlayController.analysis.status === "ready"
           ? "Ready"
           : "Error";
+  const overlayPreviewHeightPercent =
+    Math.round(deriveWaveformStripHeightRatio(overlayController.settings) * 1000) / 10;
 
   return (
     <div className={props.className ?? ""} data-testid="video-workspace-shell">
@@ -842,6 +845,24 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
                         overlayController.setSmoothing(Number(event.currentTarget.value));
                       }}
                       aria-label="Overlay smoothing"
+                    />
+                  </label>
+
+                  <label className="video-overlay-row">
+                    <span>Overlay size ({overlayController.settings.sizePercent}%)</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={overlayController.settings.sizePercent}
+                      onChange={(event) => {
+                        if (!overlayController.settings.enabled) {
+                          overlayController.setEnabled(true);
+                        }
+                        overlayController.setSizePercent(Number(event.currentTarget.value));
+                      }}
+                      aria-label="Overlay size"
                     />
                   </label>
 
@@ -1147,13 +1168,16 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
                       data-overlay-opacity={overlayController.settings.opacity.toFixed(2)}
                       data-overlay-intensity={overlayController.settings.intensity.toFixed(2)}
                       data-overlay-smoothing={overlayController.settings.smoothing.toFixed(2)}
+                      data-overlay-size={overlayController.settings.sizePercent.toString()}
+                      data-overlay-preview-mode="static"
+                      style={{ height: `${overlayPreviewHeightPercent}%` }}
                     >
                       {overlayController.bars.map((bar, index) => (
                         <span
                           key={`overlay-bar-${index}`}
                           className="video-overlay-bar"
                           style={{
-                            height: `${Math.max(8, Math.round(bar * 100))}%`,
+                            height: `${Math.max(1, Math.round(bar * 100))}%`,
                             backgroundColor: overlayController.settings.themeColorHex,
                             opacity: overlayController.settings.opacity
                           }}
@@ -1407,4 +1431,5 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
     </div>
   );
 }
+
 

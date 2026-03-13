@@ -10,6 +10,7 @@ export type VideoOverlaySettings = {
   smoothing: number;
   position: OverlayPosition;
   themeColorHex: string;
+  sizePercent: number;
   barCount: number;
 };
 
@@ -48,6 +49,8 @@ export const OVERLAY_SETTINGS_BOUNDS = {
   intensityMax: 1,
   smoothingMin: 0,
   smoothingMax: 1,
+  sizePercentMin: 0,
+  sizePercentMax: 200,
   barCountMin: 16,
   barCountMax: 128
 } as const;
@@ -70,6 +73,13 @@ function normalizeBarCount(value: number): number {
   return Math.round(clamp(value, OVERLAY_SETTINGS_BOUNDS.barCountMin, OVERLAY_SETTINGS_BOUNDS.barCountMax));
 }
 
+function normalizeSizePercent(value: number): number {
+  if (!Number.isFinite(value)) return 100;
+  return Math.round(
+    clamp(value, OVERLAY_SETTINGS_BOUNDS.sizePercentMin, OVERLAY_SETTINGS_BOUNDS.sizePercentMax)
+  );
+}
+
 export function createDefaultVideoOverlaySettings(): VideoOverlaySettings {
   return {
     enabled: false,
@@ -79,6 +89,7 @@ export function createDefaultVideoOverlaySettings(): VideoOverlaySettings {
     smoothing: 0.45,
     position: "bottom",
     themeColorHex: DEFAULT_OVERLAY_COLOR,
+    sizePercent: 100,
     barCount: 56
   };
 }
@@ -107,6 +118,10 @@ export function patchVideoOverlaySettings(
       patch.themeColorHex !== undefined
         ? normalizeHexColor(patch.themeColorHex)
         : current.themeColorHex,
+    sizePercent:
+      patch.sizePercent !== undefined
+        ? normalizeSizePercent(patch.sizePercent)
+        : current.sizePercent,
     barCount: patch.barCount !== undefined ? normalizeBarCount(patch.barCount) : current.barCount
   };
 }
@@ -354,6 +369,12 @@ function smoothEnvelopeAt(envelope: readonly number[], index: number, smoothing:
   return count > 0 ? sum / count : 0;
 }
 
+export function deriveWaveformStripHeightRatio(settings: VideoOverlaySettings): number {
+  const intensity = clamp(settings.intensity, 0, 1);
+  const sizeScale = clamp(settings.sizePercent / 100, 0, 2);
+  return clamp((0.12 + intensity * 0.18) * sizeScale, 0, 1);
+}
+
 export function deriveWaveformStripBars(args: {
   analysis: AudioWaveformAnalysis | null;
   progressRatio: number;
@@ -362,21 +383,30 @@ export function deriveWaveformStripBars(args: {
   const { analysis, settings } = args;
   if (!analysis || analysis.envelope.length === 0) return [];
 
-  const progressRatio = clamp(args.progressRatio, 0, 1);
   const barCount = normalizeBarCount(settings.barCount);
   const envelope = analysis.envelope;
-
-  const centerIndex = Math.round(progressRatio * (envelope.length - 1));
-  const halfBars = Math.floor(barCount / 2);
-
   const bars: number[] = [];
+
   for (let barIndex = 0; barIndex < barCount; barIndex += 1) {
-    const sourceIndex = clamp(centerIndex - halfBars + barIndex, 0, envelope.length - 1);
-    const smoothed = smoothEnvelopeAt(envelope, sourceIndex, settings.smoothing);
-    const scaled = clamp(smoothed * (0.3 + settings.intensity * 0.7), 0, 1);
-    bars.push(scaled);
+    const startIndex = Math.floor((barIndex / barCount) * envelope.length);
+    const endIndex =
+      barIndex === barCount - 1
+        ? envelope.length
+        : Math.max(startIndex + 1, Math.floor(((barIndex + 1) / barCount) * envelope.length));
+
+    let sum = 0;
+    let count = 0;
+
+    for (let sourceIndex = startIndex; sourceIndex < endIndex; sourceIndex += 1) {
+      sum += smoothEnvelopeAt(envelope, sourceIndex, settings.smoothing);
+      count += 1;
+    }
+
+    const averaged = count > 0 ? sum / count : envelope[startIndex] ?? 0;
+    bars.push(clamp(averaged, 0, 1));
   }
 
   return bars;
 }
+
 

@@ -384,11 +384,16 @@ describe("VideoWorkspaceFeature", () => {
     fireEvent.change(screen.getByLabelText("Overlay smoothing"), {
       target: { value: "0.20" }
     });
+    fireEvent.change(screen.getByLabelText("Overlay size"), {
+      target: { value: "140" }
+    });
 
     expect(overlay).toHaveAttribute("data-overlay-position", "top");
     expect(overlay).toHaveAttribute("data-overlay-opacity", "0.80");
     expect(overlay).toHaveAttribute("data-overlay-intensity", "0.90");
     expect(overlay).toHaveAttribute("data-overlay-smoothing", "0.20");
+    expect(overlay).toHaveAttribute("data-overlay-size", "140");
+    expect(overlay).toHaveAttribute("data-overlay-preview-mode", "static");
   });
 
   it("updates preview fit mode deterministically", async () => {
@@ -859,6 +864,7 @@ describe("VideoWorkspaceFeature", () => {
     expect(audioElement.currentTime).toBe(60);
   });
 });
+
 
 
 

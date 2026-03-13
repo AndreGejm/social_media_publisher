@@ -28,6 +28,7 @@ export type VideoRenderRequest = {
       smoothing: number;
       position: "top" | "bottom";
       themeColorHex: string;
+      sizePercent: number;
     };
   };
   output: {

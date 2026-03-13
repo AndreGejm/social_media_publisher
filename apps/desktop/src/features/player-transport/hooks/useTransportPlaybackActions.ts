@@ -49,6 +49,8 @@ export function useTransportPlaybackActions(
     setPlayerIsPlaying
   } = args;
 
+  const isQueueBackedSource = playerSource?.key?.startsWith("catalog:") ?? false;
+
   const publisherOpsTransportStateRef = useRef<SharedTransportBridgeForPublisherOps["state"]>({
     sourceKey: null,
     currentTimeSec: 0,
@@ -89,7 +91,7 @@ export function useTransportPlaybackActions(
       const durationSec = Math.max(source.durationMs / 1000, 0.001);
       const nextTime = Math.max(0, Math.min(durationSec, durationSec * clampedRatio));
 
-      if (nativeTransportEnabled) {
+      if (nativeTransportEnabled && isQueueBackedSource) {
         void seekPlaybackRatio(clampedRatio)
           .then(() => {
             setPlayerTimeSec(nextTime);
@@ -110,12 +112,20 @@ export function useTransportPlaybackActions(
         setPlayerError("Unable to seek the current track.");
       }
     },
-    [nativeTransportEnabled, playerAudioRef, playerSource, seekPlaybackRatio, setPlayerError, setPlayerTimeSec]
+    [
+      isQueueBackedSource,
+      nativeTransportEnabled,
+      playerAudioRef,
+      playerSource,
+      seekPlaybackRatio,
+      setPlayerError,
+      setPlayerTimeSec
+    ]
   );
 
   const setNativePlaybackPlaying = useCallback(
     async (isPlaying: boolean) => {
-      if (!nativeTransportEnabled) {
+      if (!nativeTransportEnabled || !isQueueBackedSource) {
         const audio = playerAudioRef.current;
         if (!audio) {
           throw new Error("Legacy playback element is unavailable.");
@@ -137,7 +147,14 @@ export function useTransportPlaybackActions(
       await setPlaybackPlaying(isPlaying);
       setPlayerIsPlaying(isPlaying);
     },
-    [nativeTransportEnabled, playerAudioRef, setPlaybackPlaying, setPlayerError, setPlayerIsPlaying]
+    [
+      isQueueBackedSource,
+      nativeTransportEnabled,
+      playerAudioRef,
+      setPlaybackPlaying,
+      setPlayerError,
+      setPlayerIsPlaying
+    ]
   );
 
   publisherOpsTransportStateRef.current = {

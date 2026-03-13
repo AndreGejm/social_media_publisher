@@ -46,6 +46,13 @@ function assertUnitInterval(value: number, label: string): void {
   }
 }
 
+function assertOverlaySizePercent(value: number, label: string): void {
+  assertFiniteNumber(value, label);
+  if (value < 0 || value > 200) {
+    throw invalidArgument(`${label} must be between 0 and 200.`);
+  }
+}
+
 function validateVideoRenderRequestInput(request: VideoRenderRequest): void {
   if (!request || typeof request !== "object") {
     throw invalidArgument("request must be an object.");
@@ -83,6 +90,10 @@ function validateVideoRenderRequestInput(request: VideoRenderRequest): void {
   assertUnitInterval(request.composition.overlay.opacity, "request.composition.overlay.opacity");
   assertUnitInterval(request.composition.overlay.intensity, "request.composition.overlay.intensity");
   assertUnitInterval(request.composition.overlay.smoothing, "request.composition.overlay.smoothing");
+  assertOverlaySizePercent(
+    request.composition.overlay.sizePercent,
+    "request.composition.overlay.sizePercent"
+  );
 
   assertColorHex(request.composition.overlay.themeColorHex, "request.composition.overlay.themeColorHex");
   assertColorHex(request.composition.text.colorHex, "request.composition.text.colorHex");

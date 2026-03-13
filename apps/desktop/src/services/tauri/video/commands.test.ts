@@ -56,7 +56,8 @@ function createRequest(): VideoRenderRequest {
         intensity: 0.5,
         smoothing: 0.45,
         position: "bottom",
-        themeColorHex: "#44c8ff"
+        themeColorHex: "#44c8ff",
+        sizePercent: 100
       }
     },
     output: {
@@ -116,6 +117,25 @@ describe("tauri/video commands", () => {
 
     await expect(videoRenderStart(request)).rejects.toMatchObject({
       code: "INVALID_ARGUMENT"
+    });
+    expect(invokeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects overlay size outside the supported range before IPC", async () => {
+    const request = {
+      ...createRequest(),
+      composition: {
+        ...createRequest().composition,
+        overlay: {
+          ...createRequest().composition.overlay,
+          sizePercent: 250
+        }
+      }
+    };
+
+    await expect(videoRenderStart(request)).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: "request.composition.overlay.sizePercent must be between 0 and 200."
     });
     expect(invokeCommandMock).not.toHaveBeenCalled();
   });

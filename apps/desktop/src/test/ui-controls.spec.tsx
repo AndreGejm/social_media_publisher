@@ -691,7 +691,8 @@ describe("Mechanical UI control audits", () => {
         { role: "combobox", name: "Overlay position", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "top" } }) },
         { role: "slider", name: "Overlay opacity", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "0.8" } }) },
         { role: "slider", name: "Overlay intensity", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "0.9" } }) },
-        { role: "slider", name: "Overlay smoothing", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "0.2" } }) }
+        { role: "slider", name: "Overlay smoothing", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "0.2" } }) },
+        { role: "slider", name: "Overlay size", expectation: "action", act: (element) => fireEvent.change(element, { target: { value: "140" } }) }
       ],
       "Video visual controls",
       { root: visual }
@@ -805,6 +806,7 @@ describe("Mechanical UI control audits", () => {
     );
   });
 });
+
 
 
 

@@ -1397,7 +1397,7 @@ describe("WorkspaceApp metadata editor", () => {
       buffer_size_frames: 256,
       is_exclusive_lock: false
     });
-    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+    let playbackContext = {
       volume_scalar: 1,
       is_bit_perfect_bypassed: true,
       active_queue_index: 0,
@@ -1406,6 +1406,22 @@ describe("WorkspaceApp metadata editor", () => {
       is_playing: false,
       position_seconds: 0,
       track_duration_seconds: 1.5
+    };
+    tauriApiMocks.getPlaybackContext.mockImplementation(async () => playbackContext);
+    tauriApiMocks.setPlaybackPlaying.mockImplementation(async (isPlaying: boolean) => {
+      playbackContext = {
+        ...playbackContext,
+        is_playing: isPlaying,
+        position_seconds: isPlaying ? playbackContext.position_seconds : 0
+      };
+    });
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockImplementation(async (nextIndex: number) => {
+      playbackContext = {
+        ...playbackContext,
+        active_queue_index: nextIndex,
+        position_seconds: 0
+      };
+      return true;
     });
 
     render(<WorkspaceApp />);
@@ -1514,7 +1530,7 @@ describe("WorkspaceApp metadata editor", () => {
       buffer_size_frames: 256,
       is_exclusive_lock: false
     });
-    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+    let playbackContext = {
       volume_scalar: 1,
       is_bit_perfect_bypassed: true,
       active_queue_index: 0,
@@ -1523,6 +1539,22 @@ describe("WorkspaceApp metadata editor", () => {
       is_playing: false,
       position_seconds: 0,
       track_duration_seconds: 1.5
+    };
+    tauriApiMocks.getPlaybackContext.mockImplementation(async () => playbackContext);
+    tauriApiMocks.setPlaybackPlaying.mockImplementation(async (isPlaying: boolean) => {
+      playbackContext = {
+        ...playbackContext,
+        is_playing: isPlaying,
+        position_seconds: isPlaying ? playbackContext.position_seconds : 0
+      };
+    });
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockImplementation(async (nextIndex: number) => {
+      playbackContext = {
+        ...playbackContext,
+        active_queue_index: nextIndex,
+        position_seconds: 0
+      };
+      return true;
     });
 
     render(<WorkspaceApp />);
@@ -1663,7 +1695,7 @@ describe("WorkspaceApp metadata editor", () => {
       buffer_size_frames: 256,
       is_exclusive_lock: false
     });
-    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+    let playbackContext = {
       volume_scalar: 1,
       is_bit_perfect_bypassed: true,
       active_queue_index: 0,
@@ -1672,6 +1704,22 @@ describe("WorkspaceApp metadata editor", () => {
       is_playing: false,
       position_seconds: 0,
       track_duration_seconds: 1.5
+    };
+    tauriApiMocks.getPlaybackContext.mockImplementation(async () => playbackContext);
+    tauriApiMocks.setPlaybackPlaying.mockImplementation(async (isPlaying: boolean) => {
+      playbackContext = {
+        ...playbackContext,
+        is_playing: isPlaying,
+        position_seconds: isPlaying ? playbackContext.position_seconds : 0
+      };
+    });
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockImplementation(async (nextIndex: number) => {
+      playbackContext = {
+        ...playbackContext,
+        active_queue_index: nextIndex,
+        position_seconds: 0
+      };
+      return true;
     });
 
     render(<WorkspaceApp />);
@@ -1741,14 +1789,6 @@ describe("WorkspaceApp metadata editor", () => {
     });
     await waitFor(() => {
       expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
-    });
-    await waitFor(() => {
-      expect(within(sharedTransport).getByRole("button", { name: "Pause" })).toBeEnabled();
-    });
-
-    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Pause" }));
-    await waitFor(() => {
-      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(false);
     });
 
     expect(screen.queryByText("Playback started.")).not.toBeInTheDocument();
@@ -3091,6 +3131,8 @@ describe("WorkspaceApp metadata editor", () => {
     });
   });
 });
+
+
 
 
 

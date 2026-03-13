@@ -24,6 +24,7 @@ export type VideoWorkspaceOverlayController = {
   setOpacity: (opacity: number) => void;
   setIntensity: (intensity: number) => void;
   setSmoothing: (smoothing: number) => void;
+  setSizePercent: (sizePercent: number) => void;
   setPosition: (position: "top" | "bottom") => void;
   setThemeColorHex: (hex: string) => void;
   replaceSettings: (nextSettings: VideoOverlaySettings) => void;
@@ -103,10 +104,10 @@ export function useVideoWorkspaceOverlayController(args: {
 
     return deriveWaveformStripBars({
       analysis: analysisState.analysis,
-      progressRatio: args.progressRatio,
+      progressRatio: 0,
       settings
     });
-  }, [analysisState.analysis, analysisState.status, args.progressRatio, settings]);
+  }, [analysisState.analysis, analysisState.status, settings]);
 
   const patchSettings = useCallback((patch: Partial<VideoOverlaySettings>) => {
     setSettings((current) => patchVideoOverlaySettings(current, patch));
@@ -133,6 +134,9 @@ export function useVideoWorkspaceOverlayController(args: {
       setSmoothing: (smoothing) => {
         patchSettings({ smoothing });
       },
+      setSizePercent: (sizePercent) => {
+        patchSettings({ sizePercent });
+      },
       setPosition: (position) => {
         patchSettings({ position });
       },
@@ -144,3 +148,4 @@ export function useVideoWorkspaceOverlayController(args: {
     [analysisState, bars, patchSettings, replaceSettings, settings]
   );
 }
+

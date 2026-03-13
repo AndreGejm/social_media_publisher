@@ -48,6 +48,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
   const autoplayRequestSourceKeyRef = useRef<string | null>(autoplayRequestSourceKey);
   const autoplayRunIdRef = useRef(0);
   const playerSourceKey = playerSource?.key ?? null;
+  const isQueueBackedSource = playerSourceKey?.startsWith("catalog:") ?? false;
 
   autoplayRequestSourceKeyRef.current = autoplayRequestSourceKey;
 
@@ -79,7 +80,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
 
     const shouldAutoplaySource = autoplayRequestSourceKeyRef.current === playerSourceKey;
 
-    if (nativeTransportEnabled) {
+    if (nativeTransportEnabled && isQueueBackedSource) {
       setPlayerTimeSec((current) => (current === 0 ? current : 0));
       if (!shouldAutoplaySource) {
         setPlayerIsPlaying((current) => (current ? false : current));
@@ -92,12 +93,40 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
 
     const audio = playerAudioRef.current;
     if (!audio) return;
+    const isQcPreviewSource = playerSourceKey.startsWith("qc-preview:");
+    const preservePlaybackCursor = isQcPreviewSource && shouldAutoplaySource;
+    const resumeTimeSec = preservePlaybackCursor ? Math.max(0, audio.currentTime || 0) : 0;
 
     try {
       audio.load();
     } catch (error) {
       const message = sanitizeUiErrorMessage(error, "Unable to load audio source.");
       setPlayerError(message);
+    }
+
+    if (preservePlaybackCursor) {
+      const applyResumeCursor = () => {
+        try {
+          const cappedResume =
+            Number.isFinite(audio.duration) && audio.duration > 0
+              ? Math.min(resumeTimeSec, Math.max(0, audio.duration - 0.05))
+              : resumeTimeSec;
+          audio.currentTime = cappedResume;
+        } catch {
+          // unsupported media runtime
+        }
+      };
+
+      if (audio.readyState >= 1) {
+        applyResumeCursor();
+      } else {
+        audio.addEventListener("loadedmetadata", applyResumeCursor, { once: true });
+      }
+
+      setPlayerTimeSec((current) => (current === resumeTimeSec ? current : resumeTimeSec));
+      return () => {
+        audio.removeEventListener("loadedmetadata", applyResumeCursor);
+      };
     }
 
     try {
@@ -109,6 +138,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     setPlayerTimeSec((current) => (current === 0 ? current : 0));
     setPlayerIsPlaying((current) => (current ? false : current));
   }, [
+    isQueueBackedSource,
     nativeTransportEnabled,
     playerAudioRef,
     playerAudioSrc,
@@ -120,7 +150,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
   ]);
 
   useEffect(() => {
-    if (!nativeTransportEnabled || !playerSourceKey || !playerTrackId || queueIndex < 0) {
+    if (!nativeTransportEnabled || !isQueueBackedSource || !playerSourceKey || !playerTrackId || queueIndex < 0) {
       pendingNativeArmSourceKeyRef.current = null;
       if (!playerSourceKey) {
         lastHandledAutoplaySourceKeyRef.current = null;
@@ -146,10 +176,11 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     }
 
     pendingNativeArmSourceKeyRef.current = playerSourceKey;
-  }, [nativeTransportEnabled, playerSourceKey, playerTrackId, queueIndex]);
+  }, [isQueueBackedSource, nativeTransportEnabled, playerSourceKey, playerTrackId, queueIndex]);
 
   useEffect(() => {
     if (!nativeTransportEnabled) return;
+    if (!isQueueBackedSource) return;
     if (!playerSourceKey || !playerTrackId) return;
     if (queueIndex < 0) return;
     if (pendingNativeArmSourceKeyRef.current !== playerSourceKey) return;
@@ -174,6 +205,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
       cancelled = true;
     };
   }, [
+    isQueueBackedSource,
     nativeTransportEnabled,
     playerSourceKey,
     playerTrackId,
@@ -210,7 +242,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
 
     const run = async () => {
       try {
-        if (nativeTransportEnabled) {
+        if (nativeTransportEnabled && isQueueBackedSource) {
           if (queueIndex < 0) {
             throw {
               code: "PLAYBACK_QUEUE_REQUEST_REJECTED",
@@ -272,6 +304,7 @@ export function useTransportQueueLifecycle(args: UseTransportQueueLifecycleArgs)
     };
   }, [
     autoplayRequestSourceKey,
+    isQueueBackedSource,
     nativeTransportEnabled,
     onNotice,
     playerAudioRef,

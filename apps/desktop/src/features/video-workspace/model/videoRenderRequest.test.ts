@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createDefaultVideoOverlaySettings } from "../../overlay-engine/api";
+import { createDefaultVideoOverlaySettings, patchVideoOverlaySettings } from "../../overlay-engine/api";
 import { createDefaultVideoOutputSettings, patchVideoOutputSettings } from "./videoOutputSettings";
 import {
   buildVideoRenderRequest,
@@ -116,15 +116,19 @@ describe("videoRenderRequest", () => {
     expect(first.request.composition.heightPx).toBe(1440);
     expect(first.request.media.imageFileName).toBe("C:\\Media\\cover.png");
     expect(first.request.media.audioFileName).toBe("C:\\Media\\mix.wav");
+    expect(first.request.composition.overlay.sizePercent).toBe(100);
   });
 
-  it("serializes request to JSON without preview-only overlay fields", () => {
+  it("serializes request to JSON without preview-only overlay fields and keeps render size", () => {
     const built = buildVideoRenderRequest({
       imageAsset: IMAGE_ASSET,
       audioAsset: AUDIO_ASSET,
       fitMode: "fill_crop",
       textSettings: createDefaultVideoWorkspaceTextSettings(),
-      overlaySettings: createDefaultVideoOverlaySettings(),
+      overlaySettings: patchVideoOverlaySettings(createDefaultVideoOverlaySettings(), {
+        barCount: 88,
+        sizePercent: 140
+      }),
       outputSettings: patchVideoOutputSettings(createDefaultVideoOutputSettings(), {
         outputDirectoryPath: "C:\\Exports",
         outputBaseFileName: "demo"
@@ -136,9 +140,11 @@ describe("videoRenderRequest", () => {
 
     const json = toVideoRenderRequestJson(built.request);
     const parsed = JSON.parse(json) as Record<string, unknown>;
+    const overlay = (parsed.composition as { overlay: Record<string, unknown> }).overlay;
 
     expect(parsed.requestVersion).toBe(1);
     expect(parsed.output).toBeTruthy();
-    expect((parsed.composition as { overlay: Record<string, unknown> }).overlay.barCount).toBeUndefined();
+    expect(overlay.barCount).toBeUndefined();
+    expect(overlay.sizePercent).toBe(140);
   });
 });

@@ -11,6 +11,7 @@ type HookOverrides = {
   queueIndex?: number;
   playerSource?: ResolvedPlayerSource;
   nativeTransportEnabled?: boolean;
+  playerAudioSrc?: string;
   setPlaybackQueue?: (paths: string[]) => Promise<{ total_tracks: number }>;
   setPlaybackPlaying?: (isPlaying: boolean) => Promise<void>;
   pushPlaybackTrackChangeRequest?: (newIndex: number) => Promise<boolean>;
@@ -50,6 +51,16 @@ function createPlayerSource(trackId: string, trackNumber: number): ResolvedPlaye
   };
 }
 
+function createPreviewSource(variant: "codec_a" | "codec_b"): ResolvedPlayerSource {
+  return {
+    key: `qc-preview:track-2:${variant}:C:/preview/${variant}.wav`,
+    filePath: `C:/preview/${variant}.wav`,
+    title: `Preview ${variant}`,
+    artist: "Artist",
+    durationMs: 120_000
+  };
+}
+
 function buildHookHarness(overrides: HookOverrides = {}) {
   const setPlaybackQueue = overrides.setPlaybackQueue ?? vi.fn(async () => ({ total_tracks: 2 }));
   const setPlayerError = vi.fn();
@@ -67,7 +78,7 @@ function buildHookHarness(overrides: HookOverrides = {}) {
     queueIndex: overrides.queueIndex ?? 1,
     playerSource: overrides.playerSource ?? createPlayerSource("track-2", 2),
     nativeTransportEnabled: overrides.nativeTransportEnabled ?? true,
-    playerAudioSrc: "blob:track"
+    playerAudioSrc: overrides.playerAudioSrc ?? "blob:track"
   };
 
   const hook = renderHook(
@@ -205,4 +216,36 @@ describe("useTransportQueueLifecycle", () => {
     expect(mocks.pushPlaybackTrackChangeRequest).toHaveBeenNthCalledWith(2, 0);
     expect(playbackCalls.filter(([isPlaying]) => isPlaying)).toHaveLength(1);
   });
+  it("uses browser playback for QC preview autoplay even when native transport is enabled", async () => {
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const loadSpy = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+
+    const previewSource = createPreviewSource("codec_a");
+    const { result, mocks } = buildHookHarness({
+      autoplayRequestSourceKey: previewSource.key,
+      playerSource: previewSource,
+      playerTrackId: "",
+      queueIndex: -1,
+      nativeTransportEnabled: true,
+      playerAudioSrc: "blob:qc-preview"
+    });
+
+    await waitFor(() => {
+      expect(result.current.autoplayRequestSourceKey).toBeNull();
+    });
+
+    expect(playSpy).toHaveBeenCalled();
+    expect(loadSpy).toHaveBeenCalled();
+    expect(mocks.pushPlaybackTrackChangeRequest).not.toHaveBeenCalled();
+    expect(mocks.onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Playback failed to start. Check file format support or file access." })
+    );
+    expect(mocks.setPlayerError).not.toHaveBeenCalledWith(expect.any(String));
+
+    playSpy.mockRestore();
+    loadSpy.mockRestore();
+  });
+
 });
+
+
