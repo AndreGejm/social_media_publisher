@@ -111,6 +111,7 @@ export function useVideoWorkspaceRenderController(
   const pollTimerRef = useRef<number | null>(null);
   const pollInFlightRef = useRef(false);
   const runTokenRef = useRef(0);
+  const diagnosticsRequestTokenRef = useRef(0);
   const outputDirectoryPathRef = useRef(buildInput.outputSettings.outputDirectoryPath);
 
   outputDirectoryPathRef.current = buildInput.outputSettings.outputDirectoryPath;
@@ -123,9 +124,24 @@ export function useVideoWorkspaceRenderController(
     pollInFlightRef.current = false;
   }, []);
 
+  const beginDiagnosticsRequest = useCallback(() => {
+    diagnosticsRequestTokenRef.current += 1;
+    return diagnosticsRequestTokenRef.current;
+  }, []);
+
+  useEffect(() => {
+    diagnosticsRequestTokenRef.current += 1;
+  }, [buildInput.outputSettings.outputDirectoryPath]);
+
   const refreshDiagnostics = useCallback(async () => {
+    const diagnosticsToken = beginDiagnosticsRequest();
+    const outputDirectoryPath = outputDirectoryPathRef.current;
+
     try {
-      const diagnostics = await videoRenderGetEnvironmentDiagnostics(outputDirectoryPathRef.current);
+      const diagnostics = await videoRenderGetEnvironmentDiagnostics(outputDirectoryPath);
+      if (diagnosticsRequestTokenRef.current !== diagnosticsToken) {
+        return;
+      }
 
       setState((current) => ({
         ...current,
@@ -134,6 +150,10 @@ export function useVideoWorkspaceRenderController(
         diagnosticsErrorMessage: null
       }));
     } catch (error) {
+      if (diagnosticsRequestTokenRef.current !== diagnosticsToken) {
+        return;
+      }
+
       if (isUiAppError(error) && error.code === "TAURI_UNAVAILABLE") {
         setState((current) => ({
           ...current,
@@ -149,7 +169,7 @@ export function useVideoWorkspaceRenderController(
         diagnosticsErrorMessage: formatUiError(error, "Environment diagnostics failed.")
       }));
     }
-  }, []);
+  }, [beginDiagnosticsRequest]);
 
   const applyResultState = useCallback(
     (result: VideoRenderResultResponse, request: VideoRenderRequest) => {
@@ -270,13 +290,20 @@ export function useVideoWorkspaceRenderController(
   }, [buildInput]);
 
   const startRender = useCallback(async () => {
+    const diagnosticsToken = beginDiagnosticsRequest();
+    const outputDirectoryPath = buildInput.outputSettings.outputDirectoryPath;
     let diagnostics: VideoRenderEnvironmentDiagnostics;
 
     try {
-      diagnostics = await videoRenderGetEnvironmentDiagnostics(
-        buildInput.outputSettings.outputDirectoryPath
-      );
+      diagnostics = await videoRenderGetEnvironmentDiagnostics(outputDirectoryPath);
+      if (diagnosticsRequestTokenRef.current !== diagnosticsToken) {
+        return;
+      }
     } catch (error) {
+      if (diagnosticsRequestTokenRef.current !== diagnosticsToken) {
+        return;
+      }
+
       setState((current) => ({
         ...current,
         phase: "failed",
@@ -367,7 +394,7 @@ export function useVideoWorkspaceRenderController(
         result: null
       }));
     }
-  }, [buildInput.outputSettings.outputDirectoryPath, buildRenderRequest, clearPolling, ensurePolling, pollStatusOnce]);
+  }, [beginDiagnosticsRequest, buildInput.outputSettings.outputDirectoryPath, buildRenderRequest, clearPolling, ensurePolling, pollStatusOnce]);
 
   const cancelRender = useCallback(async () => {
     const { jobId } = state;
@@ -416,6 +443,7 @@ export function useVideoWorkspaceRenderController(
   const resetRenderState = useCallback(() => {
     clearPolling();
     runTokenRef.current += 1;
+    diagnosticsRequestTokenRef.current += 1;
     setState(createInitialRenderState());
   }, [clearPolling]);
 
@@ -423,6 +451,7 @@ export function useVideoWorkspaceRenderController(
     return () => {
       clearPolling();
       runTokenRef.current += 1;
+      diagnosticsRequestTokenRef.current += 1;
     };
   }, [clearPolling]);
 
@@ -455,5 +484,3 @@ export function useVideoWorkspaceRenderController(
     ]
   );
 }
-
-
