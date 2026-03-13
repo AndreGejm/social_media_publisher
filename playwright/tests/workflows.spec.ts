@@ -98,7 +98,7 @@ test("listen queue state stays isolated from the Video workspace", async ({ page
   await addVisibleSelectionsToQueue(page, ["Isolation Track"]);
 
   await openWorkspace(page, "Video Workspace");
-  await expect(page.getByRole("heading", { name: "Video Workspace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Video Rendering" })).toBeVisible();
   await expect(page.getByText("No image selected.")).toBeVisible();
   await expect(page.getByText("No audio selected.")).toBeVisible();
   await expect(page.getByRole("button", { name: /1 queue item\(s\)/i })).toBeVisible();

@@ -1015,20 +1015,20 @@ describe("WorkspaceApp metadata editor", () => {
   it("shows Video Workspace as a top-level workspace tab while keeping it out of the sidebar", async () => {
     render(<WorkspaceApp />);
 
-    expect(screen.getByRole("tab", { name: "Video Workspace" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Video Rendering" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Video Rendering" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
     expect(await screen.findByRole("button", { name: "Publisher Ops" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Video Workspace" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Video Rendering" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Video Rendering" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
-    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
+    expect(await screen.findByRole("heading", { name: "Video Rendering" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
     expect(await screen.findByRole("button", { name: "Library" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Video Workspace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Video Rendering" })).not.toBeInTheDocument();
   });
 
   it("recovers to Publisher Ops when restart state restores Publish mode with a listen-only workspace", async () => {
@@ -1051,12 +1051,12 @@ describe("WorkspaceApp metadata editor", () => {
   it("opens Video Workspace with the Stage 1 static section shell", async () => {
     render(<WorkspaceApp />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
 
     const shell = await screen.findByTestId("video-workspace-shell");
     expect(within(shell).getByRole("heading", { name: "Image + Audio to YouTube MP4" })).toBeInTheDocument();
 
-    const sections = within(shell).getByRole("list", { name: "Video workspace sections" });
+    const sections = within(shell).getByRole("list", { name: "Video rendering sections" });
     expect(within(sections).getByRole("region", { name: "Media" })).toBeInTheDocument();
     expect(within(sections).getByRole("region", { name: "Visual" })).toBeInTheDocument();
     expect(within(sections).getByRole("region", { name: "Text" })).toBeInTheDocument();
@@ -1219,8 +1219,8 @@ describe("WorkspaceApp metadata editor", () => {
     expect(await screen.findByRole("searchbox", { name: "Search tracks" })).toBeInTheDocument();
     expectSharedTransportToStayLoaded();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
-    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
+    expect(await screen.findByRole("heading", { name: "Video Rendering" })).toBeInTheDocument();
     expect(screen.getByText("No audio selected.")).toBeVisible();
     expectSharedTransportToStayLoaded();
 
@@ -1459,6 +1459,113 @@ describe("WorkspaceApp metadata editor", () => {
     await waitFor(() => {
       expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
     });
+  });
+
+  it("does not retrigger codec preview work when Next changes tracks outside track QC", async () => {
+    installTwoTrackCatalog();
+    tauriApiMocks.qcGetFeatureFlags.mockResolvedValue({
+      qc_codec_preview_v1: true,
+      qc_realtime_meters_v1: false,
+      qc_batch_export_v1: false
+    });
+    tauriApiMocks.qcListCodecProfiles.mockResolvedValue([
+      {
+        profile_id: "spotify_vorbis_320",
+        label: "Spotify Vorbis 320 kbps",
+        codec_family: "vorbis",
+        target_platform: "Spotify",
+        target_bitrate_kbps: 320,
+        expected_latency_ms: 38,
+        available: true
+      },
+      {
+        profile_id: "apple_music_aac_256",
+        label: "Apple Music AAC 256 kbps",
+        codec_family: "aac",
+        target_platform: "Apple Music",
+        target_bitrate_kbps: 256,
+        expected_latency_ms: 34,
+        available: true
+      }
+    ]);
+    tauriApiMocks.qcGetPreviewSession.mockResolvedValue(null);
+    tauriApiMocks.qcPreparePreviewSession.mockImplementation(async (input) => ({
+      source_track_id: input.source_track_id,
+      active_variant: "bypass",
+      profile_a_id: input.profile_a_id,
+      profile_b_id: input.profile_b_id,
+      blind_x_enabled: input.blind_x_enabled,
+      blind_x_revealed: true
+    }));
+    tauriApiMocks.qcGetActivePreviewMedia.mockResolvedValue({
+      variant: "bypass",
+      media_path: baseTrackDetail.file_path,
+      blind_x_resolved_variant: null
+    });
+    tauriApiMocks.initExclusiveDevice.mockResolvedValue({
+      sample_rate_hz: 48_000,
+      bit_depth: 16,
+      buffer_size_frames: 256,
+      is_exclusive_lock: false
+    });
+    tauriApiMocks.getPlaybackContext.mockResolvedValue({
+      volume_scalar: 1,
+      is_bit_perfect_bypassed: true,
+      active_queue_index: 0,
+      is_queue_ui_expanded: false,
+      queued_track_change_requests: 0,
+      is_playing: false,
+      position_seconds: 0,
+      track_duration_seconds: 1.5
+    });
+
+    render(<WorkspaceApp />);
+    await openTracksAndSelectFirstTrack();
+
+    await waitFor(() => {
+      expect(tauriApiMocks.qcPreparePreviewSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source_track_id: baseTrackDetail.track_id
+        })
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+    tauriApiMocks.qcPreparePreviewSession.mockClear();
+    tauriApiMocks.qcGetActivePreviewMedia.mockClear();
+
+    const sharedTransport = screen.getByRole("region", { name: "Shared transport" });
+    fireEvent.click(within(sharedTransport).getByRole("button", { name: "Play" }));
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+
+    tauriApiMocks.pushPlaybackTrackChangeRequest.mockClear();
+    tauriApiMocks.setPlaybackPlaying.mockClear();
+
+    const nextButton = within(sharedTransport).getByRole("button", { name: "Next" });
+    const prevButton = within(sharedTransport).getByRole("button", { name: "Prev" });
+
+    if (!nextButton.hasAttribute("disabled")) {
+      fireEvent.click(nextButton);
+      await waitFor(() => {
+        expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(1);
+      });
+    } else {
+      await waitFor(() => {
+        expect(prevButton).toBeEnabled();
+      });
+      fireEvent.click(prevButton);
+      await waitFor(() => {
+        expect(tauriApiMocks.pushPlaybackTrackChangeRequest).toHaveBeenCalledWith(0);
+      });
+    }
+
+    await waitFor(() => {
+      expect(tauriApiMocks.setPlaybackPlaying).toHaveBeenCalledWith(true);
+    });
+    expect(tauriApiMocks.qcPreparePreviewSession).not.toHaveBeenCalled();
+    expect(tauriApiMocks.qcGetActivePreviewMedia).not.toHaveBeenCalled();
   });
 
   it("auto-advances native playback to the next queue track when the current track reaches the end", async () => {
@@ -2373,8 +2480,8 @@ describe("WorkspaceApp metadata editor", () => {
     expect(await screen.findByText("Added track to queue.")).toBeInTheDocument();
     expect(screen.queryByText(/Dropped media processed: .*error/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
-    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
+    expect(await screen.findByRole("heading", { name: "Video Rendering" })).toBeVisible();
     expect(screen.getByText("No audio selected.")).toBeVisible();
   });
 
@@ -2435,8 +2542,8 @@ describe("WorkspaceApp metadata editor", () => {
       expect(playSpy).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
-    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
+    expect(await screen.findByRole("heading", { name: "Video Rendering" })).toBeVisible();
     expect(screen.getByText("No audio selected.")).toBeVisible();
   });
   it("adds dropped file parent folder as a scan root when the toggle is enabled", async () => {
@@ -2660,8 +2767,8 @@ describe("WorkspaceApp metadata editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Playlists" }));
     expect(await screen.findByRole("tab", { name: "Library" })).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
-    expect(await screen.findByRole("heading", { name: "Video Workspace" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
+    expect(await screen.findByRole("heading", { name: "Video Rendering" })).toBeInTheDocument();
     expect(screen.getByText("No audio selected.")).toBeVisible();
 
     fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
@@ -2870,6 +2977,15 @@ describe("WorkspaceApp metadata editor", () => {
     expect(screen.queryByRole("combobox", { name: "Theme preference" })).not.toBeInTheDocument();
   });
 
+  it("does not show library status summary inside Settings", async () => {
+    render(<WorkspaceApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(screen.queryByText("Library Status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Quick Summary")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tracks in current view:/i)).not.toBeInTheDocument();
+  });
   it("applies and restores compact density from Settings", async () => {
     const firstRender = render(<WorkspaceApp />);
 

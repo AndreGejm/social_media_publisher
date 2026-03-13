@@ -64,7 +64,7 @@ describe("MusicTopbar", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Release Preview" }));
     expect(onSwitchAppMode).toHaveBeenCalledWith("Listen");
-    fireEvent.click(screen.getByRole("tab", { name: "Video Workspace" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
     expect(onOpenVideoWorkspace).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Use the release workflow steps/i)).toBeInTheDocument();
   });
@@ -87,7 +87,7 @@ describe("MusicTopbar", () => {
       />
     );
 
-    expect(screen.getByRole("heading", { level: 2, name: "Skald QC" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "About" })).toBeInTheDocument();
     expect(screen.queryByRole("note", { name: "About workspace guidance" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Static product and runtime diagnostics/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Informational workspace/i)).not.toBeInTheDocument();
@@ -111,7 +111,7 @@ describe("MusicTopbar", () => {
       />
     );
 
-    expect(screen.getByRole("tab", { name: "Video Workspace" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Video Rendering" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Release Preview" })).toHaveAttribute("aria-selected", "false");
   });
 });

@@ -1190,16 +1190,20 @@ body {
 }
 
 .music-mode-tabs {
-  display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
   gap: 0.25rem;
   border: 1px solid rgba(var(--accent-rgb), 0.12);
   border-radius: 999px;
   background: rgba(var(--bg-panel-rgb), 0.85);
   padding: 0.2rem;
   margin: 0.15rem 0 0.45rem;
-  width: 16rem;
+  width: fit-content;
+  max-width: 100%;
   flex: 0 0 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .music-mode-tab {
@@ -3274,7 +3278,8 @@ body {
   }
 
   .music-mode-tabs {
-    width: min(100%, 16rem);
+    width: 100%;
+    max-width: 100%;
   }
 
   .topbar-stats {

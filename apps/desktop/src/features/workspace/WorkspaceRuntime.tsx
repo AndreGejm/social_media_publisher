@@ -138,7 +138,6 @@ const STORAGE_KEYS = {
   libraryOverviewCollapsed: "rp.music.libraryOverviewCollapsed.v1",
 
   settingsPreferencesCollapsed: "rp.music.settingsPreferencesCollapsed.v1",
-  settingsSummaryCollapsed: "rp.music.settingsSummaryCollapsed.v1",
   trackSort: "rp.music.trackSort.v1",
   favorites: "rp.music.favorites.v1",
   onlyFavorites: "rp.music.onlyFavorites.v1",
@@ -292,9 +291,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
 
   const [settingsPreferencesCollapsed, setSettingsPreferencesCollapsed] = useState<boolean>(() =>
     readStorage<boolean>(STORAGE_KEYS.settingsPreferencesCollapsed, false, (value): value is boolean => typeof value === "boolean")
-  );
-  const [settingsSummaryCollapsed, setSettingsSummaryCollapsed] = useState<boolean>(() =>
-    readStorage<boolean>(STORAGE_KEYS.settingsSummaryCollapsed, false, (value): value is boolean => typeof value === "boolean")
   );
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     readStorage<ThemePreference>(STORAGE_KEYS.themePreference, "system", isThemePreference)
@@ -478,7 +474,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     () => new Map(queue.map((item, index) => [item.track_id, index] as const)),
     [queue]
   );
-  const publishSelectionCount = publishSelectionItems.length;
   const albumGroups = useMemo(() => buildAlbumGroups(visibleTracks), [visibleTracks]);
   const selectedAlbumGroup = useMemo(
     () => albumGroups.find((group) => group.key === selectedAlbumKey) ?? albumGroups[0] ?? null,
@@ -684,7 +679,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     libraryOverviewCollapsed,
 
     settingsPreferencesCollapsed,
-    settingsSummaryCollapsed,
     themePreference,
     themeVariantPreference,
     compactDensity,
@@ -859,6 +853,8 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     seekPlayer,
     onNotice: showNotice
   });
+  const isQcPreviewSurfaceActive =
+    activeMode === "Listen" && activeWorkspace === "Quality Control" && qualityControlMode === "track";
   const {
     qcCodecProfiles,
     qcPreviewProfileAId,
@@ -885,6 +881,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   } = useQcPreviewLifecycle({
     selectedTrackId,
     selectedTrackDetail,
+    isQcPreviewSurfaceActive,
     playerIsPlaying,
     playerSource,
     setPlayerTrackId,
@@ -1097,7 +1094,6 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     setActiveWorkspace("Quality Control");
   };
   const toggleSettingsPreferencesCollapsed = () => setSettingsPreferencesCollapsed((value) => !value);
-  const toggleSettingsSummaryCollapsed = () => setSettingsSummaryCollapsed((value) => !value);
   const clearNotice = () => setAppNotice(null);
   const clearErrorBanner = () => setCatalogError(null);
   const handleResetLibraryData = () => {
@@ -1444,7 +1440,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
   const aboutSystemInfoText = useMemo(
     () =>
       [
-        `Skald QC ${aboutVersion}`,
+        `Skald ${aboutVersion}`,
         `Build Date: ${aboutBuildDate}`,
         `Runtime: ${ABOUT_RUNTIME_LABEL}`,
         `Audio Engine: ${ABOUT_AUDIO_ENGINE_LABEL}`,
@@ -1553,8 +1549,8 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
     >
       <aside className="music-sidebar">
         <div className="music-brand">
-          <p className="eyebrow">Skald QC</p>
-          <h1>Skald QC</h1>
+          <p className="eyebrow">Skald</p>
+          <h1>Skald</h1>
           <p className="music-brand-subtitle">Codec Preview, QC &amp; Multi-Platform Publishing</p>
         </div>
 
@@ -1805,7 +1801,7 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
           </section>
 
           <section hidden={activeMode !== "Listen" || activeWorkspace !== "Video Workspace"} className="workspace-section">
-            <ErrorBoundary fallbackMessage="The Video Workspace crashed. Other panels are still active.">
+            <ErrorBoundary fallbackMessage="The Video Rendering workspace crashed. Other panels are still active.">
               <VideoWorkspaceFeature
                 nativeDropEventsEnabled={activeMode === "Listen" && activeWorkspace === "Video Workspace"}
               />
@@ -1836,25 +1832,14 @@ export default function WorkspaceRuntime(props: WorkspaceRuntimeProps) {
             onClearErrorBanner={clearErrorBanner}
             onResetLibraryData={handleResetLibraryData}
             resetLibraryDataPending={resetLibraryDataPending}
-            settingsSummaryCollapsed={settingsSummaryCollapsed}
-            onToggleSettingsSummaryCollapsed={toggleSettingsSummaryCollapsed}
-            summary={{
-              tracksCount: catalogPage.total,
-              albumGroupsCount: albumGroups.length,
-              favoritesCount: favoriteTrackCount,
-              queueCount: queue.length,
-              releaseSelectionsCount: publishSelectionCount,
-              importFailuresCount: catalogFailures.length,
-              libraryRootsCount: libraryRoots.length
-            }}
           />
 
           <section hidden={activeWorkspace !== "About"} className="workspace-section placeholder-workspace about-workspace">
             <header className="about-workspace-header">
-              <h3>Skald QC</h3>
+              <h3>Skald</h3>
               <p className="about-workspace-tagline">Codec Preview, Quality Control &amp; Multi-Platform Publishing</p>
               <p className="helper-text">
-                Skald QC is a desktop tool for codec verification, quality control, and multi-platform publishing workflows.
+                Skald is a desktop tool for codec verification, quality control, and multi-platform publishing workflows.
               </p>
             </header>
 

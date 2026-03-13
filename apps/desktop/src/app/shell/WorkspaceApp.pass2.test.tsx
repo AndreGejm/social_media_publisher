@@ -299,7 +299,7 @@ describe("WorkspaceApp Pass 2 coverage", () => {
       expect(tauriApiMocks.runtimeGetErrorLogPath).toHaveBeenCalledTimes(1);
     });
 
-    expect(screen.getByRole("heading", { level: 3, name: "Skald QC" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Skald" })).toBeInTheDocument();
     expect(
       screen.getByText("C:/Users/test/AppData/Roaming/Skald QC/logs/runtime-errors.log")
     ).toBeInTheDocument();

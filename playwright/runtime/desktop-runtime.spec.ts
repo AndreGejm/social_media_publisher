@@ -90,7 +90,7 @@ test("About surfaces the runtime log path and copied diagnostics include it", as
   try {
     await openWorkspace(page, "About");
 
-    await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 3, name: "Skald" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Shared transport" })).toBeVisible();
 
     const runtimeLogRow = page
@@ -148,7 +148,7 @@ test("Settings disabled-state and About player persistence hold in the runtime s
 
     await openWorkspace(page, "About");
 
-    await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 3, name: "Skald" })).toBeVisible();
     await expect(page.getByRole("note", { name: "About workspace guidance" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Shared transport" })).toBeVisible();
 
@@ -394,7 +394,7 @@ test.fixme("runtime drag-drop imports audio without mutating the hidden Video Wo
     ).toBeGreaterThan(0);
 
     await openWorkspace(page, "Video Workspace");
-    await expect(page.getByRole("heading", { name: "Video Workspace" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Video Rendering" })).toBeVisible();
     await expect(page.getByText("No audio selected.")).toBeVisible();
 
     await signals.assertClean("runtime drag-drop", {

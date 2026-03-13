@@ -11,3 +11,5 @@ Backlog Investigation Log (2026-03-12)
 9. 2026-03-12-library-layout-move-actions-investigation.md <- 2026-03-12-library-layout-move-actions.md
 10. 2026-03-12-remove-duplicate-quick-actions-qc-playlists-investigation.md <- 2026-03-12-remove-duplicate-quick-actions-qc-playlists.md
 11. 2026-03-12-ultrawide-player-overscale-investigation.md <- 2026-03-12-ultrawide-player-overscale.md
+
+12. 2026-03-13-player-not-global-publish-workspace-investigation.md <- user finding: bottom player not visible in Publish workspace

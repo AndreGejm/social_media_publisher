@@ -579,7 +579,7 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
   return (
     <div className={props.className ?? ""} data-testid="video-workspace-shell">
       <header className="placeholder-workspace">
-        <p className="eyebrow">Video Workspace</p>
+        <p className="eyebrow">Video Rendering</p>
         <h3>Image + Audio to YouTube MP4</h3>
         <p className="helper-text">
           Stage 10: local project and preset persistence is active with save/load flows and remembered output preferences.
@@ -671,7 +671,7 @@ export default function VideoWorkspaceFeature(props: VideoWorkspaceFeatureProps)
         </div>
       ) : null}
 
-      <div className="video-workspace-sections" role="list" aria-label="Video workspace sections">
+      <div className="video-workspace-sections" role="list" aria-label="Video rendering sections">
         {VIDEO_WORKSPACE_SECTIONS.map((section) => {
           if (section.id === "media") {
             return (

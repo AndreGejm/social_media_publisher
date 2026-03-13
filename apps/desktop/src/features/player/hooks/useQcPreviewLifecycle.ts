@@ -18,6 +18,7 @@ type AppNotice = { level: "info" | "success" | "warning"; message: string };
 type UseQcPreviewLifecycleArgs = {
   selectedTrackId: string;
   selectedTrackDetail: CatalogTrackDetailResponse | null;
+  isQcPreviewSurfaceActive: boolean;
   playerIsPlaying: boolean;
   playerSource: { key: string } | null;
   setPlayerTrackId: Dispatch<SetStateAction<string>>;
@@ -55,6 +56,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
   const {
     selectedTrackId,
     selectedTrackDetail,
+    isQcPreviewSurfaceActive,
     playerIsPlaying,
     playerSource,
     setPlayerTrackId,
@@ -268,6 +270,10 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
   ]);
 
   useEffect(() => {
+    if (!isQcPreviewSurfaceActive) {
+      setQcCodecPreviewLoading(false);
+      return;
+    }
     if (!qcCodecPreviewEnabled || !selectedTrackId) {
       setQcPreviewSession(null);
       return;
@@ -335,6 +341,7 @@ export function useQcPreviewLifecycle(args: UseQcPreviewLifecycleArgs) {
       cancelled = true;
     };
   }, [
+    isQcPreviewSurfaceActive,
     mapUiError,
     qcCodecPreviewEnabled,
     qcPreviewBlindXEnabled,

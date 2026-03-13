@@ -40,17 +40,6 @@ type SettingsPanelProps = {
   hasErrorBanner: boolean;
   onResetLibraryData: () => void;
   resetLibraryDataPending: boolean;
-  settingsSummaryCollapsed: boolean;
-  onToggleSettingsSummaryCollapsed: () => void;
-  summary: {
-    tracksCount: number;
-    albumGroupsCount: number;
-    favoritesCount: number;
-    queueCount: number;
-    releaseSelectionsCount: number;
-    importFailuresCount: number;
-    libraryRootsCount: number;
-  };
 };
 
 export default function SettingsPanel(props: SettingsPanelProps) {
@@ -262,32 +251,6 @@ export default function SettingsPanel(props: SettingsPanelProps) {
               </button>
             </HelpTooltip>
           </div>
-        </div>
-      </div>
-
-      <div className="settings-card">
-        <div className="settings-card-head">
-          <div>
-            <p className="eyebrow">Library Status</p>
-            <h3>Quick Summary</h3>
-          </div>
-          <SectionCollapseToggle
-            expanded={!props.settingsSummaryCollapsed}
-            onToggle={props.onToggleSettingsSummaryCollapsed}
-            label="Summary"
-            controlsId="settings-summary-panel"
-          />
-        </div>
-        <div id="settings-summary-panel" hidden={props.settingsSummaryCollapsed} className="collapsible-panel-body">
-          <ul className="compact-list settings-summary-list">
-            <li>Tracks in current view: {props.summary.tracksCount}</li>
-            <li>Album groups: {props.summary.albumGroupsCount}</li>
-            <li>Favorites: {props.summary.favoritesCount}</li>
-            <li>Queue items: {props.summary.queueCount}</li>
-            <li>Release selections: {props.summary.releaseSelectionsCount}</li>
-            <li>Import failures (session): {props.summary.importFailuresCount}</li>
-            <li>Library roots: {props.summary.libraryRootsCount}</li>
-          </ul>
         </div>
       </div>
     </section>

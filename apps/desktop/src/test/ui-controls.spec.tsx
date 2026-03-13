@@ -298,7 +298,7 @@ function renderApp() {
 
 function openWorkspace(name: string) {
   if (name === "Video Workspace") {
-    fireEvent.click(screen.getByRole("tab", { name }));
+    fireEvent.click(screen.getByRole("tab", { name: "Video Rendering" }));
     return;
   }
   fireEvent.click(screen.getByRole("button", { name }));
@@ -793,8 +793,7 @@ describe("Mechanical UI control audits", () => {
         { role: "button", name: "Reset Shortcuts", expectation: "action" },
         { role: "button", name: "Clear Notice", expectation: "action", act: (element) => fireEvent.click(element) },
         { role: "button", name: "Clear Error Banner", expectation: "disabled" },
-        { role: "button", name: "Reset Library Data", expectation: "action" },
-        { role: "button", name: "Hide Summary", expectation: "action", act: async () => toggleCollapse("Hide Summary", "Show Summary") }
+        { role: "button", name: "Reset Library Data", expectation: "action" }
       ],
       "Settings controls",
       { root: settingsPanel }

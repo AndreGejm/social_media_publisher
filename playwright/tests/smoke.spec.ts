@@ -32,11 +32,11 @@ test("browser preview renders the current shell and keeps About available", asyn
   ]) {
     await expect(workspaceNav.getByRole("button", { name: workspace })).toBeVisible();
   }
-  await expect(page.getByRole("tab", { name: "Video Workspace" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Video Rendering" })).toBeVisible();
 
   await openWorkspace(page, "About");
 
-  await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: "Skald" })).toBeVisible();
   await expect(page.getByText(/Static product and runtime diagnostics for support and build verification\./i)).toHaveCount(0);
   await expect(page.getByText(/Informational workspace/i)).toHaveCount(0);
   const runtimeLogRow = page
@@ -113,7 +113,7 @@ for (const viewportCase of viewportCases) {
     await expectNoHorizontalOverflow(page, `${viewportCase.label} publish`);
 
     await openWorkspace(page, "About");
-    await expect(page.getByRole("heading", { level: 3, name: "Skald QC" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 3, name: "Skald" })).toBeVisible();
     await expect(page.locator(".music-right-dock")).toHaveCount(0);
 
     await signals.assertClean(`${viewportCase.label} layout sweep`);

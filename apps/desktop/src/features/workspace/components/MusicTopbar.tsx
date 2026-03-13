@@ -1,6 +1,8 @@
 type Workspace = "Library" | "Quality Control" | "Playlists" | "Video Workspace" | "Publisher Ops" | "Settings" | "About";
 type AppMode = "Listen" | "Publish";
 
+const VIDEO_WORKSPACE_LABEL = "Video Rendering";
+
 type MusicTopbarProps = {
   activeMode: AppMode;
   activeWorkspace: Workspace;
@@ -21,6 +23,13 @@ export default function MusicTopbar(props: MusicTopbarProps) {
   const isAboutWorkspace = props.activeWorkspace === "About";
   const isVideoWorkspace = props.activeWorkspace === "Video Workspace";
   const isReleasePreviewWorkspace = props.activeMode === "Listen" && !isVideoWorkspace;
+  const activeWorkspaceLabel = isPublisherOpsWorkspace
+    ? "Publish Workflow"
+    : isAboutWorkspace
+      ? "About"
+      : isVideoWorkspace
+        ? VIDEO_WORKSPACE_LABEL
+        : props.activeWorkspace;
   const subtitle = isPublisherOpsWorkspace
     ? "You are in Publish mode (release workflow). General library browsing is hidden; use prepared drafts from Release Preview mode."
     : isAboutWorkspace
@@ -54,7 +63,7 @@ export default function MusicTopbar(props: MusicTopbarProps) {
             className={`music-mode-tab${isVideoWorkspace ? " active" : ""}`}
             onClick={props.onOpenVideoWorkspace}
           >
-            Video Workspace
+            {VIDEO_WORKSPACE_LABEL}
           </button>
           <button
             type="button"
@@ -66,7 +75,7 @@ export default function MusicTopbar(props: MusicTopbarProps) {
             Publish
           </button>
         </div>
-        <h2>{isPublisherOpsWorkspace ? "Publish Workflow" : isAboutWorkspace ? "Skald QC" : props.activeWorkspace}</h2>
+        <h2>{activeWorkspaceLabel}</h2>
         {subtitle ? <p className="music-topbar-subtitle">{subtitle}</p> : null}
       </div>
       {isPublisherOpsWorkspace ? (

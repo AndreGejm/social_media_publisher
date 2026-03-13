@@ -25,6 +25,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::ErrorKind;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -450,6 +452,16 @@ const MAX_CATALOG_IMPORT_TOTAL_PATH_CHARS: usize = 131_072;
 const MAX_CATALOG_TRACK_TAGS: usize = 32;
 const MAX_CATALOG_TAG_LABEL_CHARS: usize = 64;
 const MAX_PLAN_RELEASE_PLATFORMS: usize = 32;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn configure_background_command(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
 const MAX_PLATFORM_LABEL_CHARS: usize = 64;
 const MAX_RELEASE_SPEC_TAGS_FROM_CATALOG: usize = 10;
 const MAX_RELEASE_SPEC_TAG_LEN_CHARS: usize = 32;
@@ -994,6 +1006,7 @@ async fn encode_qc_profile_artifact(
 
     let ffmpeg_output = tokio::task::spawn_blocking(move || {
         let mut command = std::process::Command::new("ffmpeg");
+        configure_background_command(&mut command);
         command
             .arg("-hide_banner")
             .arg("-loglevel")

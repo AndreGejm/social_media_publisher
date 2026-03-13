@@ -2,6 +2,8 @@ use super::*;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +18,15 @@ const MAX_TEXT_FONT_SIZE_PX: u32 = 72;
 const MAX_RENDER_DIMENSION: u32 = 8192;
 const MAX_FFMPEG_ERROR_CHARS: usize = 512;
 const MAX_DIAGNOSTIC_MESSAGE_CHARS: usize = 256;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn configure_background_command(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -807,7 +818,9 @@ fn resolve_ffmpeg_executable() -> Option<ResolvedFfmpegExecutable> {
 }
 
 fn read_ffmpeg_version(path: &PathBuf) -> Result<String, String> {
-    let output = Command::new(path)
+    let mut command = Command::new(path);
+    configure_background_command(&mut command);
+    let output = command
         .arg("-version")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1556,6 +1569,7 @@ impl VideoRenderJobRunner for FfmpegVideoRenderJobRunner {
         };
 
         let mut command = Command::new(&ffmpeg_executable.path);
+        configure_background_command(&mut command);
         command
             .arg("-hide_banner")
             .arg("-loglevel")
